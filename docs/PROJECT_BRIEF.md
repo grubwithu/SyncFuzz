@@ -1,0 +1,70 @@
+# SyncFuzz 项目定位
+
+SyncFuzz 的目标是把前期关于 Agent、OS、安全边界、事务语义和主动漏洞挖掘的讨论收束成一个可执行项目：
+
+> **面向 Shell-Enabled Agent 的跨层状态失同步漏洞自动化挖掘。**
+
+本项目不优先构建新的 Agent Transaction 防御系统，而是主动攻击现有 Agent runtime 的 lifecycle 语义，寻找 checkpoint、retry、cancel、replay、fork、timeout、crash、resume 过程中出现的状态裂缝。
+
+## 核心观察
+
+OS 安全依赖可寻址、可中介、可判定的对象空间。Agent 的危险则来自开放语义空间：自然语言、repo 内容、shell 输出、tool response 和历史轨迹都可能改变模型如何使用真实权限。
+
+因此，SyncFuzz 不试图给自然语言语义空间建立完整保护边界，而是关注真实副作用的状态投影：
+
+```text
+Agent logical state
+OS execution state
+External effect state
+Authority state
+```
+
+当一次 lifecycle fault 让这些状态层对同一 effect 产生矛盾认知，就可能形成漏洞。
+
+## 研究问题
+
+SyncFuzz 优先回答一个可实验的问题：
+
+> 在 Terminal Agent 中，攻击者能否通过可控环境、输出、延迟、异常或故障时序，让 Agent state 已经恢复或分叉，但 OS、external 或 authority state 没有同步恢复，从而产生可复现安全影响？
+
+## 漏洞族
+
+第一阶段关注四类 oracle：
+
+- **Rollback Residue**：声称回滚后仍残留文件、进程、shell 状态、socket 或权限变化。
+- **Forgotten External Effect**：外部 effect 已提交，但 Agent 回滚后忘记 receipt 并重复执行。
+- **Authority Resurrection**：单次授权或 capability 已消费，但 Agent 恢复出旧授权状态。
+- **Branch Leakage**：被 discard 的 speculative branch 影响最终 committed branch。
+
+这些不是普通“模型被诱导”的 prompt 问题，而是跨越 Agent runtime、shell、OS、外部服务和授权系统的状态一致性问题。
+
+## 最小闭环
+
+MVP 不接真实 LLM，也不先测复杂框架。它用 deterministic harness 先证明：
+
+```text
+seed primitive
+  -> lifecycle/fault boundary
+  -> state snapshot
+  -> differential oracle
+  -> reproducible mismatch signature
+```
+
+只要这个闭环稳定，后续才能安全地扩展到 LangGraph persistent shell、AutoGen command executor、OpenHands sandbox，以及真实 LLM 诱导阶段。
+
+## 运行环境策略
+
+当前 MVP 默认使用 `local` environment backend，优先保证调试速度、artifact 可读性和 deterministic seed 的稳定性。同时已经支持 `container` backend：对 workspace 型 run 启动短生命周期 Docker 容器，把 workspace 挂载到 `/workspace`，禁用网络并设置基础资源限制，然后通过 `docker exec` 执行 shell primitive。后续在真实 Agent 或高风险 fuzz payload 阶段，再考虑 VM / microVM 隔离。
+
+在跨层观测上，`orphan-process` 已开始输出 process snapshot artifacts，用来记录命令前、命令返回后和恢复延迟后的进程状态；container backend 会从容器 namespace 内部采集这些进程信息。
+
+## 路线校准
+
+当前路线仍然保持在主动漏洞挖掘主线上，没有滑向通用防御系统或 prompt benchmark。判断依据是：
+
+- 每个 seed 都有明确攻击者可控状态原语，而不是只测试模型是否“听话”。
+- 每个 seed 都围绕 Agent lifecycle 语义：checkpoint、replay、rollback、fork、discard 或 persistent runtime。
+- 每个 oracle 都基于确定性状态差分，而不是 LLM judge。
+- 每个结果都输出可复现 artifact、mismatch signature 和 manifest。
+
+因此，SyncFuzz 当前阶段的目标不是证明某个 Agent “不安全”，而是先建立一组已知答案测试，确保 runner、trace、snapshot、oracle 和 artifact 格式能稳定表达跨层状态失同步漏洞。

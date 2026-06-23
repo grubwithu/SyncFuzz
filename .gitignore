@@ -1,0 +1,13 @@
+runs/
+corpus/
+tmp/
+*.log
+
+# Go
+bin/
+coverage.out
+
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
