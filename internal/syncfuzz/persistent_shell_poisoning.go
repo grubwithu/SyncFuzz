@@ -9,6 +9,16 @@ import (
 
 func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	started := time.Now().UTC()
+	artifacts := []string{
+		"trace.jsonl",
+		"process-before.json",
+		"shell-before.json",
+		"process-after-mutation.json",
+		"shell-after.json",
+		"process-after-replay.json",
+		"process-lineage.json",
+		"result.json",
+	}
 	env, err := newEnvironment(opts.EnvKind, opts.ContainerImage)
 	if err != nil {
 		return nil, err
@@ -31,6 +41,11 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 		return nil, fmt.Errorf("start persistent shell: %w", err)
 	}
 	defer shell.Close()
+
+	processBefore, err := recordProcessSnapshot(ctx, env, run, "P0", "process-before.json")
+	if err != nil {
+		return nil, err
+	}
 
 	before, err := shell.Probe(ctx)
 	if err != nil {
@@ -58,6 +73,10 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 	})); err != nil {
 		return nil, err
 	}
+	processAfterMutation, err := recordProcessSnapshot(ctx, env, run, "P4", "process-after-mutation.json")
+	if err != nil {
+		return nil, err
+	}
 
 	if err := run.trace.Write(newEvent(run, "P6", "fault_injected", map[string]any{
 		"fault":       "restore_agent_graph_without_restarting_shell",
@@ -75,6 +94,13 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 	if err := writeJSON(filepath.Join(run.runDir, "shell-after.json"), after); err != nil {
 		return nil, err
 	}
+	processAfterReplay, err := recordProcessSnapshot(ctx, env, run, "P8", "process-after-replay.json")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := recordProcessLineage(run, "P8", "process-lineage.json", processBefore, processAfterMutation, processAfterReplay, "process-before.json", "process-after-mutation.json", "process-after-replay.json"); err != nil {
+		return nil, err
+	}
 
 	confirmed, evidence := persistentShellPoisoningOracle(before, after)
 	signature := MismatchSignature{
@@ -87,11 +113,11 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 	}
 	if err := writeManifest(run, CaseManifest{
 		Objective:         "Detect shell process residue when graph state is restored but the persistent shell is reused.",
-		StateClasses:      []string{"shell-state"},
+		StateClasses:      []string{"shell-state", "process"},
 		FaultPhases:       []string{"P4 shell state mutated", "P6 graph restore", "P8 probe reused shell"},
 		Primitives:        []string{"PATH prepend", "cwd change", "alias injection"},
 		ExpectedSignature: signature,
-		Artifacts:         []string{"trace.jsonl", "shell-before.json", "shell-after.json", "result.json"},
+		Artifacts:         artifacts,
 	}); err != nil {
 		return nil, err
 	}

@@ -68,7 +68,8 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	if err := writeJSON(filepath.Join(run.runDir, "snapshot-before.json"), before); err != nil {
 		return nil, err
 	}
-	if _, err := recordProcessSnapshot(ctx, env, run, "P0", "process-before.json"); err != nil {
+	processBefore, err := recordProcessSnapshot(ctx, env, run, "P0", "process-before.json")
+	if err != nil {
 		return nil, err
 	}
 
@@ -91,7 +92,8 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	})); err != nil {
 		return nil, err
 	}
-	if _, err := recordProcessSnapshot(ctx, env, run, "P5", "process-after-command.json"); err != nil {
+	processAfterCommand, err := recordProcessSnapshot(ctx, env, run, "P5", "process-after-command.json")
+	if err != nil {
 		return nil, err
 	}
 	if err := run.trace.Write(newEvent(run, "P6", "simulated_agent_boundary", map[string]any{
@@ -115,7 +117,11 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	if err := writeJSON(filepath.Join(run.runDir, "snapshot-after.json"), after); err != nil {
 		return nil, err
 	}
-	if _, err := recordProcessSnapshot(ctx, env, run, "P6", "process-after.json"); err != nil {
+	processAfter, err := recordProcessSnapshot(ctx, env, run, "P6", "process-after.json")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := recordProcessLineage(run, "P6", "process-lineage.json", processBefore, processAfterCommand, processAfter, "process-before.json", "process-after-command.json", "process-after.json"); err != nil {
 		return nil, err
 	}
 
@@ -134,7 +140,7 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		FaultPhases:       []string{"P5 command returned", "P6 simulated agent boundary"},
 		Primitives:        []string{"detached child process", "delayed file write"},
 		ExpectedSignature: signature,
-		Artifacts:         []string{"trace.jsonl", "snapshot-before.json", "process-before.json", "process-after-command.json", "snapshot-after.json", "process-after.json", "result.json"},
+		Artifacts:         []string{"trace.jsonl", "snapshot-before.json", "process-before.json", "process-after-command.json", "snapshot-after.json", "process-after.json", "process-lineage.json", "result.json"},
 	}); err != nil {
 		return nil, err
 	}
@@ -190,6 +196,33 @@ func recordProcessSnapshot(ctx context.Context, env Environment, run *runContext
 		return ProcessSnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func recordProcessLineage(run *runContext, phase string, artifact string, before ProcessSnapshot, boundary ProcessSnapshot, after ProcessSnapshot, beforeArtifact string, boundaryArtifact string, afterArtifact string) (ProcessLineageReport, error) {
+	report := AnalyzeProcessLineage(before, boundary, after, beforeArtifact, boundaryArtifact, afterArtifact)
+	if err := writeJSON(filepath.Join(run.runDir, artifact), report); err != nil {
+		return ProcessLineageReport{}, err
+	}
+	if err := run.trace.Write(newEvent(run, phase, "process_lineage", map[string]any{
+		"artifact":                           artifact,
+		"before_artifact":                    beforeArtifact,
+		"boundary_artifact":                  boundaryArtifact,
+		"after_artifact":                     afterArtifact,
+		"new_at_boundary":                    report.Summary.NewAtBoundary,
+		"remaining_after":                    report.Summary.RemainingAfter,
+		"exited_after":                       report.Summary.ExitedAfter,
+		"carried_over_after":                 report.Summary.CarriedOverAfter,
+		"workspace_new_at_boundary":          report.Summary.WorkspaceNewAtBoundary,
+		"workspace_remaining_after":          report.Summary.WorkspaceRemainingAfter,
+		"workspace_carried_over_after":       report.Summary.WorkspaceCarriedOverAfter,
+		"workspace_carried_over_at_boundary": report.Summary.WorkspaceCarriedOverAtBoundary,
+		"environment":                        report.Environment,
+		"container_name":                     report.ContainerName,
+		"container_image":                    report.ContainerImage,
+	})); err != nil {
+		return ProcessLineageReport{}, err
+	}
+	return report, nil
 }
 
 func countWorkspaceProcesses(processes []ProcessEntry) int {

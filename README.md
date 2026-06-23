@@ -64,10 +64,13 @@ Artifacts are written under `runs/<run_id>/`:
 - `snapshot-before.json`: filesystem state before the tool action
 - `process-before.json`: process state before the tool action for process-aware cases
 - `process-after-command.json`: process state immediately after the tool command returns
+- `process-after-mutation.json` / `process-after-replay.json`: persistent shell process state around shell mutation and replay
 - `snapshot-mutated.json`: intermediate filesystem state for rollback cases
 - `snapshot-branch-a.json`: speculative branch snapshot for branch leakage cases
+- `process-branch-a.json`: process state after the discarded branch effect
 - `snapshot-after.json`: filesystem state after recovery delay
 - `process-after.json`: process state after recovery delay for process-aware cases
+- `process-lineage.json`: process lifecycle summary across before, boundary, and after snapshots
 - `external-before.json` / `external-after.json`: external server state for effect-oriented cases
 - `shell-before.json` / `shell-after.json`: persistent shell probes for shell-state cases
 - `result.json`: oracle verdict and mismatch signature

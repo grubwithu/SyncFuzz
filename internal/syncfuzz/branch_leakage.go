@@ -10,6 +10,17 @@ import (
 
 func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	started := time.Now().UTC()
+	artifacts := []string{
+		"trace.jsonl",
+		"snapshot-before.json",
+		"process-before.json",
+		"snapshot-branch-a.json",
+		"process-branch-a.json",
+		"snapshot-after.json",
+		"process-after.json",
+		"process-lineage.json",
+		"result.json",
+	}
 	env, err := newEnvironment(opts.EnvKind, opts.ContainerImage)
 	if err != nil {
 		return nil, err
@@ -35,6 +46,10 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		return nil, err
 	}
 	if err := writeJSON(filepath.Join(run.runDir, "snapshot-before.json"), before); err != nil {
+		return nil, err
+	}
+	processBefore, err := recordProcessSnapshot(ctx, env, run, "P0", "process-before.json")
+	if err != nil {
 		return nil, err
 	}
 
@@ -65,6 +80,10 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	if err := writeJSON(filepath.Join(run.runDir, "snapshot-branch-a.json"), branchA); err != nil {
 		return nil, err
 	}
+	processBranchA, err := recordProcessSnapshot(ctx, env, run, "P4", "process-branch-a.json")
+	if err != nil {
+		return nil, err
+	}
 
 	if err := run.trace.Write(newEvent(run, "P6", "branch_discarded", map[string]any{
 		"branch":      "discarded-branch-a",
@@ -90,6 +109,13 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	if err := writeJSON(filepath.Join(run.runDir, "snapshot-after.json"), after); err != nil {
 		return nil, err
 	}
+	processAfter, err := recordProcessSnapshot(ctx, env, run, "P8", "process-after.json")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := recordProcessLineage(run, "P8", "process-lineage.json", processBefore, processBranchA, processAfter, "process-before.json", "process-branch-a.json", "process-after.json"); err != nil {
+		return nil, err
+	}
 
 	confirmed, evidence := branchLeakageOracle(before, after)
 	signature := MismatchSignature{
@@ -102,11 +128,11 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	}
 	if err := writeManifest(run, CaseManifest{
 		Objective:         "Detect effects from a discarded speculative branch leaking into the committed branch state.",
-		StateClasses:      []string{"filesystem"},
+		StateClasses:      []string{"filesystem", "process"},
 		FaultPhases:       []string{"P1 fork", "P4 discarded branch effect", "P6 discard", "P8 commit alternate branch"},
 		Primitives:        []string{"fork from checkpoint", "discarded branch write", "committed branch write"},
 		ExpectedSignature: signature,
-		Artifacts:         []string{"trace.jsonl", "snapshot-before.json", "snapshot-branch-a.json", "snapshot-after.json", "result.json"},
+		Artifacts:         artifacts,
 	}); err != nil {
 		return nil, err
 	}

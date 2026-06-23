@@ -93,13 +93,19 @@ runs/<run_id>/
   snapshot-before.json
   process-before.json
   process-after-command.json
+  process-after-mutation.json
+  process-branch-a.json
   snapshot-after.json
+  process-after-replay.json
   process-after.json
+  process-lineage.json
   result.json
   workspace/
 ```
 
-The process files are currently emitted by `orphan-process`, where they capture process state before the command, immediately after the agent-visible command returns, and after the recovery delay. Container runs collect this from inside the container namespace.
+The process files are currently emitted by `orphan-process`, `persistent-shell-poisoning`, and `branch-leakage`. They capture process state at lifecycle boundaries such as command return, shell mutation, replay probing, branch effects, and final recovery. Container runs collect this from inside the container namespace.
+
+`process-lineage.json` compares the before, boundary, and after process snapshots. It summarizes processes that appear at a lifecycle boundary, processes that remain afterward, processes that exited, carried-over process state such as a reused persistent shell, and parent-child edges visible in the snapshot.
 
 The `result.json` file is the top-level oracle output. `trace.jsonl` is intended to become the stable interchange format between future adapters, schedulers, and minimizers.
 

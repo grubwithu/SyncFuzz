@@ -30,7 +30,7 @@
 - EffectServer 与 AuthorityServer mock；
 - suite runner、`suite-result.json` 汇总、`interesting.json` novelty 记录、`corpus/` 登记、corpus replay 与 corpus verify；
 - `local` / `container` environment backend 与统一 `--env` 参数通道；
-- `orphan-process` 的 local/container process snapshot artifacts；
+- `orphan-process`、`persistent-shell-poisoning`、`branch-leakage` 的 local/container process snapshot artifacts 与 `process-lineage.json` 摘要；
 
 完成标准：
 
@@ -42,7 +42,7 @@
 
 模块：
 
-- container-aware process lineage 扩展到所有 workspace-backed seeds；
+- container-aware process lineage 扩展到所有 workspace-backed seeds，并沉淀为可回归验证的 artifact contract；
 - persistent shell probe；
 - filesystem metadata probe；
 - mock external state probe；
