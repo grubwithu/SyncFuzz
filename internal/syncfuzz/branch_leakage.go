@@ -3,7 +3,6 @@ package syncfuzz
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 )
@@ -19,6 +18,7 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		"snapshot-after.json",
 		"process-after.json",
 		"process-lineage.json",
+		"filesystem-metadata.json",
 		"result.json",
 	}
 	env, err := newEnvironment(opts.EnvKind, opts.ContainerImage)
@@ -38,7 +38,7 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		return nil, err
 	}
 
-	if err := os.WriteFile(filepath.Join(run.workspace, "base.txt"), []byte("checkpoint-base\n"), 0o644); err != nil {
+	if _, err := env.ExecShell(ctx, run, "printf 'checkpoint-base\\n' > base.txt"); err != nil {
 		return nil, fmt.Errorf("create checkpoint base: %w", err)
 	}
 	before, err := SnapshotFilesystem(run.workspace)
@@ -63,7 +63,7 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	// Branch A is speculative and will be discarded at the agent layer. The
 	// filesystem write below models an OS effect that the agent branch metadata
 	// forgets to isolate or undo.
-	if err := os.WriteFile(filepath.Join(run.workspace, "discarded-branch-a.txt"), []byte("leaked from discarded branch\n"), 0o644); err != nil {
+	if _, err := env.ExecShell(ctx, run, "printf 'leaked from discarded branch\\n' > discarded-branch-a.txt"); err != nil {
 		return nil, fmt.Errorf("write discarded branch artifact: %w", err)
 	}
 	if err := run.trace.Write(newEvent(run, "P4", "discarded_branch_effect", map[string]any{
@@ -92,7 +92,7 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		return nil, err
 	}
 
-	if err := os.WriteFile(filepath.Join(run.workspace, "committed-branch-b.txt"), []byte("committed branch output\n"), 0o644); err != nil {
+	if _, err := env.ExecShell(ctx, run, "printf 'committed branch output\\n' > committed-branch-b.txt"); err != nil {
 		return nil, fmt.Errorf("write committed branch artifact: %w", err)
 	}
 	if err := run.trace.Write(newEvent(run, "P8", "branch_committed", map[string]any{
@@ -116,6 +116,13 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	if _, err := recordProcessLineage(run, "P8", "process-lineage.json", processBefore, processBranchA, processAfter, "process-before.json", "process-branch-a.json", "process-after.json"); err != nil {
 		return nil, err
 	}
+	if _, err := recordFilesystemMetadata(run, "P8", "filesystem-metadata.json", []FilesystemSnapshotArtifact{
+		{Phase: "P0", Artifact: "snapshot-before.json", Snapshot: before},
+		{Phase: "P4", Artifact: "snapshot-branch-a.json", Snapshot: branchA},
+		{Phase: "P8", Artifact: "snapshot-after.json", Snapshot: after},
+	}); err != nil {
+		return nil, err
+	}
 
 	confirmed, evidence := branchLeakageOracle(before, after)
 	signature := MismatchSignature{
@@ -126,14 +133,27 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		Relation:       "discarded-branch-affects-committed-branch",
 		Impact:         "branch-leakage",
 	}
-	if err := writeManifest(run, CaseManifest{
+	manifest := CaseManifest{
 		Objective:         "Detect effects from a discarded speculative branch leaking into the committed branch state.",
 		StateClasses:      []string{"filesystem", "process"},
 		FaultPhases:       []string{"P1 fork", "P4 discarded branch effect", "P6 discard", "P8 commit alternate branch"},
 		Primitives:        []string{"fork from checkpoint", "discarded branch write", "committed branch write"},
 		ExpectedSignature: signature,
-		Artifacts:         artifacts,
+		Artifacts:         appendPhase2Artifacts(artifacts),
+	}
+	if err := writeCrossLayerArtifacts(run, manifest, confirmed, evidence, []StateObservation{
+		{Layer: "os", StateClass: "filesystem", Phase: "P0", Artifact: "snapshot-before.json", Kind: "filesystem-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P0", Artifact: "process-before.json", Kind: "process-snapshot"},
+		{Layer: "os", StateClass: "filesystem", Phase: "P4", Artifact: "snapshot-branch-a.json", Kind: "filesystem-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P4", Artifact: "process-branch-a.json", Kind: "process-snapshot"},
+		{Layer: "os", StateClass: "filesystem", Phase: "P8", Artifact: "snapshot-after.json", Kind: "filesystem-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P8", Artifact: "process-after.json", Kind: "process-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P8", Artifact: "process-lineage.json", Kind: "process-lineage"},
+		{Layer: "os", StateClass: "filesystem-metadata", Phase: "P8", Artifact: "filesystem-metadata.json", Kind: "filesystem-metadata"},
 	}); err != nil {
+		return nil, err
+	}
+	if err := writeManifest(run, manifest); err != nil {
 		return nil, err
 	}
 

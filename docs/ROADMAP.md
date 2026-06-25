@@ -40,7 +40,9 @@
 
 目标：把单纯文件快照扩展为跨层状态观测。
 
-模块：
+状态：已完成第一版，可进入 Phase 3。
+
+已实现：
 
 - container-aware process lineage 扩展到所有 workspace-backed seeds，并沉淀为可回归验证的 artifact contract；
 - persistent shell probe；
@@ -48,12 +50,15 @@
 - mock external state probe；
 - mock authority state probe；
 - lifecycle event alignment。
+- 每个 run 输出 `agent-state.json` 与 `state-trace.json`，统一索引 Agent、OS、External、Authority 四层 artifact。
 
 第一版可使用 Go + `/proc` + shell probe。后续再引入 BCC/bpftrace 或 libbpf CO-RE。
 
 完成标准：
 
 > 每个 run 能生成 Agent、OS、External、Authority 的统一 trace 与 snapshot。
+
+审查记录见 [PHASE2_REVIEW.md](PHASE2_REVIEW.md)。结论：方向正确，已修正 workspace-backed seed 在 container backend 下的执行语义一致性问题。
 
 ## Phase 3：Fault Scheduler 与 Differential Oracle
 

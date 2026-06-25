@@ -126,14 +126,21 @@ func runAuthorityResurrection(ctx context.Context, opts RunOptions) (*RunResult,
 		Relation:       "agent-resurrects-consumed-capability",
 		Impact:         "authority-resurrection",
 	}
-	if err := writeManifest(run, CaseManifest{
+	manifest := CaseManifest{
 		Objective:         "Detect replay attempts that reuse a capability already consumed by the authority service.",
 		StateClasses:      []string{"authority-state"},
 		FaultPhases:       []string{"P4 authority consumed", "P6 restore checkpoint", "P8 replay"},
 		Primitives:        []string{"single-use token", "authority consume", "stale token reuse"},
 		ExpectedSignature: signature,
-		Artifacts:         []string{"trace.jsonl", "external-before.json", "external-after.json", "result.json"},
+		Artifacts:         appendPhase2Artifacts([]string{"trace.jsonl", "external-before.json", "external-after.json", "result.json"}),
+	}
+	if err := writeCrossLayerArtifacts(run, manifest, confirmed, evidence, []StateObservation{
+		{Layer: "authority", StateClass: "authority-state", Phase: "P0", Artifact: "external-before.json", Kind: "authority-state-snapshot"},
+		{Layer: "authority", StateClass: "authority-state", Phase: "P8", Artifact: "external-after.json", Kind: "authority-state-snapshot"},
 	}); err != nil {
+		return nil, err
+	}
+	if err := writeManifest(run, manifest); err != nil {
 		return nil, err
 	}
 

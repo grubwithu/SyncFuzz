@@ -124,6 +124,12 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	if _, err := recordProcessLineage(run, "P6", "process-lineage.json", processBefore, processAfterCommand, processAfter, "process-before.json", "process-after-command.json", "process-after.json"); err != nil {
 		return nil, err
 	}
+	if _, err := recordFilesystemMetadata(run, "P6", "filesystem-metadata.json", []FilesystemSnapshotArtifact{
+		{Phase: "P0", Artifact: "snapshot-before.json", Snapshot: before},
+		{Phase: "P6", Artifact: "snapshot-after.json", Snapshot: after},
+	}); err != nil {
+		return nil, err
+	}
 
 	confirmed, evidence := orphanProcessOracle(before, after)
 	signature := MismatchSignature{
@@ -134,14 +140,26 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		Relation:       "agent-forgets-os-effect",
 		Impact:         "rollback-residue",
 	}
-	if err := writeManifest(run, CaseManifest{
+	manifest := CaseManifest{
 		Objective:         "Detect delayed filesystem residue after an agent-visible command has returned.",
 		StateClasses:      []string{"filesystem", "process"},
 		FaultPhases:       []string{"P5 command returned", "P6 simulated agent boundary"},
 		Primitives:        []string{"detached child process", "delayed file write"},
 		ExpectedSignature: signature,
-		Artifacts:         []string{"trace.jsonl", "snapshot-before.json", "process-before.json", "process-after-command.json", "snapshot-after.json", "process-after.json", "process-lineage.json", "result.json"},
+		Artifacts:         appendPhase2Artifacts([]string{"trace.jsonl", "snapshot-before.json", "process-before.json", "process-after-command.json", "snapshot-after.json", "process-after.json", "process-lineage.json", "filesystem-metadata.json", "result.json"}),
+	}
+	if err := writeCrossLayerArtifacts(run, manifest, confirmed, evidence, []StateObservation{
+		{Layer: "os", StateClass: "filesystem", Phase: "P0", Artifact: "snapshot-before.json", Kind: "filesystem-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P0", Artifact: "process-before.json", Kind: "process-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P5", Artifact: "process-after-command.json", Kind: "process-snapshot"},
+		{Layer: "os", StateClass: "filesystem", Phase: "P6", Artifact: "snapshot-after.json", Kind: "filesystem-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-after.json", Kind: "process-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-lineage.json", Kind: "process-lineage"},
+		{Layer: "os", StateClass: "filesystem-metadata", Phase: "P6", Artifact: "filesystem-metadata.json", Kind: "filesystem-metadata"},
 	}); err != nil {
+		return nil, err
+	}
+	if err := writeManifest(run, manifest); err != nil {
 		return nil, err
 	}
 
@@ -223,6 +241,40 @@ func recordProcessLineage(run *runContext, phase string, artifact string, before
 		return ProcessLineageReport{}, err
 	}
 	return report, nil
+}
+
+func recordFilesystemMetadata(run *runContext, phase string, artifact string, snapshots []FilesystemSnapshotArtifact) (FilesystemMetadataReport, error) {
+	report := AnalyzeFilesystemMetadata(snapshots)
+	if err := writeJSON(filepath.Join(run.runDir, artifact), report); err != nil {
+		return FilesystemMetadataReport{}, err
+	}
+	added, removed, contentChanged, metadataChanged := filesystemDeltaCounts(report.Deltas)
+	if err := run.trace.Write(newEvent(run, phase, "filesystem_metadata", map[string]any{
+		"artifact":                artifact,
+		"snapshot_count":          len(report.Snapshots),
+		"delta_count":             len(report.Deltas),
+		"added_paths":             added,
+		"removed_paths":           removed,
+		"content_changed_paths":   contentChanged,
+		"metadata_changed_fields": metadataChanged,
+	})); err != nil {
+		return FilesystemMetadataReport{}, err
+	}
+	return report, nil
+}
+
+func filesystemDeltaCounts(deltas []FilesystemMetadataDelta) (int, int, int, int) {
+	var added int
+	var removed int
+	var contentChanged int
+	var metadataChanged int
+	for _, delta := range deltas {
+		added += len(delta.Added)
+		removed += len(delta.Removed)
+		contentChanged += len(delta.ContentChanged)
+		metadataChanged += len(delta.MetadataChanged)
+	}
+	return added, removed, contentChanged, metadataChanged
 }
 
 func countWorkspaceProcesses(processes []ProcessEntry) int {

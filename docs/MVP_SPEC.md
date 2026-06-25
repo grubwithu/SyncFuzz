@@ -90,6 +90,8 @@ Each run creates the core files below. Process-aware cases add process snapshots
 runs/<run_id>/
   manifest.json
   trace.jsonl
+  agent-state.json
+  state-trace.json
   snapshot-before.json
   process-before.json
   process-after-command.json
@@ -99,13 +101,18 @@ runs/<run_id>/
   process-after-replay.json
   process-after.json
   process-lineage.json
+  filesystem-metadata.json
   result.json
   workspace/
 ```
 
-The process files are currently emitted by `orphan-process`, `persistent-shell-poisoning`, and `branch-leakage`. They capture process state at lifecycle boundaries such as command return, shell mutation, replay probing, branch effects, and final recovery. Container runs collect this from inside the container namespace.
+Every run emits `agent-state.json` and `state-trace.json`. `agent-state.json` is the deterministic Agent-layer projection for the known-answer testcase. `state-trace.json` is the stable Phase 2 index that maps artifacts to lifecycle phases and the Agent, OS, External, or Authority layer.
+
+The process files are currently emitted by all workspace-backed seeds. They capture process state at lifecycle boundaries such as command return, shell mutation, replay probing, rollback, branch effects, and final recovery. Container runs collect this from inside the container namespace.
 
 `process-lineage.json` compares the before, boundary, and after process snapshots. It summarizes processes that appear at a lifecycle boundary, processes that remain afterward, processes that exited, carried-over process state such as a reused persistent shell, and parent-child edges visible in the snapshot.
+
+`filesystem-metadata.json` compares filesystem snapshots and summarizes type counts, mode counts, content changes, added/removed paths, symlink changes, and metadata drift.
 
 The `result.json` file is the top-level oracle output. `trace.jsonl` is intended to become the stable interchange format between future adapters, schedulers, and minimizers.
 

@@ -133,6 +133,12 @@ func TestWorkspaceSeedsWriteProcessArtifacts(t *testing.T) {
 			"process-after.json",
 			"process-lineage.json",
 		},
+		"partial-filesystem-rollback": {
+			"process-before.json",
+			"process-mutated.json",
+			"process-after.json",
+			"process-lineage.json",
+		},
 	}
 
 	for caseName, artifacts := range cases {

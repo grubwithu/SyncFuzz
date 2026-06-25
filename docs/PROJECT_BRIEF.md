@@ -56,7 +56,7 @@ seed primitive
 
 当前 MVP 默认使用 `local` environment backend，优先保证调试速度、artifact 可读性和 deterministic seed 的稳定性。同时已经支持 `container` backend：对 workspace 型 run 启动短生命周期 Docker 容器，把 workspace 挂载到 `/workspace`，禁用网络并设置基础资源限制，然后通过 `docker exec` 执行 shell primitive。后续在真实 Agent 或高风险 fuzz payload 阶段，再考虑 VM / microVM 隔离。
 
-在跨层观测上，`orphan-process`、`persistent-shell-poisoning` 和 `branch-leakage` 已开始输出 process snapshot artifacts，用来记录命令返回、shell mutation、replay probe、branch effect 等 lifecycle boundary 周围的进程状态；container backend 会从容器 namespace 内部采集这些进程信息。每个 process-aware run 还会生成 `process-lineage.json`，把 before / boundary / after 快照压缩成新增进程、仍存活进程、已退出进程、跨边界保留进程和父子关系摘要。
+在跨层观测上，Phase 2 已形成统一 artifact contract：每个 run 都会生成 `agent-state.json` 和 `state-trace.json`，把 Agent、OS、External、Authority 四层观测映射到统一 lifecycle phase。所有 workspace-backed seed 都会输出 process snapshot、`process-lineage.json` 和 `filesystem-metadata.json`；container backend 会从容器 namespace 内部采集进程信息。External 与 Authority seed 则通过 mock service state snapshot 纳入同一 `state-trace.json` 索引。
 
 ## 路线校准
 

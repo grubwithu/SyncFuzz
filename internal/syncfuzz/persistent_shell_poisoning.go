@@ -11,12 +11,16 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 	started := time.Now().UTC()
 	artifacts := []string{
 		"trace.jsonl",
+		"snapshot-before.json",
 		"process-before.json",
 		"shell-before.json",
+		"snapshot-after-mutation.json",
 		"process-after-mutation.json",
 		"shell-after.json",
+		"snapshot-after-replay.json",
 		"process-after-replay.json",
 		"process-lineage.json",
+		"filesystem-metadata.json",
 		"result.json",
 	}
 	env, err := newEnvironment(opts.EnvKind, opts.ContainerImage)
@@ -44,6 +48,13 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 
 	processBefore, err := recordProcessSnapshot(ctx, env, run, "P0", "process-before.json")
 	if err != nil {
+		return nil, err
+	}
+	filesBefore, err := SnapshotFilesystem(run.workspace)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeJSON(filepath.Join(run.runDir, "snapshot-before.json"), filesBefore); err != nil {
 		return nil, err
 	}
 
@@ -77,6 +88,13 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 	if err != nil {
 		return nil, err
 	}
+	filesAfterMutation, err := SnapshotFilesystem(run.workspace)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeJSON(filepath.Join(run.runDir, "snapshot-after-mutation.json"), filesAfterMutation); err != nil {
+		return nil, err
+	}
 
 	if err := run.trace.Write(newEvent(run, "P6", "fault_injected", map[string]any{
 		"fault":       "restore_agent_graph_without_restarting_shell",
@@ -101,6 +119,20 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 	if _, err := recordProcessLineage(run, "P8", "process-lineage.json", processBefore, processAfterMutation, processAfterReplay, "process-before.json", "process-after-mutation.json", "process-after-replay.json"); err != nil {
 		return nil, err
 	}
+	filesAfterReplay, err := SnapshotFilesystem(run.workspace)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeJSON(filepath.Join(run.runDir, "snapshot-after-replay.json"), filesAfterReplay); err != nil {
+		return nil, err
+	}
+	if _, err := recordFilesystemMetadata(run, "P8", "filesystem-metadata.json", []FilesystemSnapshotArtifact{
+		{Phase: "P0", Artifact: "snapshot-before.json", Snapshot: filesBefore},
+		{Phase: "P4", Artifact: "snapshot-after-mutation.json", Snapshot: filesAfterMutation},
+		{Phase: "P8", Artifact: "snapshot-after-replay.json", Snapshot: filesAfterReplay},
+	}); err != nil {
+		return nil, err
+	}
 
 	confirmed, evidence := persistentShellPoisoningOracle(before, after)
 	signature := MismatchSignature{
@@ -111,14 +143,29 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 		Relation:       "agent-restores-graph-not-shell",
 		Impact:         "shell-state-residue",
 	}
-	if err := writeManifest(run, CaseManifest{
+	manifest := CaseManifest{
 		Objective:         "Detect shell process residue when graph state is restored but the persistent shell is reused.",
-		StateClasses:      []string{"shell-state", "process"},
+		StateClasses:      []string{"shell-state", "process", "filesystem"},
 		FaultPhases:       []string{"P4 shell state mutated", "P6 graph restore", "P8 probe reused shell"},
 		Primitives:        []string{"PATH prepend", "cwd change", "alias injection"},
 		ExpectedSignature: signature,
-		Artifacts:         artifacts,
+		Artifacts:         appendPhase2Artifacts(artifacts),
+	}
+	if err := writeCrossLayerArtifacts(run, manifest, confirmed, evidence, []StateObservation{
+		{Layer: "os", StateClass: "filesystem", Phase: "P0", Artifact: "snapshot-before.json", Kind: "filesystem-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P0", Artifact: "process-before.json", Kind: "process-snapshot"},
+		{Layer: "os", StateClass: "shell-state", Phase: "P0", Artifact: "shell-before.json", Kind: "shell-state-probe"},
+		{Layer: "os", StateClass: "filesystem", Phase: "P4", Artifact: "snapshot-after-mutation.json", Kind: "filesystem-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P4", Artifact: "process-after-mutation.json", Kind: "process-snapshot"},
+		{Layer: "os", StateClass: "shell-state", Phase: "P8", Artifact: "shell-after.json", Kind: "shell-state-probe"},
+		{Layer: "os", StateClass: "filesystem", Phase: "P8", Artifact: "snapshot-after-replay.json", Kind: "filesystem-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P8", Artifact: "process-after-replay.json", Kind: "process-snapshot"},
+		{Layer: "os", StateClass: "process", Phase: "P8", Artifact: "process-lineage.json", Kind: "process-lineage"},
+		{Layer: "os", StateClass: "filesystem-metadata", Phase: "P8", Artifact: "filesystem-metadata.json", Kind: "filesystem-metadata"},
 	}); err != nil {
+		return nil, err
+	}
+	if err := writeManifest(run, manifest); err != nil {
 		return nil, err
 	}
 

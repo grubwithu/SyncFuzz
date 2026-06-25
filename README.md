@@ -61,6 +61,8 @@ Artifacts are written under `runs/<run_id>/`:
 
 - `trace.jsonl`: typed lifecycle and tool events
 - `manifest.json`: testcase objective, primitives, state classes, and expected signature
+- `agent-state.json`: deterministic projection of the agent-side lifecycle and oracle state
+- `state-trace.json`: unified Agent / OS / External / Authority artifact index
 - `snapshot-before.json`: filesystem state before the tool action
 - `process-before.json`: process state before the tool action for process-aware cases
 - `process-after-command.json`: process state immediately after the tool command returns
@@ -71,9 +73,12 @@ Artifacts are written under `runs/<run_id>/`:
 - `snapshot-after.json`: filesystem state after recovery delay
 - `process-after.json`: process state after recovery delay for process-aware cases
 - `process-lineage.json`: process lifecycle summary across before, boundary, and after snapshots
+- `filesystem-metadata.json`: filesystem type, mode, content, symlink, and path delta summary
 - `external-before.json` / `external-after.json`: external server state for effect-oriented cases
 - `shell-before.json` / `shell-after.json`: persistent shell probes for shell-state cases
 - `result.json`: oracle verdict and mismatch signature
+
+Phase 2 runs now use `state-trace.json` as the stable cross-layer index. It aligns every artifact to a lifecycle phase and one of the core layers: Agent, OS, External, or Authority.
 
 Suite runs are written under `runs/suite-<suite_id>/` with a top-level `suite-result.json`, `interesting.json`, and one subdirectory per testcase run. The suite summary marks runs that produce new signatures, state classes, or impacts as `interesting`.
 
@@ -115,3 +120,5 @@ The staged plan is documented in [docs/ROADMAP.md](docs/ROADMAP.md). The short v
 4. Feedback-guided fuzzing and minimization.
 5. Real target adapters for LangGraph, AutoGen, and OpenHands.
 6. Vulnerability confirmation, baselines, and paper-ready evaluation.
+
+The Phase 2 implementation review is recorded in [docs/PHASE2_REVIEW.md](docs/PHASE2_REVIEW.md).

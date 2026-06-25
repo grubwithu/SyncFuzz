@@ -130,14 +130,21 @@ func runActionReplay(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		Relation:       "missing-receipt",
 		Impact:         "forgotten-external-effect",
 	}
-	if err := writeManifest(run, CaseManifest{
+	manifest := CaseManifest{
 		Objective:         "Detect duplicated external resources after a committed effect loses its receipt and is replayed.",
 		StateClasses:      []string{"external-effect"},
 		FaultPhases:       []string{"P4 external effect released", "P5 dropped tool result", "P8 replay"},
 		Primitives:        []string{"external create", "dropped receipt", "replay with new request id"},
 		ExpectedSignature: signature,
-		Artifacts:         []string{"trace.jsonl", "external-before.json", "external-after.json", "result.json"},
+		Artifacts:         appendPhase2Artifacts([]string{"trace.jsonl", "external-before.json", "external-after.json", "result.json"}),
+	}
+	if err := writeCrossLayerArtifacts(run, manifest, confirmed, evidence, []StateObservation{
+		{Layer: "external", StateClass: "external-effect", Phase: "P0", Artifact: "external-before.json", Kind: "external-state-snapshot"},
+		{Layer: "external", StateClass: "external-effect", Phase: "P8", Artifact: "external-after.json", Kind: "external-state-snapshot"},
 	}); err != nil {
+		return nil, err
+	}
+	if err := writeManifest(run, manifest); err != nil {
 		return nil, err
 	}
 
