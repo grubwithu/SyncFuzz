@@ -53,7 +53,10 @@ func TestFastSeedsWritePhase2Artifacts(t *testing.T) {
 			if !result.Confirmed {
 				t.Fatalf("expected confirmed result")
 			}
-			for _, artifact := range []string{agentStateArtifact, stateTraceArtifact} {
+			if result.FaultPlanID == "" {
+				t.Fatalf("expected run result to include fault plan id")
+			}
+			for _, artifact := range []string{agentStateArtifact, stateTraceArtifact, faultPlanArtifact} {
 				if !fileExists(filepath.Join(result.ArtifactDir, artifact)) {
 					t.Fatalf("expected phase 2 artifact %s", artifact)
 				}

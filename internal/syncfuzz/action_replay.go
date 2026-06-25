@@ -37,6 +37,9 @@ func runActionReplay(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	})); err != nil {
 		return nil, err
 	}
+	if err := recordFaultPlan(run); err != nil {
+		return nil, err
+	}
 
 	if err := backend.Reset(ctx); err != nil {
 		return nil, fmt.Errorf("reset external state: %w", err)
@@ -154,6 +157,7 @@ func runActionReplay(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		CaseName:       opts.CaseName,
 		Environment:    run.environment,
 		ContainerImage: run.containerImage,
+		FaultPlanID:    run.faultPlan.ID,
 		Confirmed:      confirmed,
 		Signature:      signature,
 		Evidence:       evidence,

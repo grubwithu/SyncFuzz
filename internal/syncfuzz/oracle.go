@@ -23,6 +23,7 @@ type RunResult struct {
 	CaseName       string            `json:"case_name"`
 	Environment    string            `json:"environment"`
 	ContainerImage string            `json:"container_image,omitempty"`
+	FaultPlanID    string            `json:"fault_plan_id,omitempty"`
 	Confirmed      bool              `json:"confirmed"`
 	Signature      MismatchSignature `json:"signature"`
 	Evidence       []string          `json:"evidence"`

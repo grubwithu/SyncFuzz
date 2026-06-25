@@ -21,6 +21,8 @@ type RunOptions struct {
 	MockURL        string
 	EnvKind        string
 	ContainerImage string
+	FaultPlanID    string
+	faultPlan      FaultPlan
 }
 
 // Cases is the public registry used by both the CLI and future schedulers.
@@ -69,6 +71,14 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	if opts.EnvKind == "" {
 		opts.EnvKind = "local"
 	}
+	if err := validateCaseNames([]string{opts.CaseName}); err != nil {
+		return nil, err
+	}
+	faultPlan, err := resolveFaultPlan(opts.CaseName, opts.FaultPlanID)
+	if err != nil {
+		return nil, err
+	}
+	opts.faultPlan = faultPlan
 
 	switch opts.CaseName {
 	case "orphan-process":

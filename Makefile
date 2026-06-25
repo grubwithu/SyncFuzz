@@ -19,11 +19,12 @@ MOCK_ARGS := $(if $(MOCK_URL),--mock-url $(MOCK_URL),)
 ENV_ARGS := --env $(ENV)
 CONTAINER_ARGS := --container-image $(CONTAINER_IMAGE)
 
-.PHONY: help list run-case run-mvp run-action run-authority run-shell run-fs run-branch run-suite corpus-list corpus-show corpus-verify replay test-go fmt-go mock-build mock-start
+.PHONY: help list fault-plans run-case run-mvp run-action run-authority run-shell run-fs run-branch run-suite corpus-list corpus-show corpus-verify replay test-go fmt-go mock-build mock-start
 
 help:
 	@echo "SyncFuzz targets:"
 	@echo "  make list"
+	@echo "  make fault-plans"
 	@echo "  make run-case CASE=orphan-process"
 	@echo "  make run-suite REPEAT=1 CASES=action-replay,branch-leakage"
 	@echo "  make corpus-list"
@@ -35,6 +36,9 @@ help:
 
 list:
 	GOCACHE=$(GO_CACHE) go run ./cmd/syncfuzz list
+
+fault-plans:
+	GOCACHE=$(GO_CACHE) go run ./cmd/syncfuzz fault-plans
 
 run-case:
 	GOCACHE=$(GO_CACHE) go run ./cmd/syncfuzz run --case $(CASE) --out $(OUT) --delay $(DELAY) $(ENV_ARGS) $(CONTAINER_ARGS) $(MOCK_ARGS)

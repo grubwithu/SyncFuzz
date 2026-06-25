@@ -37,6 +37,9 @@ func runPartialFilesystemRollback(ctx context.Context, opts RunOptions) (*RunRes
 	})); err != nil {
 		return nil, err
 	}
+	if err := recordFaultPlan(run); err != nil {
+		return nil, err
+	}
 
 	if _, err := env.ExecShell(ctx, run, "printf 'original\\n' > tracked.txt\nchmod 644 tracked.txt"); err != nil {
 		return nil, fmt.Errorf("create baseline tracked file: %w", err)
@@ -161,6 +164,7 @@ func runPartialFilesystemRollback(ctx context.Context, opts RunOptions) (*RunRes
 		CaseName:       opts.CaseName,
 		Environment:    run.environment,
 		ContainerImage: run.containerImage,
+		FaultPlanID:    run.faultPlan.ID,
 		Confirmed:      confirmed,
 		Signature:      signature,
 		Evidence:       evidence,

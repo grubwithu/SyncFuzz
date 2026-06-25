@@ -16,6 +16,7 @@ type runContext struct {
 	environment    string
 	containerName  string
 	containerImage string
+	faultPlan      FaultPlan
 	turnID         string
 	toolCallID     string
 	trace          *eventWriter
@@ -58,6 +59,9 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		"workspace":   run.workspace,
 		"delay":       opts.Delay.String(),
 	})); err != nil {
+		return nil, err
+	}
+	if err := recordFaultPlan(run); err != nil {
 		return nil, err
 	}
 
@@ -169,6 +173,7 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		CaseName:       opts.CaseName,
 		Environment:    run.environment,
 		ContainerImage: run.containerImage,
+		FaultPlanID:    run.faultPlan.ID,
 		Confirmed:      confirmed,
 		Signature:      signature,
 		Evidence:       evidence,
@@ -189,6 +194,23 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	}
 
 	return result, nil
+}
+
+func recordFaultPlan(run *runContext) error {
+	if run.faultPlan.ID == "" {
+		return nil
+	}
+	if err := writeJSON(filepath.Join(run.runDir, faultPlanArtifact), run.faultPlan); err != nil {
+		return err
+	}
+	return run.trace.Write(newEvent(run, "P0", "fault_plan_selected", map[string]any{
+		"artifact":        faultPlanArtifact,
+		"fault_plan_id":   run.faultPlan.ID,
+		"inject_phase":    run.faultPlan.InjectPhase,
+		"fault":           run.faultPlan.Fault,
+		"lifecycle":       run.faultPlan.Lifecycle,
+		"expected_impact": run.faultPlan.ExpectedImpact,
+	}))
 }
 
 func shellQuote(value string) string {

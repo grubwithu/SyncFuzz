@@ -16,6 +16,7 @@ type ReplayOptions struct {
 	MockURL        string
 	EnvKind        string
 	ContainerImage string
+	FaultPlanID    string
 }
 
 type ReplayResult struct {
@@ -24,6 +25,7 @@ type ReplayResult struct {
 	CaseName          string            `json:"case_name"`
 	Environment       string            `json:"environment"`
 	ContainerImage    string            `json:"container_image,omitempty"`
+	FaultPlanID       string            `json:"fault_plan_id,omitempty"`
 	SourceSuiteID     string            `json:"source_suite_id"`
 	SourceRunID       string            `json:"source_run_id"`
 	ExpectedSignature MismatchSignature `json:"expected_signature"`
@@ -75,6 +77,7 @@ func replayEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions) (*R
 		MockURL:        opts.MockURL,
 		EnvKind:        opts.EnvKind,
 		ContainerImage: opts.ContainerImage,
+		FaultPlanID:    firstNonEmpty(opts.FaultPlanID, entry.FaultPlanID),
 	})
 	if err != nil {
 		return nil, err
@@ -88,6 +91,7 @@ func replayEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions) (*R
 		CaseName:          entry.CaseName,
 		Environment:       runResult.Environment,
 		ContainerImage:    runResult.ContainerImage,
+		FaultPlanID:       runResult.FaultPlanID,
 		SourceSuiteID:     entry.SuiteID,
 		SourceRunID:       entry.RunID,
 		ExpectedSignature: entry.Signature,

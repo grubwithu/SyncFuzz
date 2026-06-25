@@ -22,6 +22,8 @@ func main() {
 	switch os.Args[1] {
 	case "list":
 		list()
+	case "fault-plans":
+		faultPlans()
 	case "run":
 		run(os.Args[2:])
 	case "suite":
@@ -46,7 +48,8 @@ func usage() {
 
 Usage:
   syncfuzz list
-  syncfuzz run --case orphan-process [--out runs] [--delay 1500ms] [--env local] [--container-image ubuntu:latest]
+  syncfuzz fault-plans
+  syncfuzz run --case orphan-process [--out runs] [--delay 1500ms] [--fault-plan <id>] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case action-replay [--out runs] [--mock-url http://127.0.0.1:8910] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case authority-resurrection [--out runs] [--mock-url http://127.0.0.1:8910] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case persistent-shell-poisoning [--out runs] [--env local] [--container-image ubuntu:latest]
@@ -68,6 +71,19 @@ func list() {
 	}
 }
 
+func faultPlans() {
+	fmt.Printf("%-58s %-28s %-5s %-28s %s\n", "id", "case", "phase", "impact", "fault")
+	for _, plan := range syncfuzz.FaultPlans() {
+		fmt.Printf("%-58s %-28s %-5s %-28s %s\n",
+			plan.ID,
+			plan.CaseName,
+			plan.InjectPhase,
+			plan.ExpectedImpact,
+			plan.Fault,
+		)
+	}
+}
+
 func run(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	caseName := fs.String("case", "orphan-process", "testcase to execute")
@@ -77,6 +93,7 @@ func run(args []string) {
 	mockURL := fs.String("mock-url", "", "optional EffectServer/AuthorityServer base URL")
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	faultPlanID := fs.String("fault-plan", "", "fault plan id; defaults to the testcase known-answer plan")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -89,6 +106,7 @@ func run(args []string) {
 		MockURL:        *mockURL,
 		EnvKind:        *envKind,
 		ContainerImage: *containerImage,
+		FaultPlanID:    *faultPlanID,
 	}
 
 	// The CLI is intentionally thin: all testcase semantics live in the
@@ -103,6 +121,7 @@ func run(args []string) {
 	fmt.Printf("case: %s\n", result.CaseName)
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
+	printFaultPlan(result.FaultPlanID)
 	fmt.Printf("confirmed: %t\n", result.Confirmed)
 	fmt.Printf("signature: %s\n", result.Signature.String())
 	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
@@ -229,6 +248,9 @@ func corpusShow(args []string) {
 	fmt.Printf("case: %s\n", entry.CaseName)
 	fmt.Printf("suite_id: %s\n", entry.SuiteID)
 	fmt.Printf("run_id: %s\n", entry.RunID)
+	if entry.FaultPlanID != "" {
+		fmt.Printf("fault_plan: %s\n", entry.FaultPlanID)
+	}
 	fmt.Printf("signature: %s\n", entry.Signature.String())
 	fmt.Printf("artifact_dir: %s\n", entry.ArtifactDir)
 	fmt.Printf("recorded_at: %s\n", entry.RecordedAt)
@@ -287,6 +309,7 @@ func replay(args []string) {
 	mockURL := fs.String("mock-url", "", "optional EffectServer/AuthorityServer base URL")
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	faultPlanID := fs.String("fault-plan", "", "optional replay fault plan override")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -299,6 +322,7 @@ func replay(args []string) {
 		MockURL:        *mockURL,
 		EnvKind:        *envKind,
 		ContainerImage: *containerImage,
+		FaultPlanID:    *faultPlanID,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz replay failed: %v\n", err)
@@ -310,6 +334,7 @@ func replay(args []string) {
 	fmt.Printf("case: %s\n", result.CaseName)
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
+	printFaultPlan(result.FaultPlanID)
 	fmt.Printf("confirmed: %t\n", result.Confirmed)
 	fmt.Printf("signature_matched: %t\n", result.SignatureMatched)
 	fmt.Printf("reproduced: %t\n", result.Reproduced)
@@ -321,5 +346,11 @@ func replay(args []string) {
 func printContainerImage(image string) {
 	if image != "" {
 		fmt.Printf("container_image: %s\n", image)
+	}
+}
+
+func printFaultPlan(faultPlanID string) {
+	if faultPlanID != "" {
+		fmt.Printf("fault_plan: %s\n", faultPlanID)
 	}
 }

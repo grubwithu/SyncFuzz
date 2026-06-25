@@ -58,6 +58,8 @@ seed primitive
 
 在跨层观测上，Phase 2 已形成统一 artifact contract：每个 run 都会生成 `agent-state.json` 和 `state-trace.json`，把 Agent、OS、External、Authority 四层观测映射到统一 lifecycle phase。所有 workspace-backed seed 都会输出 process snapshot、`process-lineage.json` 和 `filesystem-metadata.json`；container backend 会从容器 namespace 内部采集进程信息。External 与 Authority seed 则通过 mock service state snapshot 纳入同一 `state-trace.json` 索引。
 
+Phase 3 已开始把故障注入从 case 内部的隐含逻辑提升为结构化调度输入：每个 run 会生成 `fault-plan.json`，记录 selected known-answer fault、inject phase、相关状态层和 expected impact。后续 scheduler 会在这个 contract 上扩展 control/fault pair、differential report 和 feedback-guided timing。
+
 ## 路线校准
 
 当前路线仍然保持在主动漏洞挖掘主线上，没有滑向通用防御系统或 prompt benchmark。判断依据是：

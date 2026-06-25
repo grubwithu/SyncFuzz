@@ -40,6 +40,7 @@ This is not yet a real framework vulnerability. It is a known-answer test provin
 
 ```bash
 go run ./cmd/syncfuzz list
+go run ./cmd/syncfuzz fault-plans
 go run ./cmd/syncfuzz run --case orphan-process --out runs
 go run ./cmd/syncfuzz run --case action-replay --out runs
 go run ./cmd/syncfuzz run --case authority-resurrection --out runs
@@ -92,6 +93,7 @@ runs/<run_id>/
   trace.jsonl
   agent-state.json
   state-trace.json
+  fault-plan.json
   snapshot-before.json
   process-before.json
   process-after-command.json
@@ -107,6 +109,8 @@ runs/<run_id>/
 ```
 
 Every run emits `agent-state.json` and `state-trace.json`. `agent-state.json` is the deterministic Agent-layer projection for the known-answer testcase. `state-trace.json` is the stable Phase 2 index that maps artifacts to lifecycle phases and the Agent, OS, External, or Authority layer.
+
+Every run also emits `fault-plan.json`. This is the first Phase 3 scheduler contract: it records the selected known-answer lifecycle fault, inject phase, affected state layers, and expected impact. `result.json`, suite results, corpus entries, replay results, and verification entries carry the same `fault_plan_id` for precise reproduction.
 
 The process files are currently emitted by all workspace-backed seeds. They capture process state at lifecycle boundaries such as command return, shell mutation, replay probing, rollback, branch effects, and final recovery. Container runs collect this from inside the container namespace.
 

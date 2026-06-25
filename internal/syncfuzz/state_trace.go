@@ -90,6 +90,9 @@ func writeCrossLayerArtifacts(run *runContext, manifest CaseManifest, confirmed 
 		Kind:        "agent-state-projection",
 		Description: "deterministic projection of the agent-side lifecycle and oracle state",
 	}}, observations...)
+	if observation, ok := faultPlanObservation(run); ok {
+		observations = append([]StateObservation{observation}, observations...)
+	}
 
 	trace := buildCrossLayerTrace(run, manifest.ExpectedSignature, confirmed, generatedAt, observations)
 	if err := writeJSON(filepath.Join(run.runDir, stateTraceArtifact), trace); err != nil {
@@ -240,12 +243,12 @@ func appendPhase2Artifacts(artifacts []string) []string {
 	for _, artifact := range artifacts {
 		out = appendUniqueStrings(out, artifact)
 		if artifact == "trace.jsonl" {
-			out = appendUniqueStrings(out, agentStateArtifact, stateTraceArtifact)
+			out = appendUniqueStrings(out, agentStateArtifact, stateTraceArtifact, faultPlanArtifact)
 			inserted = true
 		}
 	}
 	if !inserted {
-		out = appendUniqueStrings(out, agentStateArtifact, stateTraceArtifact)
+		out = appendUniqueStrings(out, agentStateArtifact, stateTraceArtifact, faultPlanArtifact)
 	}
 	return out
 }
@@ -264,4 +267,18 @@ func appendUniqueStrings(values []string, additions ...string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func faultPlanObservation(run *runContext) (StateObservation, bool) {
+	if run == nil || run.faultPlan.ID == "" {
+		return StateObservation{}, false
+	}
+	return StateObservation{
+		Layer:       "agent",
+		StateClass:  "fault-plan",
+		Phase:       string(run.faultPlan.InjectPhase),
+		Artifact:    faultPlanArtifact,
+		Kind:        "fault-plan",
+		Description: run.faultPlan.Description,
+	}, true
 }

@@ -37,6 +37,9 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	})); err != nil {
 		return nil, err
 	}
+	if err := recordFaultPlan(run); err != nil {
+		return nil, err
+	}
 
 	if _, err := env.ExecShell(ctx, run, "printf 'checkpoint-base\\n' > base.txt"); err != nil {
 		return nil, fmt.Errorf("create checkpoint base: %w", err)
@@ -163,6 +166,7 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		CaseName:       opts.CaseName,
 		Environment:    run.environment,
 		ContainerImage: run.containerImage,
+		FaultPlanID:    run.faultPlan.ID,
 		Confirmed:      confirmed,
 		Signature:      signature,
 		Evidence:       evidence,

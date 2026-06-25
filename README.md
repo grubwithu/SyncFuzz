@@ -23,6 +23,7 @@ Run it with:
 
 ```bash
 go run ./cmd/syncfuzz list
+go run ./cmd/syncfuzz fault-plans
 go run ./cmd/syncfuzz run --case orphan-process --out runs
 go run ./cmd/syncfuzz run --case action-replay --out runs
 go run ./cmd/syncfuzz run --case authority-resurrection --out runs
@@ -50,6 +51,7 @@ Common flows are also wrapped by `make`:
 
 ```bash
 make run-suite
+make fault-plans
 make corpus-list
 make corpus-verify
 make corpus-show ENTRY_ID=<entry_id_or_unique_prefix>
@@ -63,6 +65,7 @@ Artifacts are written under `runs/<run_id>/`:
 - `manifest.json`: testcase objective, primitives, state classes, and expected signature
 - `agent-state.json`: deterministic projection of the agent-side lifecycle and oracle state
 - `state-trace.json`: unified Agent / OS / External / Authority artifact index
+- `fault-plan.json`: scheduler-facing lifecycle fault plan selected for this run
 - `snapshot-before.json`: filesystem state before the tool action
 - `process-before.json`: process state before the tool action for process-aware cases
 - `process-after-command.json`: process state immediately after the tool command returns
@@ -79,6 +82,8 @@ Artifacts are written under `runs/<run_id>/`:
 - `result.json`: oracle verdict and mismatch signature
 
 Phase 2 runs now use `state-trace.json` as the stable cross-layer index. It aligns every artifact to a lifecycle phase and one of the core layers: Agent, OS, External, or Authority.
+
+Phase 3 begins with a deterministic fault-plan catalog. `syncfuzz fault-plans` lists the known-answer plans, and each run records its selected plan in `fault-plan.json` plus `result.json` as `fault_plan_id`.
 
 Suite runs are written under `runs/suite-<suite_id>/` with a top-level `suite-result.json`, `interesting.json`, and one subdirectory per testcase run. The suite summary marks runs that produce new signatures, state classes, or impacts as `interesting`.
 

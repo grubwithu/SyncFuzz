@@ -22,6 +22,7 @@ type VerificationEntryResult struct {
 	EntryID           string            `json:"entry_id"`
 	Kind              string            `json:"kind"`
 	CaseName          string            `json:"case_name"`
+	FaultPlanID       string            `json:"fault_plan_id,omitempty"`
 	Environment       string            `json:"environment,omitempty"`
 	ContainerImage    string            `json:"container_image,omitempty"`
 	ExpectedSignature MismatchSignature `json:"expected_signature"`
@@ -102,6 +103,7 @@ func VerifyCorpus(ctx context.Context, opts VerifyOptions) (*VerificationResult,
 			EntryID:           entry.EntryID,
 			Kind:              entry.Kind,
 			CaseName:          entry.CaseName,
+			FaultPlanID:       entry.FaultPlanID,
 			ExpectedSignature: entry.Signature,
 		}
 
@@ -123,6 +125,7 @@ func VerifyCorpus(ctx context.Context, opts VerifyOptions) (*VerificationResult,
 		item.RunID = replay.RunID
 		item.Environment = replay.Environment
 		item.ContainerImage = replay.ContainerImage
+		item.FaultPlanID = replay.FaultPlanID
 		item.Confirmed = replay.Confirmed
 		item.ActualSignature = replay.ActualSignature
 		item.SignatureMatched = replay.SignatureMatched

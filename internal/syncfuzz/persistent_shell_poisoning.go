@@ -39,6 +39,9 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 	})); err != nil {
 		return nil, err
 	}
+	if err := recordFaultPlan(run); err != nil {
+		return nil, err
+	}
 
 	shell, err := env.StartPersistentShell(ctx, run)
 	if err != nil {
@@ -175,6 +178,7 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 		CaseName:       opts.CaseName,
 		Environment:    run.environment,
 		ContainerImage: run.containerImage,
+		FaultPlanID:    run.faultPlan.ID,
 		Confirmed:      confirmed,
 		Signature:      signature,
 		Evidence:       evidence,

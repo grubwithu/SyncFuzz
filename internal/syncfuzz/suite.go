@@ -23,6 +23,7 @@ type SuiteCaseResult struct {
 	CaseName    string            `json:"case_name"`
 	Iteration   int               `json:"iteration"`
 	RunID       string            `json:"run_id,omitempty"`
+	FaultPlanID string            `json:"fault_plan_id,omitempty"`
 	Confirmed   bool              `json:"confirmed"`
 	Signature   MismatchSignature `json:"signature,omitempty"`
 	Interesting bool              `json:"interesting"`
@@ -38,6 +39,7 @@ type SuiteDiscovery struct {
 	CaseName    string            `json:"case_name"`
 	Iteration   int               `json:"iteration"`
 	RunID       string            `json:"run_id"`
+	FaultPlanID string            `json:"fault_plan_id,omitempty"`
 	Signature   MismatchSignature `json:"signature"`
 	ArtifactDir string            `json:"artifact_dir"`
 }
@@ -128,6 +130,7 @@ func RunSuite(ctx context.Context, opts SuiteOptions) (*SuiteResult, error) {
 			}
 
 			item.RunID = runResult.RunID
+			item.FaultPlanID = runResult.FaultPlanID
 			item.Confirmed = runResult.Confirmed
 			item.Signature = runResult.Signature
 			item.ArtifactDir = runResult.ArtifactDir
@@ -199,6 +202,7 @@ func (f *suiteFeedback) observe(kind string, key string, score int, item *SuiteC
 		CaseName:    item.CaseName,
 		Iteration:   item.Iteration,
 		RunID:       item.RunID,
+		FaultPlanID: item.FaultPlanID,
 		Signature:   item.Signature,
 		ArtifactDir: item.ArtifactDir,
 	})

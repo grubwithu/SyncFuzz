@@ -96,6 +96,7 @@ func (e localEnvironment) PrepareRun(_ context.Context, opts RunOptions, started
 		runDir:      runDir,
 		workspace:   workspace,
 		environment: e.Kind(),
+		faultPlan:   opts.faultPlan,
 		turnID:      "turn-0001",
 		toolCallID:  "tool-0001",
 		trace:       trace,
