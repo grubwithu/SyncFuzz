@@ -32,8 +32,10 @@ func runPartialFilesystemRollback(ctx context.Context, opts RunOptions) (*RunRes
 	defer run.Close()
 
 	if err := run.trace.Write(newEvent(run, "P0", "run_started", map[string]any{
-		"environment": run.environment,
-		"workspace":   run.workspace,
+		"environment":    run.environment,
+		"workspace":      run.workspace,
+		"run_role":       run.runRole,
+		"timing_profile": run.timing.ProfileID,
 	})); err != nil {
 		return nil, err
 	}
@@ -90,17 +92,31 @@ func runPartialFilesystemRollback(ctx context.Context, opts RunOptions) (*RunRes
 		return nil, err
 	}
 
-	if err := run.trace.Write(newEvent(run, "P6", "fault_injected", map[string]any{
-		"fault":       "naive_tracked_content_rollback",
-		"description": "rollback restores tracked content but misses untracked artifacts and metadata drift",
-	})); err != nil {
-		return nil, err
-	}
+	if isControlRun(opts) {
+		if err := run.trace.Write(newEvent(run, "P6", "control_full_rollback", map[string]any{
+			"description": "control rollback restores tracked content, mode, symlink, and untracked files",
+		})); err != nil {
+			return nil, err
+		}
+		if _, err := env.ExecShell(ctx, run, "printf 'original\\n' > tracked.txt\nchmod 644 tracked.txt\nrm -f untracked.txt link-to-tracked"); err != nil {
+			return nil, fmt.Errorf("perform full rollback: %w", err)
+		}
+	} else {
+		if err := run.trace.Write(newEvent(run, "P6", "fault_injected", map[string]any{
+			"fault":       "naive_tracked_content_rollback",
+			"description": "rollback restores tracked content but misses untracked artifacts and metadata drift",
+		})); err != nil {
+			return nil, err
+		}
 
-	// This intentionally mimics a weak rollback mechanism. It restores the
-	// tracked file bytes but does not remove untracked artifacts or reset mode.
-	if _, err := env.ExecShell(ctx, run, "printf 'original\\n' > tracked.txt"); err != nil {
-		return nil, fmt.Errorf("perform naive rollback: %w", err)
+		// This intentionally mimics a weak rollback mechanism. It restores the
+		// tracked file bytes but does not remove untracked artifacts or reset mode.
+		if _, err := env.ExecShell(ctx, run, "printf 'original\\n' > tracked.txt"); err != nil {
+			return nil, fmt.Errorf("perform naive rollback: %w", err)
+		}
+	}
+	if err := waitForTimingBoundary(ctx, run, "P6", "after_rollback_boundary"); err != nil {
+		return nil, err
 	}
 
 	after, err := SnapshotFilesystem(run.workspace)
@@ -160,17 +176,19 @@ func runPartialFilesystemRollback(ctx context.Context, opts RunOptions) (*RunRes
 
 	finished := time.Now().UTC()
 	result := &RunResult{
-		RunID:          run.runID,
-		CaseName:       opts.CaseName,
-		Environment:    run.environment,
-		ContainerImage: run.containerImage,
-		FaultPlanID:    run.faultPlan.ID,
-		Confirmed:      confirmed,
-		Signature:      signature,
-		Evidence:       evidence,
-		ArtifactDir:    run.runDir,
-		StartedAt:      started.Format(time.RFC3339Nano),
-		FinishedAt:     finished.Format(time.RFC3339Nano),
+		RunID:           run.runID,
+		CaseName:        opts.CaseName,
+		RunRole:         run.runRole,
+		Environment:     run.environment,
+		ContainerImage:  run.containerImage,
+		FaultPlanID:     run.faultPlan.ID,
+		TimingProfileID: run.timing.ProfileID,
+		Confirmed:       confirmed,
+		Signature:       signature,
+		Evidence:        evidence,
+		ArtifactDir:     run.runDir,
+		StartedAt:       started.Format(time.RFC3339Nano),
+		FinishedAt:      finished.Format(time.RFC3339Nano),
 	}
 
 	if err := run.trace.Write(newEvent(run, "oracle", "result", map[string]any{

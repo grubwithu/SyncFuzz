@@ -24,8 +24,12 @@ func main() {
 		list()
 	case "fault-plans":
 		faultPlans()
+	case "timing-profiles":
+		timingProfiles()
 	case "run":
 		run(os.Args[2:])
+	case "pair":
+		pair(os.Args[2:])
 	case "suite":
 		suite(os.Args[2:])
 	case "corpus":
@@ -49,13 +53,15 @@ func usage() {
 Usage:
   syncfuzz list
   syncfuzz fault-plans
-  syncfuzz run --case orphan-process [--out runs] [--delay 1500ms] [--fault-plan <id>] [--env local] [--container-image ubuntu:latest]
+  syncfuzz timing-profiles
+  syncfuzz run --case orphan-process [--out runs] [--delay 1500ms] [--fault-plan <id>] [--timing baseline] [--role fault] [--env local] [--container-image ubuntu:latest]
+  syncfuzz pair --case orphan-process [--out runs] [--delay 1500ms] [--fault-plan <id>] [--timing baseline] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case action-replay [--out runs] [--mock-url http://127.0.0.1:8910] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case authority-resurrection [--out runs] [--mock-url http://127.0.0.1:8910] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case persistent-shell-poisoning [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case partial-filesystem-rollback [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case branch-leakage [--out runs] [--env local] [--container-image ubuntu:latest]
-  syncfuzz suite [--out runs] [--repeat 1] [--corpus corpus] [--cases orphan-process,branch-leakage] [--env local] [--container-image ubuntu:latest]
+  syncfuzz suite [--out runs] [--repeat 1] [--corpus corpus] [--cases orphan-process,branch-leakage] [--timing baseline] [--differential] [--env local] [--container-image ubuntu:latest]
   syncfuzz corpus list [--corpus corpus] [--limit 20]
   syncfuzz corpus show --id <entry_id> [--corpus corpus]
   syncfuzz corpus verify [--corpus corpus] [--out runs] [--limit 0] [--env local] [--container-image ubuntu:latest]
@@ -84,6 +90,23 @@ func faultPlans() {
 	}
 }
 
+func timingProfiles() {
+	fmt.Printf("%-12s %-16s %-16s %-14s %s\n", "id", "recovery", "orphan_child", "replay", "description")
+	for _, profile := range syncfuzz.TimingProfiles() {
+		recoveryDelay := profile.RecoveryDelay
+		if recoveryDelay == "" {
+			recoveryDelay = "<--delay>"
+		}
+		fmt.Printf("%-12s %-16s %-16s %-14s %s\n",
+			profile.ProfileID,
+			recoveryDelay,
+			profile.OrphanChildDelay,
+			profile.ReplayDelay,
+			profile.Description,
+		)
+	}
+}
+
 func run(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	caseName := fs.String("case", "orphan-process", "testcase to execute")
@@ -94,19 +117,23 @@ func run(args []string) {
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
 	faultPlanID := fs.String("fault-plan", "", "fault plan id; defaults to the testcase known-answer plan")
+	timingProfileID := fs.String("timing", "", "timing profile id; defaults to baseline")
+	runRole := fs.String("role", syncfuzz.RunRoleFault, "run role: fault or control")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
 	opts := syncfuzz.RunOptions{
-		CaseName:       *caseName,
-		OutDir:         *outDir,
-		Workspace:      *workspace,
-		Delay:          *delay,
-		MockURL:        *mockURL,
-		EnvKind:        *envKind,
-		ContainerImage: *containerImage,
-		FaultPlanID:    *faultPlanID,
+		CaseName:        *caseName,
+		OutDir:          *outDir,
+		Workspace:       *workspace,
+		Delay:           *delay,
+		MockURL:         *mockURL,
+		EnvKind:         *envKind,
+		ContainerImage:  *containerImage,
+		FaultPlanID:     *faultPlanID,
+		TimingProfileID: *timingProfileID,
+		RunRole:         *runRole,
 	}
 
 	// The CLI is intentionally thin: all testcase semantics live in the
@@ -119,11 +146,56 @@ func run(args []string) {
 
 	fmt.Printf("run_id: %s\n", result.RunID)
 	fmt.Printf("case: %s\n", result.CaseName)
+	fmt.Printf("run_role: %s\n", result.RunRole)
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
 	printFaultPlan(result.FaultPlanID)
+	printTimingProfile(result.TimingProfileID)
 	fmt.Printf("confirmed: %t\n", result.Confirmed)
 	fmt.Printf("signature: %s\n", result.Signature.String())
+	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
+}
+
+func pair(args []string) {
+	fs := flag.NewFlagSet("pair", flag.ExitOnError)
+	caseName := fs.String("case", "orphan-process", "testcase to execute as a control/fault pair")
+	outDir := fs.String("out", "runs", "directory for pair artifacts")
+	delay := fs.Duration("delay", 1500*time.Millisecond, "delay passed through to testcase runs")
+	mockURL := fs.String("mock-url", "", "optional EffectServer/AuthorityServer base URL")
+	envKind := fs.String("env", "local", "execution environment backend")
+	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	faultPlanID := fs.String("fault-plan", "", "fault plan id; defaults to the testcase known-answer plan")
+	timingProfileID := fs.String("timing", "", "timing profile id; defaults to baseline")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	result, err := syncfuzz.RunPair(context.Background(), syncfuzz.PairOptions{
+		CaseName:        *caseName,
+		OutDir:          *outDir,
+		Delay:           *delay,
+		MockURL:         *mockURL,
+		EnvKind:         *envKind,
+		ContainerImage:  *containerImage,
+		FaultPlanID:     *faultPlanID,
+		TimingProfileID: *timingProfileID,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz pair failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("pair_id: %s\n", result.PairID)
+	fmt.Printf("case: %s\n", result.CaseName)
+	fmt.Printf("environment: %s\n", result.Environment)
+	printContainerImage(result.ContainerImage)
+	printFaultPlan(result.FaultPlanID)
+	printTimingProfile(result.TimingProfileID)
+	fmt.Printf("control_run: %s confirmed=%t\n", result.Control.RunID, result.Control.Confirmed)
+	fmt.Printf("fault_run: %s confirmed=%t\n", result.Fault.RunID, result.Fault.Confirmed)
+	fmt.Printf("differential: %t\n", result.Verdict.Differential)
+	fmt.Printf("security_relevant: %t\n", result.Verdict.SecurityRelevant)
+	fmt.Printf("reason: %s\n", result.Verdict.Reason)
 	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
 }
 
@@ -137,19 +209,23 @@ func suite(args []string) {
 	corpusDir := fs.String("corpus", "corpus", "directory for interesting discovery corpus; empty disables corpus output")
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	differential := fs.Bool("differential", false, "run each testcase as a control/fault pair")
+	timingProfileID := fs.String("timing", "", "timing profile id; defaults to baseline")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
 	result, err := syncfuzz.RunSuite(context.Background(), syncfuzz.SuiteOptions{
-		OutDir:         *outDir,
-		Repeat:         *repeat,
-		Cases:          splitCases(*caseList),
-		Delay:          *delay,
-		MockURL:        *mockURL,
-		CorpusDir:      *corpusDir,
-		EnvKind:        *envKind,
-		ContainerImage: *containerImage,
+		OutDir:          *outDir,
+		Repeat:          *repeat,
+		Cases:           splitCases(*caseList),
+		Delay:           *delay,
+		MockURL:         *mockURL,
+		CorpusDir:       *corpusDir,
+		EnvKind:         *envKind,
+		ContainerImage:  *containerImage,
+		Differential:    *differential,
+		TimingProfileID: *timingProfileID,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz suite failed: %v\n", err)
@@ -159,6 +235,8 @@ func suite(args []string) {
 	fmt.Printf("suite_id: %s\n", result.SuiteID)
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
+	printTimingProfile(result.TimingProfileID)
+	fmt.Printf("differential: %t\n", result.Differential)
 	fmt.Printf("total_runs: %d\n", result.TotalRuns)
 	fmt.Printf("confirmed: %d\n", result.Confirmed)
 	fmt.Printf("unconfirmed: %d\n", result.Unconfirmed)
@@ -248,9 +326,18 @@ func corpusShow(args []string) {
 	fmt.Printf("case: %s\n", entry.CaseName)
 	fmt.Printf("suite_id: %s\n", entry.SuiteID)
 	fmt.Printf("run_id: %s\n", entry.RunID)
+	if entry.PairID != "" {
+		fmt.Printf("pair_id: %s\n", entry.PairID)
+		fmt.Printf("control_run_id: %s\n", entry.ControlRunID)
+		fmt.Printf("fault_run_id: %s\n", entry.FaultRunID)
+		fmt.Printf("differential: %t\n", entry.Differential)
+		fmt.Printf("security_relevant: %t\n", entry.SecurityRelevant)
+		fmt.Printf("differential_report: %s\n", entry.DifferentialReport)
+	}
 	if entry.FaultPlanID != "" {
 		fmt.Printf("fault_plan: %s\n", entry.FaultPlanID)
 	}
+	printTimingProfile(entry.TimingProfileID)
 	fmt.Printf("signature: %s\n", entry.Signature.String())
 	fmt.Printf("artifact_dir: %s\n", entry.ArtifactDir)
 	fmt.Printf("recorded_at: %s\n", entry.RecordedAt)
@@ -265,18 +352,20 @@ func corpusVerify(args []string) {
 	mockURL := fs.String("mock-url", "", "optional EffectServer/AuthorityServer base URL")
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	timingProfileID := fs.String("timing", "", "optional timing profile override")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
 	result, err := syncfuzz.VerifyCorpus(context.Background(), syncfuzz.VerifyOptions{
-		CorpusDir:      *corpusDir,
-		OutDir:         *outDir,
-		Limit:          *limit,
-		Delay:          *delay,
-		MockURL:        *mockURL,
-		EnvKind:        *envKind,
-		ContainerImage: *containerImage,
+		CorpusDir:       *corpusDir,
+		OutDir:          *outDir,
+		Limit:           *limit,
+		Delay:           *delay,
+		MockURL:         *mockURL,
+		EnvKind:         *envKind,
+		ContainerImage:  *containerImage,
+		TimingProfileID: *timingProfileID,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz corpus verify failed: %v\n", err)
@@ -310,19 +399,21 @@ func replay(args []string) {
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
 	faultPlanID := fs.String("fault-plan", "", "optional replay fault plan override")
+	timingProfileID := fs.String("timing", "", "optional replay timing profile override")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
 	result, err := syncfuzz.ReplayCorpusEntry(context.Background(), syncfuzz.ReplayOptions{
-		CorpusDir:      *corpusDir,
-		EntryID:        *entryID,
-		OutDir:         *outDir,
-		Delay:          *delay,
-		MockURL:        *mockURL,
-		EnvKind:        *envKind,
-		ContainerImage: *containerImage,
-		FaultPlanID:    *faultPlanID,
+		CorpusDir:       *corpusDir,
+		EntryID:         *entryID,
+		OutDir:          *outDir,
+		Delay:           *delay,
+		MockURL:         *mockURL,
+		EnvKind:         *envKind,
+		ContainerImage:  *containerImage,
+		FaultPlanID:     *faultPlanID,
+		TimingProfileID: *timingProfileID,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz replay failed: %v\n", err)
@@ -335,6 +426,7 @@ func replay(args []string) {
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
 	printFaultPlan(result.FaultPlanID)
+	printTimingProfile(result.TimingProfileID)
 	fmt.Printf("confirmed: %t\n", result.Confirmed)
 	fmt.Printf("signature_matched: %t\n", result.SignatureMatched)
 	fmt.Printf("reproduced: %t\n", result.Reproduced)
@@ -352,5 +444,11 @@ func printContainerImage(image string) {
 func printFaultPlan(faultPlanID string) {
 	if faultPlanID != "" {
 		fmt.Printf("fault_plan: %s\n", faultPlanID)
+	}
+}
+
+func printTimingProfile(timingProfileID string) {
+	if timingProfileID != "" {
+		fmt.Printf("timing_profile: %s\n", timingProfileID)
 	}
 }

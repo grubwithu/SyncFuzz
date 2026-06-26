@@ -31,9 +31,11 @@ func runAuthorityResurrection(ctx context.Context, opts RunOptions) (*RunResult,
 	defer backend.Close()
 
 	if err := run.trace.Write(newEvent(run, "P0", "run_started", map[string]any{
-		"environment": run.environment,
-		"mock_url":    mockURL,
-		"server_kind": serverKind,
+		"environment":    run.environment,
+		"mock_url":       mockURL,
+		"server_kind":    serverKind,
+		"run_role":       run.runRole,
+		"timing_profile": run.timing.ProfileID,
 	})); err != nil {
 		return nil, err
 	}
@@ -87,29 +89,41 @@ func runAuthorityResurrection(ctx context.Context, opts RunOptions) (*RunResult,
 		return nil, err
 	}
 
-	if err := run.trace.Write(newEvent(run, "P6", "fault_injected", map[string]any{
-		"fault":       "restore_checkpoint_before_authority_consume",
-		"description": "agent state is restored to a checkpoint that still treats the token as unused",
-	})); err != nil {
-		return nil, err
-	}
+	var replay *consumeTokenResponse
+	if isControlRun(opts) {
+		if err := run.trace.Write(newEvent(run, "P6", "control_checkpoint_persisted", map[string]any{
+			"description": "agent checkpoint records that the token has been consumed",
+		})); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := run.trace.Write(newEvent(run, "P6", "fault_injected", map[string]any{
+			"fault":       "restore_checkpoint_before_authority_consume",
+			"description": "agent state is restored to a checkpoint that still treats the token as unused",
+		})); err != nil {
+			return nil, err
+		}
+		if err := waitForTimingBoundary(ctx, run, "P8", "before_authority_reuse"); err != nil {
+			return nil, err
+		}
 
-	// The second consume should fail. The vulnerability signal is the stale
-	// reuse attempt itself: C_agent says unused, C_authority says consumed.
-	replay, err := backend.ConsumeToken(ctx, map[string]any{
-		"token":     issued.Token.Token,
-		"operation": "deploy-branch-b",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("replay authority token consume: %w", err)
-	}
-	if err := run.trace.Write(newEvent(run, "P8", "authority_reuse_attempt", map[string]any{
-		"token":     issued.Token.Token,
-		"operation": "deploy-branch-b",
-		"accepted":  replay.Accepted,
-		"error":     replay.Error,
-	})); err != nil {
-		return nil, err
+		// The second consume should fail. The vulnerability signal is the stale
+		// reuse attempt itself: C_agent says unused, C_authority says consumed.
+		replay, err = backend.ConsumeToken(ctx, map[string]any{
+			"token":     issued.Token.Token,
+			"operation": "deploy-branch-b",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("replay authority token consume: %w", err)
+		}
+		if err := run.trace.Write(newEvent(run, "P8", "authority_reuse_attempt", map[string]any{
+			"token":     issued.Token.Token,
+			"operation": "deploy-branch-b",
+			"accepted":  replay.Accepted,
+			"error":     replay.Error,
+		})); err != nil {
+			return nil, err
+		}
 	}
 
 	after, err := backend.State(ctx)
@@ -137,9 +151,13 @@ func runAuthorityResurrection(ctx context.Context, opts RunOptions) (*RunResult,
 		ExpectedSignature: signature,
 		Artifacts:         appendPhase2Artifacts([]string{"trace.jsonl", "external-before.json", "external-after.json", "result.json"}),
 	}
+	afterPhase := "P8"
+	if isControlRun(opts) {
+		afterPhase = "P6"
+	}
 	if err := writeCrossLayerArtifacts(run, manifest, confirmed, evidence, []StateObservation{
 		{Layer: "authority", StateClass: "authority-state", Phase: "P0", Artifact: "external-before.json", Kind: "authority-state-snapshot"},
-		{Layer: "authority", StateClass: "authority-state", Phase: "P8", Artifact: "external-after.json", Kind: "authority-state-snapshot"},
+		{Layer: "authority", StateClass: "authority-state", Phase: afterPhase, Artifact: "external-after.json", Kind: "authority-state-snapshot"},
 	}); err != nil {
 		return nil, err
 	}
@@ -149,17 +167,19 @@ func runAuthorityResurrection(ctx context.Context, opts RunOptions) (*RunResult,
 
 	finished := time.Now().UTC()
 	result := &RunResult{
-		RunID:          run.runID,
-		CaseName:       opts.CaseName,
-		Environment:    run.environment,
-		ContainerImage: run.containerImage,
-		FaultPlanID:    run.faultPlan.ID,
-		Confirmed:      confirmed,
-		Signature:      signature,
-		Evidence:       evidence,
-		ArtifactDir:    run.runDir,
-		StartedAt:      started.Format(time.RFC3339Nano),
-		FinishedAt:     finished.Format(time.RFC3339Nano),
+		RunID:           run.runID,
+		CaseName:        opts.CaseName,
+		RunRole:         run.runRole,
+		Environment:     run.environment,
+		ContainerImage:  run.containerImage,
+		FaultPlanID:     run.faultPlan.ID,
+		TimingProfileID: run.timing.ProfileID,
+		Confirmed:       confirmed,
+		Signature:       signature,
+		Evidence:        evidence,
+		ArtifactDir:     run.runDir,
+		StartedAt:       started.Format(time.RFC3339Nano),
+		FinishedAt:      finished.Format(time.RFC3339Nano),
 	}
 
 	if err := run.trace.Write(newEvent(run, "oracle", "result", map[string]any{

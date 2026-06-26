@@ -11,12 +11,14 @@ import (
 type runContext struct {
 	runID          string
 	caseName       string
+	runRole        string
 	runDir         string
 	workspace      string
 	environment    string
 	containerName  string
 	containerImage string
 	faultPlan      FaultPlan
+	timing         FaultTiming
 	turnID         string
 	toolCallID     string
 	trace          *eventWriter
@@ -55,9 +57,11 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	defer run.Close()
 
 	if err := run.trace.Write(newEvent(run, "P0", "run_started", map[string]any{
-		"environment": run.environment,
-		"workspace":   run.workspace,
-		"delay":       opts.Delay.String(),
+		"environment":    run.environment,
+		"workspace":      run.workspace,
+		"delay":          run.timing.RecoveryDelay,
+		"run_role":       run.runRole,
+		"timing_profile": run.timing.ProfileID,
 	})); err != nil {
 		return nil, err
 	}
@@ -79,7 +83,15 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 
 	// This is the state primitive: the parent shell exits before the child
 	// writes late-effect. A real agent might checkpoint/cancel/replay here.
-	command := "nohup sh -c 'sleep 1; touch late-effect' >/dev/null 2>&1 &"
+	childDelay, err := run.timing.orphanChildDelayDuration()
+	if err != nil {
+		return nil, err
+	}
+	childSleep := shellSleepDuration(childDelay)
+	command := "nohup sh -c 'sleep " + childSleep + "; touch late-effect' >/dev/null 2>&1 &"
+	if isControlRun(opts) {
+		command = "sh -c 'sleep " + childSleep + "; touch late-effect; rm late-effect'"
+	}
 	if err := run.trace.Write(newEvent(run, "P1", "tool_intent", map[string]any{
 		"command": command,
 	})); err != nil {
@@ -100,18 +112,26 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	if err != nil {
 		return nil, err
 	}
+	boundaryDescription := "agent would treat the tool call as complete before delayed child effect materializes"
+	if isControlRun(opts) {
+		boundaryDescription = "control run waits for the child effect and cleanup before the lifecycle boundary"
+	}
 	if err := run.trace.Write(newEvent(run, "P6", "simulated_agent_boundary", map[string]any{
-		"description": "agent would treat the tool call as complete before delayed child effect materializes",
+		"description": boundaryDescription,
 	})); err != nil {
 		return nil, err
 	}
 
 	// Wait long enough for the delayed child effect to appear, then compare
 	// before/after filesystem snapshots as a rollback-residue oracle.
+	recoveryDelay, err := run.timing.recoveryDelayDuration()
+	if err != nil {
+		return nil, err
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(opts.Delay):
+	case <-time.After(recoveryDelay):
 	}
 
 	after, err := SnapshotFilesystem(run.workspace)
@@ -169,17 +189,19 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 
 	finished := time.Now().UTC()
 	result := &RunResult{
-		RunID:          run.runID,
-		CaseName:       opts.CaseName,
-		Environment:    run.environment,
-		ContainerImage: run.containerImage,
-		FaultPlanID:    run.faultPlan.ID,
-		Confirmed:      confirmed,
-		Signature:      signature,
-		Evidence:       evidence,
-		ArtifactDir:    run.runDir,
-		StartedAt:      started.Format(time.RFC3339Nano),
-		FinishedAt:     finished.Format(time.RFC3339Nano),
+		RunID:           run.runID,
+		CaseName:        opts.CaseName,
+		RunRole:         run.runRole,
+		Environment:     run.environment,
+		ContainerImage:  run.containerImage,
+		FaultPlanID:     run.faultPlan.ID,
+		TimingProfileID: run.timing.ProfileID,
+		Confirmed:       confirmed,
+		Signature:       signature,
+		Evidence:        evidence,
+		ArtifactDir:     run.runDir,
+		StartedAt:       started.Format(time.RFC3339Nano),
+		FinishedAt:      finished.Format(time.RFC3339Nano),
 	}
 
 	if err := run.trace.Write(newEvent(run, "oracle", "result", map[string]any{
@@ -206,11 +228,36 @@ func recordFaultPlan(run *runContext) error {
 	return run.trace.Write(newEvent(run, "P0", "fault_plan_selected", map[string]any{
 		"artifact":        faultPlanArtifact,
 		"fault_plan_id":   run.faultPlan.ID,
+		"run_role":        run.runRole,
+		"timing_profile":  run.timing.ProfileID,
 		"inject_phase":    run.faultPlan.InjectPhase,
 		"fault":           run.faultPlan.Fault,
 		"lifecycle":       run.faultPlan.Lifecycle,
 		"expected_impact": run.faultPlan.ExpectedImpact,
 	}))
+}
+
+func waitForTimingBoundary(ctx context.Context, run *runContext, phase string, boundary string) error {
+	delay, err := run.timing.replayDelayDuration()
+	if err != nil {
+		return err
+	}
+	if delay <= 0 {
+		return nil
+	}
+	if err := run.trace.Write(newEvent(run, phase, "timing_delay", map[string]any{
+		"boundary":       boundary,
+		"timing_profile": run.timing.ProfileID,
+		"delay":          delay.String(),
+	})); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(delay):
+		return nil
+	}
 }
 
 func shellQuote(value string) string {

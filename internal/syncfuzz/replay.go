@@ -9,14 +9,15 @@ import (
 )
 
 type ReplayOptions struct {
-	CorpusDir      string
-	EntryID        string
-	OutDir         string
-	Delay          time.Duration
-	MockURL        string
-	EnvKind        string
-	ContainerImage string
-	FaultPlanID    string
+	CorpusDir       string
+	EntryID         string
+	OutDir          string
+	Delay           time.Duration
+	MockURL         string
+	EnvKind         string
+	ContainerImage  string
+	FaultPlanID     string
+	TimingProfileID string
 }
 
 type ReplayResult struct {
@@ -26,6 +27,7 @@ type ReplayResult struct {
 	Environment       string            `json:"environment"`
 	ContainerImage    string            `json:"container_image,omitempty"`
 	FaultPlanID       string            `json:"fault_plan_id,omitempty"`
+	TimingProfileID   string            `json:"timing_profile_id,omitempty"`
 	SourceSuiteID     string            `json:"source_suite_id"`
 	SourceRunID       string            `json:"source_run_id"`
 	ExpectedSignature MismatchSignature `json:"expected_signature"`
@@ -71,13 +73,14 @@ func replayEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions) (*R
 	}
 
 	runResult, err := Run(ctx, RunOptions{
-		CaseName:       entry.CaseName,
-		OutDir:         replayDir,
-		Delay:          opts.Delay,
-		MockURL:        opts.MockURL,
-		EnvKind:        opts.EnvKind,
-		ContainerImage: opts.ContainerImage,
-		FaultPlanID:    firstNonEmpty(opts.FaultPlanID, entry.FaultPlanID),
+		CaseName:        entry.CaseName,
+		OutDir:          replayDir,
+		Delay:           opts.Delay,
+		MockURL:         opts.MockURL,
+		EnvKind:         opts.EnvKind,
+		ContainerImage:  opts.ContainerImage,
+		FaultPlanID:     firstNonEmpty(opts.FaultPlanID, entry.FaultPlanID),
+		TimingProfileID: firstNonEmpty(opts.TimingProfileID, entry.TimingProfileID),
 	})
 	if err != nil {
 		return nil, err
@@ -92,6 +95,7 @@ func replayEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions) (*R
 		Environment:       runResult.Environment,
 		ContainerImage:    runResult.ContainerImage,
 		FaultPlanID:       runResult.FaultPlanID,
+		TimingProfileID:   runResult.TimingProfileID,
 		SourceSuiteID:     entry.SuiteID,
 		SourceRunID:       entry.RunID,
 		ExpectedSignature: entry.Signature,

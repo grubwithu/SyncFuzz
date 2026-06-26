@@ -22,18 +22,19 @@ const (
 )
 
 type FaultPlan struct {
-	SchemaVersion  string     `json:"schema_version"`
-	ID             string     `json:"id"`
-	CaseName       string     `json:"case_name"`
-	Kind           string     `json:"kind"`
-	Lifecycle      string     `json:"lifecycle"`
-	InjectPhase    FaultPhase `json:"inject_phase"`
-	Fault          string     `json:"fault"`
-	Trigger        string     `json:"trigger"`
-	StateLayers    []string   `json:"state_layers"`
-	ExpectedImpact string     `json:"expected_impact"`
-	Description    string     `json:"description"`
-	Deterministic  bool       `json:"deterministic"`
+	SchemaVersion  string      `json:"schema_version"`
+	ID             string      `json:"id"`
+	CaseName       string      `json:"case_name"`
+	Kind           string      `json:"kind"`
+	Lifecycle      string      `json:"lifecycle"`
+	InjectPhase    FaultPhase  `json:"inject_phase"`
+	Fault          string      `json:"fault"`
+	Trigger        string      `json:"trigger"`
+	StateLayers    []string    `json:"state_layers"`
+	ExpectedImpact string      `json:"expected_impact"`
+	Timing         FaultTiming `json:"timing,omitempty"`
+	Description    string      `json:"description"`
+	Deterministic  bool        `json:"deterministic"`
 }
 
 func FaultPlans() []FaultPlan {

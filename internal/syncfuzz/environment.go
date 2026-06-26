@@ -93,10 +93,12 @@ func (e localEnvironment) PrepareRun(_ context.Context, opts RunOptions, started
 	return &runContext{
 		runID:       runID,
 		caseName:    opts.CaseName,
+		runRole:     opts.RunRole,
 		runDir:      runDir,
 		workspace:   workspace,
 		environment: e.Kind(),
 		faultPlan:   opts.faultPlan,
+		timing:      opts.timing,
 		turnID:      "turn-0001",
 		toolCallID:  "tool-0001",
 		trace:       trace,

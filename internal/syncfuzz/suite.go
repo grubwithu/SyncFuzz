@@ -9,39 +9,55 @@ import (
 )
 
 type SuiteOptions struct {
-	OutDir         string
-	Repeat         int
-	Cases          []string
-	Delay          time.Duration
-	MockURL        string
-	CorpusDir      string
-	EnvKind        string
-	ContainerImage string
+	OutDir          string
+	Repeat          int
+	Cases           []string
+	Delay           time.Duration
+	MockURL         string
+	CorpusDir       string
+	EnvKind         string
+	ContainerImage  string
+	Differential    bool
+	TimingProfileID string
 }
 
 type SuiteCaseResult struct {
-	CaseName    string            `json:"case_name"`
-	Iteration   int               `json:"iteration"`
-	RunID       string            `json:"run_id,omitempty"`
-	FaultPlanID string            `json:"fault_plan_id,omitempty"`
-	Confirmed   bool              `json:"confirmed"`
-	Signature   MismatchSignature `json:"signature,omitempty"`
-	Interesting bool              `json:"interesting"`
-	Novelty     []string          `json:"novelty,omitempty"`
-	Score       int               `json:"score"`
-	ArtifactDir string            `json:"artifact_dir,omitempty"`
-	Error       string            `json:"error,omitempty"`
+	CaseName           string            `json:"case_name"`
+	Iteration          int               `json:"iteration"`
+	RunID              string            `json:"run_id,omitempty"`
+	PairID             string            `json:"pair_id,omitempty"`
+	ControlRunID       string            `json:"control_run_id,omitempty"`
+	FaultRunID         string            `json:"fault_run_id,omitempty"`
+	FaultPlanID        string            `json:"fault_plan_id,omitempty"`
+	TimingProfileID    string            `json:"timing_profile_id,omitempty"`
+	Confirmed          bool              `json:"confirmed"`
+	Signature          MismatchSignature `json:"signature,omitempty"`
+	Differential       bool              `json:"differential,omitempty"`
+	SecurityRelevant   bool              `json:"security_relevant,omitempty"`
+	DifferentialReport string            `json:"differential_report,omitempty"`
+	Interesting        bool              `json:"interesting"`
+	Novelty            []string          `json:"novelty,omitempty"`
+	Score              int               `json:"score"`
+	ArtifactDir        string            `json:"artifact_dir,omitempty"`
+	Error              string            `json:"error,omitempty"`
 }
 
 type SuiteDiscovery struct {
-	Kind        string            `json:"kind"`
-	Key         string            `json:"key"`
-	CaseName    string            `json:"case_name"`
-	Iteration   int               `json:"iteration"`
-	RunID       string            `json:"run_id"`
-	FaultPlanID string            `json:"fault_plan_id,omitempty"`
-	Signature   MismatchSignature `json:"signature"`
-	ArtifactDir string            `json:"artifact_dir"`
+	Kind               string            `json:"kind"`
+	Key                string            `json:"key"`
+	CaseName           string            `json:"case_name"`
+	Iteration          int               `json:"iteration"`
+	RunID              string            `json:"run_id"`
+	PairID             string            `json:"pair_id,omitempty"`
+	ControlRunID       string            `json:"control_run_id,omitempty"`
+	FaultRunID         string            `json:"fault_run_id,omitempty"`
+	FaultPlanID        string            `json:"fault_plan_id,omitempty"`
+	TimingProfileID    string            `json:"timing_profile_id,omitempty"`
+	Signature          MismatchSignature `json:"signature"`
+	Differential       bool              `json:"differential,omitempty"`
+	SecurityRelevant   bool              `json:"security_relevant,omitempty"`
+	DifferentialReport string            `json:"differential_report,omitempty"`
+	ArtifactDir        string            `json:"artifact_dir"`
 }
 
 type SuiteResult struct {
@@ -52,6 +68,8 @@ type SuiteResult struct {
 	Environment        string            `json:"environment"`
 	ContainerImage     string            `json:"container_image,omitempty"`
 	Repeat             int               `json:"repeat"`
+	Differential       bool              `json:"differential"`
+	TimingProfileID    string            `json:"timing_profile_id,omitempty"`
 	TotalRuns          int               `json:"total_runs"`
 	Confirmed          int               `json:"confirmed"`
 	Unconfirmed        int               `json:"unconfirmed"`
@@ -97,44 +115,61 @@ func RunSuite(ctx context.Context, opts SuiteOptions) (*SuiteResult, error) {
 	}
 
 	result := &SuiteResult{
-		SuiteID:        suiteID,
-		StartedAt:      started.Format(time.RFC3339Nano),
-		ArtifactDir:    suiteDir,
-		Environment:    normalizedEnvKind(opts.EnvKind),
-		ContainerImage: containerImageForResult(opts.EnvKind, opts.ContainerImage),
-		Repeat:         opts.Repeat,
-		Discoveries:    []SuiteDiscovery{},
-		Results:        []SuiteCaseResult{},
+		SuiteID:         suiteID,
+		StartedAt:       started.Format(time.RFC3339Nano),
+		ArtifactDir:     suiteDir,
+		Environment:     normalizedEnvKind(opts.EnvKind),
+		ContainerImage:  containerImageForResult(opts.EnvKind, opts.ContainerImage),
+		Repeat:          opts.Repeat,
+		Differential:    opts.Differential,
+		TimingProfileID: opts.TimingProfileID,
+		Discoveries:     []SuiteDiscovery{},
+		Results:         []SuiteCaseResult{},
 	}
 	feedback := newSuiteFeedback()
 
 	for iteration := 1; iteration <= opts.Repeat; iteration++ {
 		for _, caseName := range selected {
-			runResult, err := Run(ctx, RunOptions{
-				CaseName:       caseName,
-				OutDir:         suiteDir,
-				Delay:          opts.Delay,
-				MockURL:        opts.MockURL,
-				EnvKind:        opts.EnvKind,
-				ContainerImage: opts.ContainerImage,
-			})
 			item := SuiteCaseResult{
 				CaseName:  caseName,
 				Iteration: iteration,
 			}
-			if err != nil {
-				item.Error = err.Error()
-				result.Errors++
-				result.Results = append(result.Results, item)
-				continue
+			if opts.Differential {
+				pairResult, err := RunPair(ctx, PairOptions{
+					CaseName:        caseName,
+					OutDir:          suiteDir,
+					Delay:           opts.Delay,
+					MockURL:         opts.MockURL,
+					EnvKind:         opts.EnvKind,
+					ContainerImage:  opts.ContainerImage,
+					TimingProfileID: opts.TimingProfileID,
+				})
+				if err != nil {
+					item.Error = err.Error()
+					result.Errors++
+					result.Results = append(result.Results, item)
+					continue
+				}
+				applyPairResult(&item, pairResult)
+			} else {
+				runResult, err := Run(ctx, RunOptions{
+					CaseName:        caseName,
+					OutDir:          suiteDir,
+					Delay:           opts.Delay,
+					MockURL:         opts.MockURL,
+					EnvKind:         opts.EnvKind,
+					ContainerImage:  opts.ContainerImage,
+					TimingProfileID: opts.TimingProfileID,
+				})
+				if err != nil {
+					item.Error = err.Error()
+					result.Errors++
+					result.Results = append(result.Results, item)
+					continue
+				}
+				applyRunResult(&item, runResult)
 			}
-
-			item.RunID = runResult.RunID
-			item.FaultPlanID = runResult.FaultPlanID
-			item.Confirmed = runResult.Confirmed
-			item.Signature = runResult.Signature
-			item.ArtifactDir = runResult.ArtifactDir
-			if runResult.Confirmed {
+			if item.Confirmed {
 				result.Confirmed++
 				feedback.Apply(&item, result)
 			} else {
@@ -161,6 +196,31 @@ func RunSuite(ctx context.Context, opts SuiteOptions) (*SuiteResult, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func applyRunResult(item *SuiteCaseResult, runResult *RunResult) {
+	item.RunID = runResult.RunID
+	item.FaultRunID = runResult.RunID
+	item.FaultPlanID = runResult.FaultPlanID
+	item.TimingProfileID = runResult.TimingProfileID
+	item.Confirmed = runResult.Confirmed
+	item.Signature = runResult.Signature
+	item.ArtifactDir = runResult.ArtifactDir
+}
+
+func applyPairResult(item *SuiteCaseResult, pairResult *PairResult) {
+	item.RunID = pairResult.Fault.RunID
+	item.PairID = pairResult.PairID
+	item.ControlRunID = pairResult.Control.RunID
+	item.FaultRunID = pairResult.Fault.RunID
+	item.FaultPlanID = pairResult.FaultPlanID
+	item.TimingProfileID = pairResult.TimingProfileID
+	item.Confirmed = pairResult.Verdict.SecurityRelevant
+	item.Signature = pairResult.Fault.Signature
+	item.Differential = pairResult.Verdict.Differential
+	item.SecurityRelevant = pairResult.Verdict.SecurityRelevant
+	item.DifferentialReport = filepath.Join(pairResult.ArtifactDir, differentialReportArtifact)
+	item.ArtifactDir = pairResult.ArtifactDir
 }
 
 type suiteFeedback struct {
@@ -197,14 +257,21 @@ func (f *suiteFeedback) observe(kind string, key string, score int, item *SuiteC
 	item.Novelty = append(item.Novelty, kind)
 	item.Score += score
 	result.Discoveries = append(result.Discoveries, SuiteDiscovery{
-		Kind:        kind,
-		Key:         key,
-		CaseName:    item.CaseName,
-		Iteration:   item.Iteration,
-		RunID:       item.RunID,
-		FaultPlanID: item.FaultPlanID,
-		Signature:   item.Signature,
-		ArtifactDir: item.ArtifactDir,
+		Kind:               kind,
+		Key:                key,
+		CaseName:           item.CaseName,
+		Iteration:          item.Iteration,
+		RunID:              item.RunID,
+		PairID:             item.PairID,
+		ControlRunID:       item.ControlRunID,
+		FaultRunID:         item.FaultRunID,
+		FaultPlanID:        item.FaultPlanID,
+		TimingProfileID:    item.TimingProfileID,
+		Signature:          item.Signature,
+		Differential:       item.Differential,
+		SecurityRelevant:   item.SecurityRelevant,
+		DifferentialReport: item.DifferentialReport,
+		ArtifactDir:        item.ArtifactDir,
 	})
 }
 

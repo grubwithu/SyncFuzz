@@ -58,7 +58,7 @@ seed primitive
 
 在跨层观测上，Phase 2 已形成统一 artifact contract：每个 run 都会生成 `agent-state.json` 和 `state-trace.json`，把 Agent、OS、External、Authority 四层观测映射到统一 lifecycle phase。所有 workspace-backed seed 都会输出 process snapshot、`process-lineage.json` 和 `filesystem-metadata.json`；container backend 会从容器 namespace 内部采集进程信息。External 与 Authority seed 则通过 mock service state snapshot 纳入同一 `state-trace.json` 索引。
 
-Phase 3 已开始把故障注入从 case 内部的隐含逻辑提升为结构化调度输入：每个 run 会生成 `fault-plan.json`，记录 selected known-answer fault、inject phase、相关状态层和 expected impact。后续 scheduler 会在这个 contract 上扩展 control/fault pair、differential report 和 feedback-guided timing。
+Phase 3 已开始把故障注入从 case 内部的隐含逻辑提升为结构化调度输入：每个 run 会生成 `fault-plan.json`，记录 selected known-answer fault、inject phase、相关状态层、expected impact 和 deterministic timing profile。当前还新增了 `control` / `fault` pair 执行，`differential-report.json` 会比较两次 run 的 oracle 结果，并从 `state-trace.json` 汇总 observation coverage。`suite --differential` 可以批量执行 pair，并把 security-relevant differential discovery 写入 corpus。后续 feedback-guided mutation 留到 Phase 4。
 
 ## 路线校准
 

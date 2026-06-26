@@ -11,18 +11,25 @@ import (
 )
 
 type CorpusEntry struct {
-	EntryID     string            `json:"entry_id"`
-	SuiteID     string            `json:"suite_id"`
-	RunID       string            `json:"run_id"`
-	CaseName    string            `json:"case_name"`
-	FaultPlanID string            `json:"fault_plan_id,omitempty"`
-	Iteration   int               `json:"iteration"`
-	Kind        string            `json:"kind"`
-	Key         string            `json:"key"`
-	Score       int               `json:"score"`
-	Signature   MismatchSignature `json:"signature"`
-	ArtifactDir string            `json:"artifact_dir"`
-	RecordedAt  string            `json:"recorded_at"`
+	EntryID            string            `json:"entry_id"`
+	SuiteID            string            `json:"suite_id"`
+	RunID              string            `json:"run_id"`
+	PairID             string            `json:"pair_id,omitempty"`
+	ControlRunID       string            `json:"control_run_id,omitempty"`
+	FaultRunID         string            `json:"fault_run_id,omitempty"`
+	CaseName           string            `json:"case_name"`
+	FaultPlanID        string            `json:"fault_plan_id,omitempty"`
+	TimingProfileID    string            `json:"timing_profile_id,omitempty"`
+	Iteration          int               `json:"iteration"`
+	Kind               string            `json:"kind"`
+	Key                string            `json:"key"`
+	Score              int               `json:"score"`
+	Signature          MismatchSignature `json:"signature"`
+	Differential       bool              `json:"differential,omitempty"`
+	SecurityRelevant   bool              `json:"security_relevant,omitempty"`
+	DifferentialReport string            `json:"differential_report,omitempty"`
+	ArtifactDir        string            `json:"artifact_dir"`
+	RecordedAt         string            `json:"recorded_at"`
 }
 
 // WriteCorpus registers interesting discoveries without copying the full run
@@ -48,18 +55,25 @@ func WriteCorpus(corpusDir string, suite *SuiteResult) ([]CorpusEntry, error) {
 	entries := make([]CorpusEntry, 0, len(suite.Discoveries))
 	for _, discovery := range suite.Discoveries {
 		entry := CorpusEntry{
-			EntryID:     corpusEntryID(discovery),
-			SuiteID:     suite.SuiteID,
-			RunID:       discovery.RunID,
-			CaseName:    discovery.CaseName,
-			FaultPlanID: discovery.FaultPlanID,
-			Iteration:   discovery.Iteration,
-			Kind:        discovery.Kind,
-			Key:         discovery.Key,
-			Score:       corpusScore(discovery.Kind),
-			Signature:   discovery.Signature,
-			ArtifactDir: discovery.ArtifactDir,
-			RecordedAt:  recordedAt,
+			EntryID:            corpusEntryID(discovery),
+			SuiteID:            suite.SuiteID,
+			RunID:              discovery.RunID,
+			PairID:             discovery.PairID,
+			ControlRunID:       discovery.ControlRunID,
+			FaultRunID:         discovery.FaultRunID,
+			CaseName:           discovery.CaseName,
+			FaultPlanID:        discovery.FaultPlanID,
+			TimingProfileID:    discovery.TimingProfileID,
+			Iteration:          discovery.Iteration,
+			Kind:               discovery.Kind,
+			Key:                discovery.Key,
+			Score:              corpusScore(discovery.Kind),
+			Signature:          discovery.Signature,
+			Differential:       discovery.Differential,
+			SecurityRelevant:   discovery.SecurityRelevant,
+			DifferentialReport: discovery.DifferentialReport,
+			ArtifactDir:        discovery.ArtifactDir,
+			RecordedAt:         recordedAt,
 		}
 		entries = append(entries, entry)
 

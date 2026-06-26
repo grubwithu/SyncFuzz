@@ -8,11 +8,17 @@ func TestWriteListShowCorpus(t *testing.T) {
 		SuiteID: "suite-test",
 		Discoveries: []SuiteDiscovery{
 			{
-				Kind:      "new-signature",
-				Key:       "<x>",
-				CaseName:  "action-replay",
-				Iteration: 1,
-				RunID:     "run-test",
+				Kind:               "new-signature",
+				Key:                "<x>",
+				CaseName:           "action-replay",
+				Iteration:          1,
+				RunID:              "run-test",
+				PairID:             "pair-test",
+				ControlRunID:       "control-run-test",
+				FaultRunID:         "fault-run-test",
+				Differential:       true,
+				SecurityRelevant:   true,
+				DifferentialReport: "runs/suite-test/pair-test/differential-report.json",
 				Signature: MismatchSignature{
 					LifecycleEvent: "replay",
 					FaultPhase:     "after-external-commit",
@@ -48,6 +54,9 @@ func TestWriteListShowCorpus(t *testing.T) {
 	}
 	if shown.EntryID != entries[0].EntryID {
 		t.Fatalf("expected entry id %q, got %q", entries[0].EntryID, shown.EntryID)
+	}
+	if shown.PairID != "pair-test" || !shown.SecurityRelevant {
+		t.Fatalf("expected pair metadata to round-trip: %#v", shown)
 	}
 
 	prefixShown, err := ShowCorpusEntry(corpusDir, "new-signature-action-replay")

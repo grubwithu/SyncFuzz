@@ -64,7 +64,7 @@
 
 目标：系统性注入 lifecycle fault，并自动判断 mismatch 是否有安全意义。
 
-状态：已启动。第一步已实现 deterministic fault-plan catalog 和 `fault-plan.json` artifact，先把 known-answer seed 的隐含 fault phase 变成 scheduler 可消费的结构化输入。
+状态：第一版已完成。已实现 deterministic fault-plan catalog、deterministic timing profiles、`fault-plan.json` artifact、`control` / `fault` run role、`differential-report.json` pair-level report，以及 `suite --differential` / corpus metadata。现在 known-answer seed 的隐含 fault phase 已经变成 scheduler 可消费、可对照执行、可批量登记、可稳定复现的结构化输入。
 
 Fault phase：
 
@@ -90,12 +90,17 @@ Oracle：
 
 > 不依赖人工判断，能从 control run 与 fault run 生成结构化 mismatch signature。
 
-下一步：
+已实现：
 
 - 定义 `control` / `fault` run pair；
 - 从 `state-trace.json` 自动读取 observation coverage；
 - 生成 pair-level differential report；
-- 再引入随机或 feedback-guided fault timing。
+- 把 pair-level report 接入 suite / corpus，使 discoveries 可记录 differential verdict；
+- 引入 `baseline` / `tight` / `wide` deterministic timing profiles。
+
+下一步：
+
+- 将随机或 feedback-guided fault timing 留到 Phase 4。
 
 ## Phase 4：Feedback-Guided Fuzzing
 

@@ -31,9 +31,11 @@ func runActionReplay(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	defer backend.Close()
 
 	if err := run.trace.Write(newEvent(run, "P0", "run_started", map[string]any{
-		"environment": run.environment,
-		"mock_url":    mockURL,
-		"server_kind": serverKind,
+		"environment":    run.environment,
+		"mock_url":       mockURL,
+		"server_kind":    serverKind,
+		"run_role":       run.runRole,
+		"timing_profile": run.timing.ProfileID,
 	})); err != nil {
 		return nil, err
 	}
@@ -83,37 +85,48 @@ func runActionReplay(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		return nil, err
 	}
 
-	if err := run.trace.Write(newEvent(run, "P5", "fault_injected", map[string]any{
-		"fault":       "drop_tool_result",
-		"description": "external effect committed, but the agent loses the receipt before checkpoint persistence",
-	})); err != nil {
-		return nil, err
-	}
+	if isControlRun(opts) {
+		if err := run.trace.Write(newEvent(run, "P6", "control_checkpoint_persisted", map[string]any{
+			"description": "receipt is preserved, so replay is not needed",
+		})); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := run.trace.Write(newEvent(run, "P5", "fault_injected", map[string]any{
+			"fault":       "drop_tool_result",
+			"description": "external effect committed, but the agent loses the receipt before checkpoint persistence",
+		})); err != nil {
+			return nil, err
+		}
+		if err := waitForTimingBoundary(ctx, run, "P8", "before_replay"); err != nil {
+			return nil, err
+		}
 
-	// Replay repeats the logical action against an external state that did not
-	// roll back, producing the forgotten-external-effect signature.
-	secondRequestID := "req-" + run.runID + "-attempt-2"
-	if err := run.trace.Write(newEvent(run, "P8", "replay_started", map[string]any{
-		"operation":  "create_resource",
-		"request_id": secondRequestID,
-		"reason":     "agent replays the logical action with a new request id",
-	})); err != nil {
-		return nil, err
-	}
+		// Replay repeats the logical action against an external state that did
+		// not roll back, producing the forgotten-external-effect signature.
+		secondRequestID := "req-" + run.runID + "-attempt-2"
+		if err := run.trace.Write(newEvent(run, "P8", "replay_started", map[string]any{
+			"operation":  "create_resource",
+			"request_id": secondRequestID,
+			"reason":     "agent replays the logical action with a new request id",
+		})); err != nil {
+			return nil, err
+		}
 
-	second, err := backend.CreateResource(ctx, map[string]any{
-		"requestId": secondRequestID,
-		"kind":      "ci-resource",
-		"payload":   payload,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create replayed external resource: %w", err)
-	}
-	if err := run.trace.Write(newEvent(run, "P8", "external_effect_replayed", map[string]any{
-		"resource_id": second.Resource.ID,
-		"request_id":  second.Resource.RequestID,
-	})); err != nil {
-		return nil, err
+		second, err := backend.CreateResource(ctx, map[string]any{
+			"requestId": secondRequestID,
+			"kind":      "ci-resource",
+			"payload":   payload,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create replayed external resource: %w", err)
+		}
+		if err := run.trace.Write(newEvent(run, "P8", "external_effect_replayed", map[string]any{
+			"resource_id": second.Resource.ID,
+			"request_id":  second.Resource.RequestID,
+		})); err != nil {
+			return nil, err
+		}
 	}
 
 	after, err := backend.State(ctx)
@@ -141,9 +154,13 @@ func runActionReplay(ctx context.Context, opts RunOptions) (*RunResult, error) {
 		ExpectedSignature: signature,
 		Artifacts:         appendPhase2Artifacts([]string{"trace.jsonl", "external-before.json", "external-after.json", "result.json"}),
 	}
+	afterPhase := "P8"
+	if isControlRun(opts) {
+		afterPhase = "P6"
+	}
 	if err := writeCrossLayerArtifacts(run, manifest, confirmed, evidence, []StateObservation{
 		{Layer: "external", StateClass: "external-effect", Phase: "P0", Artifact: "external-before.json", Kind: "external-state-snapshot"},
-		{Layer: "external", StateClass: "external-effect", Phase: "P8", Artifact: "external-after.json", Kind: "external-state-snapshot"},
+		{Layer: "external", StateClass: "external-effect", Phase: afterPhase, Artifact: "external-after.json", Kind: "external-state-snapshot"},
 	}); err != nil {
 		return nil, err
 	}
@@ -153,17 +170,19 @@ func runActionReplay(ctx context.Context, opts RunOptions) (*RunResult, error) {
 
 	finished := time.Now().UTC()
 	result := &RunResult{
-		RunID:          run.runID,
-		CaseName:       opts.CaseName,
-		Environment:    run.environment,
-		ContainerImage: run.containerImage,
-		FaultPlanID:    run.faultPlan.ID,
-		Confirmed:      confirmed,
-		Signature:      signature,
-		Evidence:       evidence,
-		ArtifactDir:    run.runDir,
-		StartedAt:      started.Format(time.RFC3339Nano),
-		FinishedAt:     finished.Format(time.RFC3339Nano),
+		RunID:           run.runID,
+		CaseName:        opts.CaseName,
+		RunRole:         run.runRole,
+		Environment:     run.environment,
+		ContainerImage:  run.containerImage,
+		FaultPlanID:     run.faultPlan.ID,
+		TimingProfileID: run.timing.ProfileID,
+		Confirmed:       confirmed,
+		Signature:       signature,
+		Evidence:        evidence,
+		ArtifactDir:     run.runDir,
+		StartedAt:       started.Format(time.RFC3339Nano),
+		FinishedAt:      finished.Format(time.RFC3339Nano),
 	}
 
 	if err := run.trace.Write(newEvent(run, "oracle", "result", map[string]any{

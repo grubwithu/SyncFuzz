@@ -9,13 +9,14 @@ import (
 )
 
 type VerifyOptions struct {
-	CorpusDir      string
-	OutDir         string
-	Limit          int
-	Delay          time.Duration
-	MockURL        string
-	EnvKind        string
-	ContainerImage string
+	CorpusDir       string
+	OutDir          string
+	Limit           int
+	Delay           time.Duration
+	MockURL         string
+	EnvKind         string
+	ContainerImage  string
+	TimingProfileID string
 }
 
 type VerificationEntryResult struct {
@@ -23,6 +24,7 @@ type VerificationEntryResult struct {
 	Kind              string            `json:"kind"`
 	CaseName          string            `json:"case_name"`
 	FaultPlanID       string            `json:"fault_plan_id,omitempty"`
+	TimingProfileID   string            `json:"timing_profile_id,omitempty"`
 	Environment       string            `json:"environment,omitempty"`
 	ContainerImage    string            `json:"container_image,omitempty"`
 	ExpectedSignature MismatchSignature `json:"expected_signature"`
@@ -104,15 +106,17 @@ func VerifyCorpus(ctx context.Context, opts VerifyOptions) (*VerificationResult,
 			Kind:              entry.Kind,
 			CaseName:          entry.CaseName,
 			FaultPlanID:       entry.FaultPlanID,
+			TimingProfileID:   entry.TimingProfileID,
 			ExpectedSignature: entry.Signature,
 		}
 
 		replay, err := replayEntry(ctx, entry, ReplayOptions{
-			OutDir:         verifyDir,
-			Delay:          opts.Delay,
-			MockURL:        opts.MockURL,
-			EnvKind:        opts.EnvKind,
-			ContainerImage: opts.ContainerImage,
+			OutDir:          verifyDir,
+			Delay:           opts.Delay,
+			MockURL:         opts.MockURL,
+			EnvKind:         opts.EnvKind,
+			ContainerImage:  opts.ContainerImage,
+			TimingProfileID: opts.TimingProfileID,
 		})
 		if err != nil {
 			item.Error = err.Error()
@@ -126,6 +130,7 @@ func VerifyCorpus(ctx context.Context, opts VerifyOptions) (*VerificationResult,
 		item.Environment = replay.Environment
 		item.ContainerImage = replay.ContainerImage
 		item.FaultPlanID = replay.FaultPlanID
+		item.TimingProfileID = replay.TimingProfileID
 		item.Confirmed = replay.Confirmed
 		item.ActualSignature = replay.ActualSignature
 		item.SignatureMatched = replay.SignatureMatched

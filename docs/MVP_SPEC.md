@@ -41,13 +41,16 @@ This is not yet a real framework vulnerability. It is a known-answer test provin
 ```bash
 go run ./cmd/syncfuzz list
 go run ./cmd/syncfuzz fault-plans
+go run ./cmd/syncfuzz timing-profiles
 go run ./cmd/syncfuzz run --case orphan-process --out runs
+go run ./cmd/syncfuzz pair --case orphan-process --timing tight --out runs
 go run ./cmd/syncfuzz run --case action-replay --out runs
 go run ./cmd/syncfuzz run --case authority-resurrection --out runs
 go run ./cmd/syncfuzz run --case persistent-shell-poisoning --out runs
 go run ./cmd/syncfuzz run --case partial-filesystem-rollback --out runs
 go run ./cmd/syncfuzz run --case branch-leakage --out runs
 go run ./cmd/syncfuzz suite --out runs --corpus corpus --repeat 1
+go run ./cmd/syncfuzz suite --out runs --corpus corpus --repeat 1 --differential
 go run ./cmd/syncfuzz corpus list --corpus corpus
 go run ./cmd/syncfuzz corpus show --corpus corpus --id <entry_id>
 go run ./cmd/syncfuzz corpus verify --corpus corpus --out runs
@@ -58,7 +61,9 @@ or through Makefile targets:
 
 ```bash
 make run-mvp
+make run-pair CASE=orphan-process TIMING=tight
 make run-suite
+make run-diff-suite
 make corpus-list
 make corpus-verify
 make corpus-show ENTRY_ID=<entry_id_or_unique_prefix>
@@ -110,7 +115,24 @@ runs/<run_id>/
 
 Every run emits `agent-state.json` and `state-trace.json`. `agent-state.json` is the deterministic Agent-layer projection for the known-answer testcase. `state-trace.json` is the stable Phase 2 index that maps artifacts to lifecycle phases and the Agent, OS, External, or Authority layer.
 
-Every run also emits `fault-plan.json`. This is the first Phase 3 scheduler contract: it records the selected known-answer lifecycle fault, inject phase, affected state layers, and expected impact. `result.json`, suite results, corpus entries, replay results, and verification entries carry the same `fault_plan_id` for precise reproduction.
+Every run also emits `fault-plan.json`. This is the Phase 3 scheduler contract: it records the selected known-answer lifecycle fault, inject phase, affected state layers, expected impact, and deterministic timing profile. `result.json`, suite results, corpus entries, replay results, and verification entries carry the same `fault_plan_id` and `timing_profile_id` for precise reproduction.
+
+Phase 3 pair execution writes:
+
+```text
+runs/pair-<id>/
+  differential-report.json
+  <control_run_id>/
+    result.json
+    state-trace.json
+    ...
+  <fault_run_id>/
+    result.json
+    state-trace.json
+    ...
+```
+
+`differential-report.json` records whether the mismatch is isolated to the fault run, plus observation coverage for both runs. `suite --differential` batches this pair execution and copies pair metadata into `suite-result.json`, `interesting.json`, and corpus entries. `--timing baseline|tight|wide` selects a deterministic timing profile; feedback-guided scheduling is still future work.
 
 The process files are currently emitted by all workspace-backed seeds. They capture process state at lifecycle boundaries such as command return, shell mutation, replay probing, rollback, branch effects, and final recovery. Container runs collect this from inside the container namespace.
 

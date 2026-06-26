@@ -32,8 +32,10 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	defer run.Close()
 
 	if err := run.trace.Write(newEvent(run, "P0", "run_started", map[string]any{
-		"environment": run.environment,
-		"workspace":   run.workspace,
+		"environment":    run.environment,
+		"workspace":      run.workspace,
+		"run_role":       run.runRole,
+		"timing_profile": run.timing.ProfileID,
 	})); err != nil {
 		return nil, err
 	}
@@ -88,10 +90,25 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		return nil, err
 	}
 
-	if err := run.trace.Write(newEvent(run, "P6", "branch_discarded", map[string]any{
-		"branch":      "discarded-branch-a",
-		"description": "agent discards branch A but does not restore the underlying workspace",
-	})); err != nil {
+	if isControlRun(opts) {
+		if err := run.trace.Write(newEvent(run, "P6", "branch_discarded_with_restore", map[string]any{
+			"branch":      "discarded-branch-a",
+			"description": "control run discards branch A and restores the underlying workspace",
+		})); err != nil {
+			return nil, err
+		}
+		if _, err := env.ExecShell(ctx, run, "rm -f discarded-branch-a.txt"); err != nil {
+			return nil, fmt.Errorf("restore workspace after discarded branch: %w", err)
+		}
+	} else {
+		if err := run.trace.Write(newEvent(run, "P6", "branch_discarded", map[string]any{
+			"branch":      "discarded-branch-a",
+			"description": "agent discards branch A but does not restore the underlying workspace",
+		})); err != nil {
+			return nil, err
+		}
+	}
+	if err := waitForTimingBoundary(ctx, run, "P8", "before_alternate_branch_commit"); err != nil {
 		return nil, err
 	}
 
@@ -162,17 +179,19 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 
 	finished := time.Now().UTC()
 	result := &RunResult{
-		RunID:          run.runID,
-		CaseName:       opts.CaseName,
-		Environment:    run.environment,
-		ContainerImage: run.containerImage,
-		FaultPlanID:    run.faultPlan.ID,
-		Confirmed:      confirmed,
-		Signature:      signature,
-		Evidence:       evidence,
-		ArtifactDir:    run.runDir,
-		StartedAt:      started.Format(time.RFC3339Nano),
-		FinishedAt:     finished.Format(time.RFC3339Nano),
+		RunID:           run.runID,
+		CaseName:        opts.CaseName,
+		RunRole:         run.runRole,
+		Environment:     run.environment,
+		ContainerImage:  run.containerImage,
+		FaultPlanID:     run.faultPlan.ID,
+		TimingProfileID: run.timing.ProfileID,
+		Confirmed:       confirmed,
+		Signature:       signature,
+		Evidence:        evidence,
+		ArtifactDir:     run.runDir,
+		StartedAt:       started.Format(time.RFC3339Nano),
+		FinishedAt:      finished.Format(time.RFC3339Nano),
 	}
 
 	if err := run.trace.Write(newEvent(run, "oracle", "result", map[string]any{

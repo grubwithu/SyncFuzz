@@ -19,17 +19,19 @@ func (s MismatchSignature) String() string {
 }
 
 type RunResult struct {
-	RunID          string            `json:"run_id"`
-	CaseName       string            `json:"case_name"`
-	Environment    string            `json:"environment"`
-	ContainerImage string            `json:"container_image,omitempty"`
-	FaultPlanID    string            `json:"fault_plan_id,omitempty"`
-	Confirmed      bool              `json:"confirmed"`
-	Signature      MismatchSignature `json:"signature"`
-	Evidence       []string          `json:"evidence"`
-	ArtifactDir    string            `json:"artifact_dir"`
-	StartedAt      string            `json:"started_at"`
-	FinishedAt     string            `json:"finished_at"`
+	RunID           string            `json:"run_id"`
+	CaseName        string            `json:"case_name"`
+	RunRole         string            `json:"run_role,omitempty"`
+	Environment     string            `json:"environment"`
+	ContainerImage  string            `json:"container_image,omitempty"`
+	FaultPlanID     string            `json:"fault_plan_id,omitempty"`
+	TimingProfileID string            `json:"timing_profile_id,omitempty"`
+	Confirmed       bool              `json:"confirmed"`
+	Signature       MismatchSignature `json:"signature"`
+	Evidence        []string          `json:"evidence"`
+	ArtifactDir     string            `json:"artifact_dir"`
+	StartedAt       string            `json:"started_at"`
+	FinishedAt      string            `json:"finished_at"`
 }
 
 // orphanProcessOracle detects an OS effect that appears only after the command

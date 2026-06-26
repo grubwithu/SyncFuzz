@@ -36,6 +36,8 @@ type LifecyclePhase struct {
 type AgentStateProjection struct {
 	RunID             string            `json:"run_id"`
 	CaseName          string            `json:"case_name"`
+	RunRole           string            `json:"run_role,omitempty"`
+	TimingProfileID   string            `json:"timing_profile_id,omitempty"`
 	Environment       string            `json:"environment"`
 	ContainerImage    string            `json:"container_image,omitempty"`
 	GeneratedAt       string            `json:"generated_at"`
@@ -52,6 +54,8 @@ type CrossLayerTrace struct {
 	SchemaVersion     string              `json:"schema_version"`
 	RunID             string              `json:"run_id"`
 	CaseName          string              `json:"case_name"`
+	RunRole           string              `json:"run_role,omitempty"`
+	TimingProfileID   string              `json:"timing_profile_id,omitempty"`
 	Environment       string              `json:"environment"`
 	ContainerImage    string              `json:"container_image,omitempty"`
 	GeneratedAt       string              `json:"generated_at"`
@@ -67,6 +71,8 @@ func writeCrossLayerArtifacts(run *runContext, manifest CaseManifest, confirmed 
 	agent := AgentStateProjection{
 		RunID:             run.runID,
 		CaseName:          run.caseName,
+		RunRole:           run.runRole,
+		TimingProfileID:   run.timing.ProfileID,
 		Environment:       run.environment,
 		ContainerImage:    run.containerImage,
 		GeneratedAt:       generatedAt,
@@ -112,6 +118,8 @@ func buildCrossLayerTrace(run *runContext, signature MismatchSignature, confirme
 		SchemaVersion:     "syncfuzz.state-trace.v1",
 		RunID:             run.runID,
 		CaseName:          run.caseName,
+		RunRole:           run.runRole,
+		TimingProfileID:   run.timing.ProfileID,
 		Environment:       run.environment,
 		ContainerImage:    run.containerImage,
 		GeneratedAt:       generatedAt,

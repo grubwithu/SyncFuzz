@@ -34,8 +34,10 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 	defer run.Close()
 
 	if err := run.trace.Write(newEvent(run, "P0", "run_started", map[string]any{
-		"environment": run.environment,
-		"workspace":   run.workspace,
+		"environment":    run.environment,
+		"workspace":      run.workspace,
+		"run_role":       run.runRole,
+		"timing_profile": run.timing.ProfileID,
 	})); err != nil {
 		return nil, err
 	}
@@ -99,10 +101,27 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 		return nil, err
 	}
 
-	if err := run.trace.Write(newEvent(run, "P6", "fault_injected", map[string]any{
-		"fault":       "restore_agent_graph_without_restarting_shell",
-		"description": "agent logical state is restored, but the persistent shell process is reused",
-	})); err != nil {
+	if isControlRun(opts) {
+		if err := run.trace.Write(newEvent(run, "P6", "control_shell_restarted", map[string]any{
+			"description": "control run restarts the persistent shell when graph state is restored",
+		})); err != nil {
+			return nil, err
+		}
+		shell.Close()
+		shell, err = env.StartPersistentShell(ctx, run)
+		if err != nil {
+			return nil, fmt.Errorf("restart persistent shell for control run: %w", err)
+		}
+		defer shell.Close()
+	} else {
+		if err := run.trace.Write(newEvent(run, "P6", "fault_injected", map[string]any{
+			"fault":       "restore_agent_graph_without_restarting_shell",
+			"description": "agent logical state is restored, but the persistent shell process is reused",
+		})); err != nil {
+			return nil, err
+		}
+	}
+	if err := waitForTimingBoundary(ctx, run, "P8", "before_replay_probe"); err != nil {
 		return nil, err
 	}
 
@@ -174,17 +193,19 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 
 	finished := time.Now().UTC()
 	result := &RunResult{
-		RunID:          run.runID,
-		CaseName:       opts.CaseName,
-		Environment:    run.environment,
-		ContainerImage: run.containerImage,
-		FaultPlanID:    run.faultPlan.ID,
-		Confirmed:      confirmed,
-		Signature:      signature,
-		Evidence:       evidence,
-		ArtifactDir:    run.runDir,
-		StartedAt:      started.Format(time.RFC3339Nano),
-		FinishedAt:     finished.Format(time.RFC3339Nano),
+		RunID:           run.runID,
+		CaseName:        opts.CaseName,
+		RunRole:         run.runRole,
+		Environment:     run.environment,
+		ContainerImage:  run.containerImage,
+		FaultPlanID:     run.faultPlan.ID,
+		TimingProfileID: run.timing.ProfileID,
+		Confirmed:       confirmed,
+		Signature:       signature,
+		Evidence:        evidence,
+		ArtifactDir:     run.runDir,
+		StartedAt:       started.Format(time.RFC3339Nano),
+		FinishedAt:      finished.Format(time.RFC3339Nano),
 	}
 
 	if err := run.trace.Write(newEvent(run, "oracle", "result", map[string]any{
