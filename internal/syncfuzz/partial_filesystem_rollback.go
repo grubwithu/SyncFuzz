@@ -182,6 +182,7 @@ func runPartialFilesystemRollback(ctx context.Context, opts RunOptions) (*RunRes
 		Environment:     run.environment,
 		ContainerImage:  run.containerImage,
 		FaultPlanID:     run.faultPlan.ID,
+		PrimitiveID:     run.primitiveID,
 		TimingProfileID: run.timing.ProfileID,
 		Confirmed:       confirmed,
 		Signature:       signature,

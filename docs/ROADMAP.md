@@ -106,6 +106,8 @@ Oracle：
 
 目标：从固定 seed 进入状态原语组合搜索。
 
+状态：第一版完成。已实现 deterministic mutation primitive catalog、scheduler matrix、matrix-backed suite execution、candidate scoring/cost metrics、feedback-ranked candidate selection、multi-round campaign，以及首个从 planned 转为 executable 的新增 primitive。当前可以枚举、执行、排序并按上一轮反馈筛选 `case x primitive x timing_profile` 候选；campaign 会按预算跨轮探索未执行候选，并在候选耗尽后允许重复利用高分候选。
+
 第一批 mutation 原语：
 
 - background process
@@ -133,6 +135,26 @@ Feedback：
 完成标准：
 
 > 相比 random fault timing，更快发现 known-answer case，并开始发现未知 mismatch。
+
+已实现：
+
+- `syncfuzz primitives`：列出已实现与 planned mutation primitive；
+- `syncfuzz matrix`：枚举 deterministic scheduler candidate；
+- matrix 默认只包含当前可执行 primitive，`--include-planned` 可查看未来搜索空间。
+- `syncfuzz suite --matrix`：执行当前已实现的 scheduler candidates；
+- `schedule-matrix.json` / `matrix-result.json`：记录 suite 使用的候选矩阵和每个 candidate 的执行结果；
+- suite / discovery / corpus metadata 携带 `candidate_id` 与 `primitive_id`，为后续 minimization 和 feedback selection 提供稳定 handle。
+- `candidate_summaries`：按 novelty、confirmed count、reproducibility 和 errors 对候选打分排序。
+- 执行成本指标：每个 suite item 与 candidate summary 记录 duration、artifact bytes、artifact files 和 cost penalty。
+- `--feedback-from <matrix-result.json>` / `--candidate-limit N`：用上一轮 candidate summary 对当前 matrix 排序，并按预算执行高优先级候选。
+- `syncfuzz campaign`：自动执行多轮 matrix / feedback-ranked matrix suite，并写出 `campaign-result.json`。
+- campaign-level exploration/dedup：`candidate-limit` 每轮生效，优先跳过已执行候选，记录 `unique_candidates` 与 `repeated_candidates`。
+- `double-fork-daemon` 已从 planned primitive 转为 executable primitive，并进入 `orphan-process` 默认 matrix。
+
+Phase 4 之后：
+
+- 继续把 `open-fd`、`unix-socket`、`concurrent-file-replacement` 转为 executable primitive；
+- 将 campaign 接到真实 Target Adapter，开始测试真实 Agent runtime。
 
 ## Phase 5：真实 Target Adapter
 

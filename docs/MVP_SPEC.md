@@ -42,6 +42,8 @@ This is not yet a real framework vulnerability. It is a known-answer test provin
 go run ./cmd/syncfuzz list
 go run ./cmd/syncfuzz fault-plans
 go run ./cmd/syncfuzz timing-profiles
+go run ./cmd/syncfuzz primitives
+go run ./cmd/syncfuzz matrix --cases orphan-process --timing baseline,tight
 go run ./cmd/syncfuzz run --case orphan-process --out runs
 go run ./cmd/syncfuzz pair --case orphan-process --timing tight --out runs
 go run ./cmd/syncfuzz run --case action-replay --out runs
@@ -51,6 +53,9 @@ go run ./cmd/syncfuzz run --case partial-filesystem-rollback --out runs
 go run ./cmd/syncfuzz run --case branch-leakage --out runs
 go run ./cmd/syncfuzz suite --out runs --corpus corpus --repeat 1
 go run ./cmd/syncfuzz suite --out runs --corpus corpus --repeat 1 --differential
+go run ./cmd/syncfuzz suite --matrix --cases action-replay --timing baseline,tight --out runs --corpus corpus
+go run ./cmd/syncfuzz suite --matrix --feedback-from runs/suite-<id>/matrix-result.json --candidate-limit 3 --out runs --corpus corpus
+go run ./cmd/syncfuzz campaign --rounds 2 --candidate-limit 3 --cases action-replay --timing baseline,tight --out runs --corpus corpus
 go run ./cmd/syncfuzz corpus list --corpus corpus
 go run ./cmd/syncfuzz corpus show --corpus corpus --id <entry_id>
 go run ./cmd/syncfuzz corpus verify --corpus corpus --out runs
@@ -61,9 +66,14 @@ or through Makefile targets:
 
 ```bash
 make run-mvp
+make primitives
+make matrix CASES=orphan-process TIMING=baseline,tight
 make run-pair CASE=orphan-process TIMING=tight
 make run-suite
 make run-diff-suite
+make run-matrix-suite CASES=action-replay TIMING=baseline,tight
+make run-matrix-suite FEEDBACK_FROM=runs/suite-<id>/matrix-result.json CANDIDATE_LIMIT=3
+make run-campaign ROUNDS=2 CANDIDATE_LIMIT=3 CASES=action-replay TIMING=baseline,tight
 make corpus-list
 make corpus-verify
 make corpus-show ENTRY_ID=<entry_id_or_unique_prefix>
@@ -159,6 +169,35 @@ runs/suite-<id>/
 
 The suite runner is intentionally simple: it enumerates selected cases, repeats each case a fixed number of times, and records aggregate counts. It also marks first-seen signatures, state classes, and impacts as discoveries. This is the first step toward a real scheduler.
 
+Phase 4 matrix suite runs add deterministic candidate execution:
+
+```text
+runs/suite-<id>/
+  schedule-matrix.json
+  matrix-result.json
+  suite-result.json
+  interesting.json
+```
+
+`suite --matrix` executes implemented `case x primitive x timing` candidates from the scheduler matrix. `schedule-matrix.json` records the candidate catalog for that suite, while `matrix-result.json`, `suite-result.json`, `interesting.json`, and corpus entries preserve `candidate_id` and `primitive_id` so discoveries can be replayed and later minimized back to a specific mutation primitive.
+
+`matrix-result.json` also includes ranked `candidate_summaries`. Each summary records the candidate's run count, confirmed count, errors, reproducibility rate, novelty score, total scheduler score, cost penalty, average duration, artifact size, artifact file count, status, and observed signature dimensions. This is the first feedback surface for Phase 4: deterministic now, but shaped so a later scheduler can prioritize high-signal, low-cost candidates.
+
+A subsequent matrix suite may use `--feedback-from <matrix-result.json>` and `--candidate-limit N`. SyncFuzz rebuilds the current matrix, ranks matching candidates using the previous summaries, writes the selected `schedule-matrix.json`, and records `original_candidates`, `candidate_limit`, and `feedback_from` in the new suite result.
+
+`campaign` automates that loop:
+
+```text
+runs/campaign-<id>/
+  campaign-result.json
+  suite-<round-1-id>/
+    matrix-result.json
+  suite-<round-2-id>/
+    matrix-result.json
+```
+
+`--candidate-limit` applies as a per-round budget. The first round explores the current deterministic matrix unless a seed `--feedback-from` is provided. Later rounds feed the prior round's `matrix-result.json` into feedback-ranked selection, skip already executed candidates while unexplored candidates remain, and record `unique_candidates` / `repeated_candidates` in `campaign-result.json`.
+
 When `--corpus corpus` is enabled, suite discoveries are registered as compact corpus entries:
 
 ```text
@@ -168,7 +207,7 @@ corpus/
     <entry_id>.json
 ```
 
-The corpus does not copy full artifacts. Each entry records the testcase, novelty kind, score, signature, and original `artifact_dir`.
+The corpus does not copy full artifacts. Each entry records the testcase, novelty kind, score, signature, original `artifact_dir`, and matrix candidate metadata when the discovery came from `suite --matrix`.
 
 `corpus list` prints a compact table for triage; `corpus show` prints the exact entry, including the artifact path to replay or minimize later. `corpus show --id` accepts either a full entry ID or a unique prefix.
 

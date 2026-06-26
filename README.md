@@ -25,6 +25,8 @@ Run it with:
 go run ./cmd/syncfuzz list
 go run ./cmd/syncfuzz fault-plans
 go run ./cmd/syncfuzz timing-profiles
+go run ./cmd/syncfuzz primitives
+go run ./cmd/syncfuzz matrix --cases orphan-process --timing baseline,tight
 go run ./cmd/syncfuzz run --case orphan-process --out runs
 go run ./cmd/syncfuzz pair --case orphan-process --timing tight --out runs
 go run ./cmd/syncfuzz run --case action-replay --out runs
@@ -34,6 +36,9 @@ go run ./cmd/syncfuzz run --case partial-filesystem-rollback --out runs
 go run ./cmd/syncfuzz run --case branch-leakage --out runs
 go run ./cmd/syncfuzz suite --out runs --corpus corpus --repeat 1
 go run ./cmd/syncfuzz suite --out runs --corpus corpus --repeat 1 --differential
+go run ./cmd/syncfuzz suite --matrix --cases action-replay --timing baseline,tight --out runs --corpus corpus
+go run ./cmd/syncfuzz suite --matrix --feedback-from runs/suite-<id>/matrix-result.json --candidate-limit 3 --out runs --corpus corpus
+go run ./cmd/syncfuzz campaign --rounds 2 --candidate-limit 3 --cases action-replay --timing baseline,tight --out runs --corpus corpus
 go run ./cmd/syncfuzz corpus list --corpus corpus
 go run ./cmd/syncfuzz corpus show --corpus corpus --id <entry_id>
 go run ./cmd/syncfuzz corpus verify --corpus corpus --out runs
@@ -56,9 +61,14 @@ Common flows are also wrapped by `make`:
 make run-suite
 make fault-plans
 make timing-profiles
+make primitives
+make matrix CASES=orphan-process TIMING=baseline,tight
 make run-pair CASE=orphan-process TIMING=tight
 make corpus-list
 make run-diff-suite
+make run-matrix-suite CASES=action-replay TIMING=baseline,tight
+make run-matrix-suite FEEDBACK_FROM=runs/suite-<id>/matrix-result.json CANDIDATE_LIMIT=3
+make run-campaign ROUNDS=2 CANDIDATE_LIMIT=3 CASES=action-replay TIMING=baseline,tight
 make corpus-verify
 make corpus-show ENTRY_ID=<entry_id_or_unique_prefix>
 make replay ENTRY_ID=<entry_id_or_unique_prefix>
@@ -93,7 +103,9 @@ Phase 2 runs now use `state-trace.json` as the stable cross-layer index. It alig
 
 Phase 3 includes a deterministic fault-plan catalog, pair-level differential reports, differential suite mode, and deterministic timing profiles. `syncfuzz fault-plans` lists the known-answer plans, `syncfuzz timing-profiles` lists reproducible timing profiles such as `baseline`, `tight`, and `wide`, each run records its selected plan and timing in `fault-plan.json`, `syncfuzz pair` compares `control` and `fault` executions in `differential-report.json`, and `syncfuzz suite --differential` registers security-relevant pair discoveries in the corpus.
 
-Suite runs are written under `runs/suite-<suite_id>/` with a top-level `suite-result.json`, `interesting.json`, and one subdirectory per testcase run. The suite summary marks runs that produce new signatures, state classes, or impacts as `interesting`.
+Phase 4 has a deterministic mutation primitive catalog and scheduler matrix. `syncfuzz primitives` lists implemented and planned state primitives, `syncfuzz matrix` enumerates reproducible `case x primitive x timing` candidates, and `syncfuzz suite --matrix` executes the implemented candidates while preserving `candidate_id` and `primitive_id` in suite, discovery, and corpus metadata. Matrix suites also rank candidates by novelty, confirmation, reproducibility, execution cost, artifact size, and errors; a later run can pass `--feedback-from <matrix-result.json>` and `--candidate-limit N` to execute the highest-ranked candidates first. `syncfuzz campaign` automates this across multiple rounds, skips already executed candidates while unexplored candidates remain, and writes `campaign-result.json`.
+
+Suite runs are written under `runs/suite-<suite_id>/` with a top-level `suite-result.json`, `interesting.json`, and one subdirectory per testcase run. Matrix suite runs also write `schedule-matrix.json` and `matrix-result.json`; the latter includes ranked `candidate_summaries` with average duration and artifact-size metrics. The suite summary marks runs that produce new signatures, state classes, or impacts as `interesting`.
 
 Interesting discoveries are also registered in `corpus/`:
 

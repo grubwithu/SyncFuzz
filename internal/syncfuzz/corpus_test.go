@@ -16,9 +16,11 @@ func TestWriteListShowCorpus(t *testing.T) {
 				PairID:             "pair-test",
 				ControlRunID:       "control-run-test",
 				FaultRunID:         "fault-run-test",
+				CandidateID:        "action-replay/external-api-commit/baseline",
 				Differential:       true,
 				SecurityRelevant:   true,
 				DifferentialReport: "runs/suite-test/pair-test/differential-report.json",
+				PrimitiveID:        "external-api-commit",
 				Signature: MismatchSignature{
 					LifecycleEvent: "replay",
 					FaultPhase:     "after-external-commit",
@@ -57,6 +59,9 @@ func TestWriteListShowCorpus(t *testing.T) {
 	}
 	if shown.PairID != "pair-test" || !shown.SecurityRelevant {
 		t.Fatalf("expected pair metadata to round-trip: %#v", shown)
+	}
+	if shown.CandidateID != "action-replay/external-api-commit/baseline" || shown.PrimitiveID != "external-api-commit" {
+		t.Fatalf("expected candidate metadata to round-trip: %#v", shown)
 	}
 
 	prefixShown, err := ShowCorpusEntry(corpusDir, "new-signature-action-replay")

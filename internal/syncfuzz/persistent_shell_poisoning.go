@@ -199,6 +199,7 @@ func runPersistentShellPoisoning(ctx context.Context, opts RunOptions) (*RunResu
 		Environment:     run.environment,
 		ContainerImage:  run.containerImage,
 		FaultPlanID:     run.faultPlan.ID,
+		PrimitiveID:     run.primitiveID,
 		TimingProfileID: run.timing.ProfileID,
 		Confirmed:       confirmed,
 		Signature:       signature,

@@ -22,6 +22,7 @@ type RunOptions struct {
 	EnvKind         string
 	ContainerImage  string
 	FaultPlanID     string
+	PrimitiveID     string
 	RunRole         string
 	TimingProfileID string
 	faultPlan       FaultPlan
@@ -99,6 +100,11 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	}
 	faultPlan.Timing = timing
 	opts.faultPlan = faultPlan
+	if opts.PrimitiveID != "" {
+		if err := validateExecutablePrimitive(opts.CaseName, opts.PrimitiveID); err != nil {
+			return nil, err
+		}
+	}
 
 	switch opts.CaseName {
 	case "orphan-process":
@@ -116,6 +122,20 @@ func Run(ctx context.Context, opts RunOptions) (*RunResult, error) {
 	default:
 		return nil, fmt.Errorf("unknown case %q", opts.CaseName)
 	}
+}
+
+func validateExecutablePrimitive(caseName string, primitiveID string) error {
+	primitive, ok := primitiveByID(primitiveID)
+	if !ok {
+		return fmt.Errorf("unknown primitive %q", primitiveID)
+	}
+	if !primitive.Implemented {
+		return fmt.Errorf("primitive %q is not implemented", primitiveID)
+	}
+	if !stringInSlice(caseName, primitive.CaseNames) {
+		return fmt.Errorf("primitive %q does not apply to case %q", primitiveID, caseName)
+	}
+	return nil
 }
 
 func normalizeRunRole(role string) (string, error) {

@@ -17,6 +17,7 @@ type ReplayOptions struct {
 	EnvKind         string
 	ContainerImage  string
 	FaultPlanID     string
+	PrimitiveID     string
 	TimingProfileID string
 }
 
@@ -27,6 +28,7 @@ type ReplayResult struct {
 	Environment       string            `json:"environment"`
 	ContainerImage    string            `json:"container_image,omitempty"`
 	FaultPlanID       string            `json:"fault_plan_id,omitempty"`
+	PrimitiveID       string            `json:"primitive_id,omitempty"`
 	TimingProfileID   string            `json:"timing_profile_id,omitempty"`
 	SourceSuiteID     string            `json:"source_suite_id"`
 	SourceRunID       string            `json:"source_run_id"`
@@ -80,6 +82,7 @@ func replayEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions) (*R
 		EnvKind:         opts.EnvKind,
 		ContainerImage:  opts.ContainerImage,
 		FaultPlanID:     firstNonEmpty(opts.FaultPlanID, entry.FaultPlanID),
+		PrimitiveID:     firstNonEmpty(opts.PrimitiveID, entry.PrimitiveID),
 		TimingProfileID: firstNonEmpty(opts.TimingProfileID, entry.TimingProfileID),
 	})
 	if err != nil {
@@ -95,6 +98,7 @@ func replayEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions) (*R
 		Environment:       runResult.Environment,
 		ContainerImage:    runResult.ContainerImage,
 		FaultPlanID:       runResult.FaultPlanID,
+		PrimitiveID:       runResult.PrimitiveID,
 		TimingProfileID:   runResult.TimingProfileID,
 		SourceSuiteID:     entry.SuiteID,
 		SourceRunID:       entry.RunID,

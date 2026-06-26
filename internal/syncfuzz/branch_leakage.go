@@ -185,6 +185,7 @@ func runBranchLeakage(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		Environment:     run.environment,
 		ContainerImage:  run.containerImage,
 		FaultPlanID:     run.faultPlan.ID,
+		PrimitiveID:     run.primitiveID,
 		TimingProfileID: run.timing.ProfileID,
 		Confirmed:       confirmed,
 		Signature:       signature,

@@ -26,12 +26,18 @@ func main() {
 		faultPlans()
 	case "timing-profiles":
 		timingProfiles()
+	case "primitives":
+		primitives()
+	case "matrix":
+		matrix(os.Args[2:])
 	case "run":
 		run(os.Args[2:])
 	case "pair":
 		pair(os.Args[2:])
 	case "suite":
 		suite(os.Args[2:])
+	case "campaign":
+		campaign(os.Args[2:])
 	case "corpus":
 		corpus(os.Args[2:])
 	case "replay":
@@ -54,14 +60,18 @@ Usage:
   syncfuzz list
   syncfuzz fault-plans
   syncfuzz timing-profiles
-  syncfuzz run --case orphan-process [--out runs] [--delay 1500ms] [--fault-plan <id>] [--timing baseline] [--role fault] [--env local] [--container-image ubuntu:latest]
-  syncfuzz pair --case orphan-process [--out runs] [--delay 1500ms] [--fault-plan <id>] [--timing baseline] [--env local] [--container-image ubuntu:latest]
+  syncfuzz primitives [--include-planned]
+  syncfuzz matrix [--cases orphan-process,branch-leakage] [--timing baseline,tight,wide] [--include-planned]
+  syncfuzz run --case orphan-process [--out runs] [--delay 1500ms] [--fault-plan <id>] [--primitive delayed-write] [--timing baseline] [--role fault] [--env local] [--container-image ubuntu:latest]
+  syncfuzz pair --case orphan-process [--out runs] [--delay 1500ms] [--fault-plan <id>] [--primitive delayed-write] [--timing baseline] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case action-replay [--out runs] [--mock-url http://127.0.0.1:8910] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case authority-resurrection [--out runs] [--mock-url http://127.0.0.1:8910] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case persistent-shell-poisoning [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case partial-filesystem-rollback [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz run --case branch-leakage [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz suite [--out runs] [--repeat 1] [--corpus corpus] [--cases orphan-process,branch-leakage] [--timing baseline] [--differential] [--env local] [--container-image ubuntu:latest]
+  syncfuzz suite --matrix [--out runs] [--repeat 1] [--corpus corpus] [--cases orphan-process] [--timing baseline,tight,wide] [--feedback-from matrix-result.json] [--candidate-limit 5] [--differential] [--env local] [--container-image ubuntu:latest]
+  syncfuzz campaign [--rounds 2] [--candidate-limit 3] [--cases action-replay] [--timing baseline,tight,wide] [--feedback-from matrix-result.json] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz corpus list [--corpus corpus] [--limit 20]
   syncfuzz corpus show --id <entry_id> [--corpus corpus]
   syncfuzz corpus verify [--corpus corpus] [--out runs] [--limit 0] [--env local] [--container-image ubuntu:latest]
@@ -107,6 +117,64 @@ func timingProfiles() {
 	}
 }
 
+func primitives() {
+	fs := flag.NewFlagSet("primitives", flag.ExitOnError)
+	includePlanned := fs.Bool("include-planned", false, "include planned primitives that are not executable yet")
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		os.Exit(2)
+	}
+
+	fmt.Printf("%-30s %-12s %-7s %-28s %s\n", "id", "category", "ready", "cases", "description")
+	for _, primitive := range syncfuzz.MutationPrimitives() {
+		if !*includePlanned && !primitive.Implemented {
+			continue
+		}
+		fmt.Printf("%-30s %-12s %-7t %-28s %s\n",
+			primitive.ID,
+			primitive.Category,
+			primitive.Implemented,
+			strings.Join(primitive.CaseNames, ","),
+			primitive.Description,
+		)
+	}
+}
+
+func matrix(args []string) {
+	fs := flag.NewFlagSet("matrix", flag.ExitOnError)
+	caseList := fs.String("cases", "", "comma-separated testcase names; defaults to all")
+	timingList := fs.String("timing", "", "comma-separated timing profile ids; defaults to all")
+	includePlanned := fs.Bool("include-planned", false, "include planned primitive candidates")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	result, err := syncfuzz.BuildScheduleMatrix(syncfuzz.MatrixOptions{
+		Cases:            splitCases(*caseList),
+		TimingProfileIDs: splitCSV(*timingList),
+		IncludePlanned:   *includePlanned,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz matrix failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("schema: %s\n", result.SchemaVersion)
+	fmt.Printf("cases: %s\n", strings.Join(result.Cases, ","))
+	fmt.Printf("timing_profiles: %s\n", strings.Join(result.TimingProfiles, ","))
+	fmt.Printf("include_planned: %t\n", result.IncludePlanned)
+	fmt.Printf("total_candidates: %d\n", result.TotalCandidates)
+	fmt.Printf("%-58s %-28s %-30s %-8s %s\n", "candidate_id", "case", "primitive", "timing", "impact")
+	for _, candidate := range result.Candidates {
+		fmt.Printf("%-58s %-28s %-30s %-8s %s\n",
+			candidate.CandidateID,
+			candidate.CaseName,
+			candidate.PrimitiveID,
+			candidate.TimingProfileID,
+			candidate.ExpectedImpact,
+		)
+	}
+}
+
 func run(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	caseName := fs.String("case", "orphan-process", "testcase to execute")
@@ -117,6 +185,7 @@ func run(args []string) {
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
 	faultPlanID := fs.String("fault-plan", "", "fault plan id; defaults to the testcase known-answer plan")
+	primitiveID := fs.String("primitive", "", "optional mutation primitive id")
 	timingProfileID := fs.String("timing", "", "timing profile id; defaults to baseline")
 	runRole := fs.String("role", syncfuzz.RunRoleFault, "run role: fault or control")
 	if err := fs.Parse(args); err != nil {
@@ -132,6 +201,7 @@ func run(args []string) {
 		EnvKind:         *envKind,
 		ContainerImage:  *containerImage,
 		FaultPlanID:     *faultPlanID,
+		PrimitiveID:     *primitiveID,
 		TimingProfileID: *timingProfileID,
 		RunRole:         *runRole,
 	}
@@ -150,6 +220,7 @@ func run(args []string) {
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
 	printFaultPlan(result.FaultPlanID)
+	printPrimitive(result.PrimitiveID)
 	printTimingProfile(result.TimingProfileID)
 	fmt.Printf("confirmed: %t\n", result.Confirmed)
 	fmt.Printf("signature: %s\n", result.Signature.String())
@@ -165,6 +236,7 @@ func pair(args []string) {
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
 	faultPlanID := fs.String("fault-plan", "", "fault plan id; defaults to the testcase known-answer plan")
+	primitiveID := fs.String("primitive", "", "optional mutation primitive id")
 	timingProfileID := fs.String("timing", "", "timing profile id; defaults to baseline")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
@@ -178,6 +250,7 @@ func pair(args []string) {
 		EnvKind:         *envKind,
 		ContainerImage:  *containerImage,
 		FaultPlanID:     *faultPlanID,
+		PrimitiveID:     *primitiveID,
 		TimingProfileID: *timingProfileID,
 	})
 	if err != nil {
@@ -190,6 +263,7 @@ func pair(args []string) {
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
 	printFaultPlan(result.FaultPlanID)
+	printPrimitive(result.PrimitiveID)
 	printTimingProfile(result.TimingProfileID)
 	fmt.Printf("control_run: %s confirmed=%t\n", result.Control.RunID, result.Control.Confirmed)
 	fmt.Printf("fault_run: %s confirmed=%t\n", result.Fault.RunID, result.Fault.Confirmed)
@@ -210,22 +284,36 @@ func suite(args []string) {
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
 	differential := fs.Bool("differential", false, "run each testcase as a control/fault pair")
-	timingProfileID := fs.String("timing", "", "timing profile id; defaults to baseline")
+	timingProfileID := fs.String("timing", "", "timing profile id; in matrix mode accepts a comma-separated list")
+	matrixMode := fs.Bool("matrix", false, "run the deterministic Phase 4 schedule matrix")
+	feedbackFrom := fs.String("feedback-from", "", "previous matrix-result.json used to rank matrix candidates")
+	candidateLimit := fs.Int("candidate-limit", 0, "maximum matrix candidates to execute after feedback ranking; 0 means all")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
+	var timingProfileIDs []string
+	timingProfile := *timingProfileID
+	if *matrixMode {
+		timingProfileIDs = splitCSV(*timingProfileID)
+		timingProfile = ""
+	}
+
 	result, err := syncfuzz.RunSuite(context.Background(), syncfuzz.SuiteOptions{
-		OutDir:          *outDir,
-		Repeat:          *repeat,
-		Cases:           splitCases(*caseList),
-		Delay:           *delay,
-		MockURL:         *mockURL,
-		CorpusDir:       *corpusDir,
-		EnvKind:         *envKind,
-		ContainerImage:  *containerImage,
-		Differential:    *differential,
-		TimingProfileID: *timingProfileID,
+		OutDir:           *outDir,
+		Repeat:           *repeat,
+		Cases:            splitCases(*caseList),
+		Delay:            *delay,
+		MockURL:          *mockURL,
+		CorpusDir:        *corpusDir,
+		EnvKind:          *envKind,
+		ContainerImage:   *containerImage,
+		Differential:     *differential,
+		TimingProfileID:  timingProfile,
+		Matrix:           *matrixMode,
+		TimingProfileIDs: timingProfileIDs,
+		FeedbackFrom:     *feedbackFrom,
+		CandidateLimit:   *candidateLimit,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz suite failed: %v\n", err)
@@ -236,6 +324,32 @@ func suite(args []string) {
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
 	printTimingProfile(result.TimingProfileID)
+	fmt.Printf("scheduler: %s\n", result.SchedulerMode)
+	if result.MatrixResult != "" {
+		fmt.Printf("total_candidates: %d\n", result.TotalCandidates)
+		if result.OriginalCandidates > 0 && result.OriginalCandidates != result.TotalCandidates {
+			fmt.Printf("original_candidates: %d\n", result.OriginalCandidates)
+		}
+		if result.FeedbackFrom != "" {
+			fmt.Printf("feedback_from: %s\n", result.FeedbackFrom)
+		}
+		if result.CandidateLimit > 0 {
+			fmt.Printf("candidate_limit: %d\n", result.CandidateLimit)
+		}
+		if len(result.CandidateSummaries) > 0 {
+			top := result.CandidateSummaries[0]
+			fmt.Printf("top_candidate: %s score=%d cost=%d status=%s repro=%.2f%% avg_duration_ms=%d avg_artifact_bytes=%d\n",
+				top.CandidateID,
+				top.Score,
+				top.CostPenalty,
+				top.Status,
+				top.ReproducibilityRate*100,
+				top.AvgDurationMillis,
+				top.AvgArtifactBytes,
+			)
+		}
+		fmt.Printf("matrix_result: %s\n", result.MatrixResult)
+	}
 	fmt.Printf("differential: %t\n", result.Differential)
 	fmt.Printf("total_runs: %d\n", result.TotalRuns)
 	fmt.Printf("confirmed: %d\n", result.Confirmed)
@@ -248,6 +362,10 @@ func suite(args []string) {
 }
 
 func splitCases(value string) []string {
+	return splitCSV(value)
+}
+
+func splitCSV(value string) []string {
 	if strings.TrimSpace(value) == "" {
 		return nil
 	}
@@ -260,6 +378,73 @@ func splitCases(value string) []string {
 		}
 	}
 	return out
+}
+
+func campaign(args []string) {
+	fs := flag.NewFlagSet("campaign", flag.ExitOnError)
+	outDir := fs.String("out", "runs", "directory for campaign artifacts")
+	corpusDir := fs.String("corpus", "corpus", "directory for interesting discovery corpus; empty disables corpus output")
+	rounds := fs.Int("rounds", 2, "number of matrix feedback rounds")
+	repeat := fs.Int("repeat", 1, "number of times to run each selected candidate per round")
+	candidateLimit := fs.Int("candidate-limit", 0, "candidate budget for feedback-ranked rounds; 0 means all")
+	caseList := fs.String("cases", "", "comma-separated testcase names; defaults to all")
+	timingList := fs.String("timing", "", "comma-separated timing profile ids; defaults to all")
+	feedbackFrom := fs.String("feedback-from", "", "optional seed matrix-result.json for the first round")
+	delay := fs.Duration("delay", 1500*time.Millisecond, "delay passed through to testcase runs")
+	mockURL := fs.String("mock-url", "", "optional EffectServer/AuthorityServer base URL")
+	envKind := fs.String("env", "local", "execution environment backend")
+	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	differential := fs.Bool("differential", false, "run selected candidates as control/fault pairs")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	result, err := syncfuzz.RunCampaign(context.Background(), syncfuzz.CampaignOptions{
+		OutDir:           *outDir,
+		CorpusDir:        *corpusDir,
+		Rounds:           *rounds,
+		Repeat:           *repeat,
+		CandidateLimit:   *candidateLimit,
+		Cases:            splitCases(*caseList),
+		TimingProfileIDs: splitCSV(*timingList),
+		Delay:            *delay,
+		MockURL:          *mockURL,
+		EnvKind:          *envKind,
+		ContainerImage:   *containerImage,
+		Differential:     *differential,
+		FeedbackFrom:     *feedbackFrom,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz campaign failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("campaign_id: %s\n", result.CampaignID)
+	fmt.Printf("environment: %s\n", result.Environment)
+	printContainerImage(result.ContainerImage)
+	fmt.Printf("rounds: %d\n", result.Rounds)
+	fmt.Printf("candidate_limit: %d\n", result.CandidateLimit)
+	fmt.Printf("total_suites: %d\n", result.TotalSuites)
+	fmt.Printf("total_runs: %d\n", result.TotalRuns)
+	fmt.Printf("confirmed: %d\n", result.Confirmed)
+	fmt.Printf("unconfirmed: %d\n", result.Unconfirmed)
+	fmt.Printf("errors: %d\n", result.Errors)
+	fmt.Printf("discoveries: %d\n", result.Discoveries)
+	fmt.Printf("corpus_entries: %d\n", result.CorpusEntries)
+	fmt.Printf("unique_candidates: %d\n", result.UniqueCandidates)
+	fmt.Printf("repeated_candidates: %d\n", result.RepeatedCandidates)
+	for _, round := range result.RoundResults {
+		fmt.Printf("round_%d: scheduler=%s candidates=%d runs=%d confirmed=%d errors=%d matrix_result=%s\n",
+			round.Round,
+			round.SchedulerMode,
+			round.TotalCandidates,
+			round.TotalRuns,
+			round.Confirmed,
+			round.Errors,
+			round.MatrixResult,
+		)
+	}
+	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
 }
 
 func corpus(args []string) {
@@ -324,6 +509,12 @@ func corpusShow(args []string) {
 	fmt.Printf("kind: %s\n", entry.Kind)
 	fmt.Printf("score: %d\n", entry.Score)
 	fmt.Printf("case: %s\n", entry.CaseName)
+	if entry.CandidateID != "" {
+		fmt.Printf("candidate: %s\n", entry.CandidateID)
+	}
+	if entry.PrimitiveID != "" {
+		fmt.Printf("primitive: %s\n", entry.PrimitiveID)
+	}
 	fmt.Printf("suite_id: %s\n", entry.SuiteID)
 	fmt.Printf("run_id: %s\n", entry.RunID)
 	if entry.PairID != "" {
@@ -399,6 +590,7 @@ func replay(args []string) {
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
 	faultPlanID := fs.String("fault-plan", "", "optional replay fault plan override")
+	primitiveID := fs.String("primitive", "", "optional replay primitive override")
 	timingProfileID := fs.String("timing", "", "optional replay timing profile override")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
@@ -413,6 +605,7 @@ func replay(args []string) {
 		EnvKind:         *envKind,
 		ContainerImage:  *containerImage,
 		FaultPlanID:     *faultPlanID,
+		PrimitiveID:     *primitiveID,
 		TimingProfileID: *timingProfileID,
 	})
 	if err != nil {
@@ -426,6 +619,7 @@ func replay(args []string) {
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
 	printFaultPlan(result.FaultPlanID)
+	printPrimitive(result.PrimitiveID)
 	printTimingProfile(result.TimingProfileID)
 	fmt.Printf("confirmed: %t\n", result.Confirmed)
 	fmt.Printf("signature_matched: %t\n", result.SignatureMatched)
@@ -444,6 +638,12 @@ func printContainerImage(image string) {
 func printFaultPlan(faultPlanID string) {
 	if faultPlanID != "" {
 		fmt.Printf("fault_plan: %s\n", faultPlanID)
+	}
+}
+
+func printPrimitive(primitiveID string) {
+	if primitiveID != "" {
+		fmt.Printf("primitive: %s\n", primitiveID)
 	}
 }
 

@@ -17,8 +17,10 @@ type CorpusEntry struct {
 	PairID             string            `json:"pair_id,omitempty"`
 	ControlRunID       string            `json:"control_run_id,omitempty"`
 	FaultRunID         string            `json:"fault_run_id,omitempty"`
+	CandidateID        string            `json:"candidate_id,omitempty"`
 	CaseName           string            `json:"case_name"`
 	FaultPlanID        string            `json:"fault_plan_id,omitempty"`
+	PrimitiveID        string            `json:"primitive_id,omitempty"`
 	TimingProfileID    string            `json:"timing_profile_id,omitempty"`
 	Iteration          int               `json:"iteration"`
 	Kind               string            `json:"kind"`
@@ -61,8 +63,10 @@ func WriteCorpus(corpusDir string, suite *SuiteResult) ([]CorpusEntry, error) {
 			PairID:             discovery.PairID,
 			ControlRunID:       discovery.ControlRunID,
 			FaultRunID:         discovery.FaultRunID,
+			CandidateID:        discovery.CandidateID,
 			CaseName:           discovery.CaseName,
 			FaultPlanID:        discovery.FaultPlanID,
+			PrimitiveID:        discovery.PrimitiveID,
 			TimingProfileID:    discovery.TimingProfileID,
 			Iteration:          discovery.Iteration,
 			Kind:               discovery.Kind,

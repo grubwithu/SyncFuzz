@@ -25,6 +25,7 @@ type RunResult struct {
 	Environment     string            `json:"environment"`
 	ContainerImage  string            `json:"container_image,omitempty"`
 	FaultPlanID     string            `json:"fault_plan_id,omitempty"`
+	PrimitiveID     string            `json:"primitive_id,omitempty"`
 	TimingProfileID string            `json:"timing_profile_id,omitempty"`
 	Confirmed       bool              `json:"confirmed"`
 	Signature       MismatchSignature `json:"signature"`

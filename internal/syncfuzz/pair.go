@@ -19,6 +19,7 @@ type PairOptions struct {
 	EnvKind         string
 	ContainerImage  string
 	FaultPlanID     string
+	PrimitiveID     string
 	TimingProfileID string
 }
 
@@ -27,6 +28,7 @@ type PairRunSummary struct {
 	RunRole            string            `json:"run_role"`
 	ArtifactDir        string            `json:"artifact_dir"`
 	StateTraceArtifact string            `json:"state_trace_artifact"`
+	PrimitiveID        string            `json:"primitive_id,omitempty"`
 	TimingProfileID    string            `json:"timing_profile_id,omitempty"`
 	Confirmed          bool              `json:"confirmed"`
 	Signature          MismatchSignature `json:"signature"`
@@ -54,6 +56,7 @@ type PairResult struct {
 	PairID              string                `json:"pair_id"`
 	CaseName            string                `json:"case_name"`
 	FaultPlanID         string                `json:"fault_plan_id,omitempty"`
+	PrimitiveID         string                `json:"primitive_id,omitempty"`
 	TimingProfileID     string                `json:"timing_profile_id,omitempty"`
 	Environment         string                `json:"environment"`
 	ContainerImage      string                `json:"container_image,omitempty"`
@@ -101,6 +104,7 @@ func RunPair(ctx context.Context, opts PairOptions) (*PairResult, error) {
 		EnvKind:         opts.EnvKind,
 		ContainerImage:  opts.ContainerImage,
 		FaultPlanID:     opts.FaultPlanID,
+		PrimitiveID:     opts.PrimitiveID,
 		TimingProfileID: opts.TimingProfileID,
 	}
 	controlOpts := base
@@ -142,6 +146,7 @@ func buildPairResult(pairID string, pairDir string, control *RunResult, fault *R
 		PairID:          pairID,
 		CaseName:        fault.CaseName,
 		FaultPlanID:     fault.FaultPlanID,
+		PrimitiveID:     fault.PrimitiveID,
 		TimingProfileID: fault.TimingProfileID,
 		Environment:     fault.Environment,
 		ContainerImage:  fault.ContainerImage,
@@ -164,6 +169,7 @@ func pairRunSummary(result *RunResult) PairRunSummary {
 		RunRole:            result.RunRole,
 		ArtifactDir:        result.ArtifactDir,
 		StateTraceArtifact: filepath.Join(result.ArtifactDir, stateTraceArtifact),
+		PrimitiveID:        result.PrimitiveID,
 		TimingProfileID:    result.TimingProfileID,
 		Confirmed:          result.Confirmed,
 		Signature:          result.Signature,

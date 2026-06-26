@@ -17,6 +17,7 @@ type runContext struct {
 	environment    string
 	containerName  string
 	containerImage string
+	primitiveID    string
 	faultPlan      FaultPlan
 	timing         FaultTiming
 	turnID         string
@@ -62,6 +63,7 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		"delay":          run.timing.RecoveryDelay,
 		"run_role":       run.runRole,
 		"timing_profile": run.timing.ProfileID,
+		"primitive_id":   run.primitiveID,
 	})); err != nil {
 		return nil, err
 	}
@@ -81,19 +83,23 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		return nil, err
 	}
 
-	// This is the state primitive: the parent shell exits before the child
-	// writes late-effect. A real agent might checkpoint/cancel/replay here.
 	childDelay, err := run.timing.orphanChildDelayDuration()
 	if err != nil {
 		return nil, err
 	}
 	childSleep := shellSleepDuration(childDelay)
-	command := "nohup sh -c 'sleep " + childSleep + "; touch late-effect' >/dev/null 2>&1 &"
+	primitiveID := orphanProcessPrimitiveID(opts)
+	command, primitiveDescription := orphanProcessCommand(primitiveID, childSleep, isControlRun(opts))
+	if command == "" {
+		return nil, fmt.Errorf("unsupported orphan-process primitive %q", primitiveID)
+	}
 	if isControlRun(opts) {
-		command = "sh -c 'sleep " + childSleep + "; touch late-effect; rm late-effect'"
+		primitiveDescription += " (control cleanup path)"
 	}
 	if err := run.trace.Write(newEvent(run, "P1", "tool_intent", map[string]any{
-		"command": command,
+		"command":      command,
+		"primitive_id": primitiveID,
+		"primitive":    primitiveDescription,
 	})); err != nil {
 		return nil, err
 	}
@@ -195,6 +201,7 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 		Environment:     run.environment,
 		ContainerImage:  run.containerImage,
 		FaultPlanID:     run.faultPlan.ID,
+		PrimitiveID:     run.primitiveID,
 		TimingProfileID: run.timing.ProfileID,
 		Confirmed:       confirmed,
 		Signature:       signature,
@@ -205,9 +212,10 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	}
 
 	if err := run.trace.Write(newEvent(run, "oracle", "result", map[string]any{
-		"confirmed": confirmed,
-		"signature": signature.String(),
-		"evidence":  evidence,
+		"confirmed":    confirmed,
+		"signature":    signature.String(),
+		"evidence":     evidence,
+		"primitive_id": run.primitiveID,
 	})); err != nil {
 		return nil, err
 	}
@@ -216,6 +224,29 @@ func runOrphanProcess(ctx context.Context, opts RunOptions) (*RunResult, error) 
 	}
 
 	return result, nil
+}
+
+func orphanProcessPrimitiveID(opts RunOptions) string {
+	switch opts.PrimitiveID {
+	case "", "delayed-write":
+		return "delayed-write"
+	default:
+		return opts.PrimitiveID
+	}
+}
+
+func orphanProcessCommand(primitiveID string, childSleep string, control bool) (string, string) {
+	if control {
+		return "sh -c 'sleep " + childSleep + "; touch late-effect; rm late-effect'", "wait for delayed write then remove it before the lifecycle boundary"
+	}
+	switch primitiveID {
+	case "background-process", "delayed-write":
+		return "nohup sh -c 'sleep " + childSleep + "; touch late-effect' >/dev/null 2>&1 &", "background child writes late-effect after command return"
+	case "double-fork-daemon":
+		return "setsid sh -c 'sleep " + childSleep + "; touch late-effect; sleep 5' >/dev/null 2>&1 &", "daemonized child writes late-effect and remains alive after recovery"
+	default:
+		return "", ""
+	}
 }
 
 func recordFaultPlan(run *runContext) error {
@@ -228,6 +259,7 @@ func recordFaultPlan(run *runContext) error {
 	return run.trace.Write(newEvent(run, "P0", "fault_plan_selected", map[string]any{
 		"artifact":        faultPlanArtifact,
 		"fault_plan_id":   run.faultPlan.ID,
+		"primitive_id":    run.primitiveID,
 		"run_role":        run.runRole,
 		"timing_profile":  run.timing.ProfileID,
 		"inject_phase":    run.faultPlan.InjectPhase,
