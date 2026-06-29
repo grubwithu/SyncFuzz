@@ -1,3 +1,5 @@
+DO NOT send optional commentary
+
 # Repository Guidelines
 
 ## Project Structure

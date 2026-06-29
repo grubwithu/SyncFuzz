@@ -56,6 +56,10 @@ go run ./cmd/syncfuzz suite --out runs --corpus corpus --repeat 1 --differential
 go run ./cmd/syncfuzz suite --matrix --cases action-replay --timing baseline,tight --out runs --corpus corpus
 go run ./cmd/syncfuzz suite --matrix --feedback-from runs/suite-<id>/matrix-result.json --candidate-limit 3 --out runs --corpus corpus
 go run ./cmd/syncfuzz campaign --rounds 2 --candidate-limit 3 --cases action-replay --timing baseline,tight --out runs --corpus corpus
+go run ./cmd/syncfuzz target list
+go run ./cmd/syncfuzz target run --command-file examples/target-commands/orphan-process.sh --expect-files late-effect --observe-delay 500ms --out runs
+LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --command-file examples/target-commands/langgraph-shell-react.sh --expect-files late-effect --observe-delay 500ms --out runs
+LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --task orphan-process-long-delay --command-file examples/target-commands/langgraph-shell-react.sh --observe-delay 500ms --late-observe-delay 7s --out runs
 go run ./cmd/syncfuzz corpus list --corpus corpus
 go run ./cmd/syncfuzz corpus show --corpus corpus --id <entry_id>
 go run ./cmd/syncfuzz corpus verify --corpus corpus --out runs
@@ -74,6 +78,13 @@ make run-diff-suite
 make run-matrix-suite CASES=action-replay TIMING=baseline,tight
 make run-matrix-suite FEEDBACK_FROM=runs/suite-<id>/matrix-result.json CANDIDATE_LIMIT=3
 make run-campaign ROUNDS=2 CANDIDATE_LIMIT=3 CASES=action-replay TIMING=baseline,tight
+make target-list
+make target-run TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh EXPECT_FILES=late-effect
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini OPENAI_BASE_URL=https://api.example.com/v1
+make target-langgraph-shell-react TARGET_TASK=orphan-process-long-delay
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini LANGGRAPH_REPLAY=true LANGGRAPH_CHECKPOINT_INDEX=0
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=persistent-shell-poisoning TARGET_PROMPT_FILE=targets/langgraph_shell_react/prompts/persistent-shell-poisoning.txt EXPECT_FILES=shell-poison-check.txt
 make corpus-list
 make corpus-verify
 make corpus-show ENTRY_ID=<entry_id_or_unique_prefix>
@@ -197,6 +208,44 @@ runs/campaign-<id>/
 ```
 
 `--candidate-limit` applies as a per-round budget. The first round explores the current deterministic matrix unless a seed `--feedback-from` is provided. Later rounds feed the prior round's `matrix-result.json` into feedback-ranked selection, skip already executed candidates while unexplored candidates remain, and record `unique_candidates` / `repeated_candidates` in `campaign-result.json`.
+
+Phase 5 target runs add the first real-runtime bridge:
+
+```text
+runs/<run_id>/
+  target-task.json
+  target-prompt.txt
+  target-output.txt
+  target-result.json
+  snapshot-late.json                  # optional when late observation is enabled
+  process-late.json                   # optional when late observation is enabled
+  filesystem-late-metadata.json       # optional when late observation is enabled
+  manifest.json
+  agent-state.json
+  state-trace.json
+  snapshot-before.json
+  snapshot-after.json
+  process-before.json
+  process-after-command.json
+  process-after.json
+  process-lineage.json
+  filesystem-metadata.json
+  workspace/
+```
+
+`syncfuzz target run` currently supports the implemented `command` adapter. It runs any local or container-visible agent command inside the SyncFuzz workspace, writes `target-prompt.txt` and `target-task.json` into that workspace, exports `SYNCFUZZ_PROMPT`, `SYNCFUZZ_PROMPT_FILE`, `SYNCFUZZ_TASK_FILE`, `SYNCFUZZ_RUN_ID`, `SYNCFUZZ_TARGET_ID`, `SYNCFUZZ_REPO_ROOT`, and `SYNCFUZZ_WORKSPACE`, captures combined stdout/stderr, waits for `--observe-delay`, optionally waits for `--late-observe-delay`, and checks optional `--expect-files`. `target-result.json` embeds the process lineage summary and a task-specific `target_oracle`, so real-target runs can be triaged directly for boundary processes and delayed effects. `--command-file` is the most reliable way to pass quoted or multi-line commands. This is observation-only: it does not yet provide framework-native checkpoint/replay/cancel hooks, but it gives real Agent CLIs the same filesystem/process artifact contract as known-answer seeds.
+
+For `orphan-process-long-delay`, the target oracle requires the command to return successfully, a workspace-related process to appear at the command boundary, that process to remain through immediate observation, and, when late observation is enabled, `late-effect` to appear during the late snapshot window.
+
+The first repository-owned real target is `targets/langgraph_shell_react/`. It intentionally stays close to the official LangChain and LangGraph path:
+
+- `create_agent(...)`
+- `ShellToolMiddleware(...)`
+- LangGraph thread state and checkpointer
+
+It writes `langgraph-history.json` and `langgraph-run-summary.json` into the SyncFuzz workspace so the run can be inspected and replay/fork behavior can be correlated with the normal SyncFuzz filesystem and process artifacts.
+For shell tasks, the wrapper requires observed shell tool use and records `validation_error` if the model returns a text-only answer without executing ShellToolMiddleware.
+If replay or fork is requested, it also writes `langgraph-replay-summary.json` and `langgraph-fork-summary.json`.
 
 When `--corpus corpus` is enabled, suite discoveries are registered as compact corpus entries:
 

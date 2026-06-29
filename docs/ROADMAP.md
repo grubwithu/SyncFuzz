@@ -160,6 +160,8 @@ Phase 4 之后：
 
 目标：从最小 harness 迁移到真实 Agent runtime。
 
+状态：已启动。第一版先实现通用 `command` target adapter，用 observation-only 的方式把任意本地或容器内可见的真实 Agent CLI 放进 SyncFuzz workspace 运行，并复用 Phase 2 的 filesystem/process/state-trace artifact contract。它已经可以把 `target-prompt.txt` 和 `target-task.json` 直接写进 workspace、传递 prompt/task file path、捕获 stdout/stderr、通过 `--observe-delay` 等待 immediate observation、通过 `--late-observe-delay` 捕获 delayed effect、检查 expected files、写出 `target-result.json`，为 LangGraph、AutoGen、OpenHands 的专用 lifecycle adapter 打底。
+
 顺序：
 
 1. LangGraph + persistent shell；
@@ -175,6 +177,24 @@ Phase 4 之后：
 - fork/discard；
 - lifecycle events；
 - workspace/sandbox binding。
+
+已实现：
+
+- `syncfuzz target list`：列出真实 target adapter，当前 `command` 已可用，LangGraph / AutoGen / OpenHands 为 planned；
+- `syncfuzz target run --command ...` / `--command-file ...`：在 SyncFuzz workspace 中运行真实 target 命令；
+- target task 环境变量：`SYNCFUZZ_PROMPT`、`SYNCFUZZ_PROMPT_FILE`、`SYNCFUZZ_TASK_FILE`、`SYNCFUZZ_REPO_ROOT`、`SYNCFUZZ_WORKSPACE`、`SYNCFUZZ_RUN_ID`、`SYNCFUZZ_TARGET_ID`；
+- target artifacts：`target-task.json`、`target-prompt.txt`、`target-output.txt`、`target-result.json`；
+- target observation：运行前后 filesystem snapshot、process snapshot、process lineage、filesystem metadata、`agent-state.json`、`state-trace.json`；
+- `--observe-delay` / `--late-observe-delay` / `--expect-files`：对真实 delayed-effect target run 做最小可自动判定的 target oracle。
+- 首个真实对象：`targets/langgraph_shell_react/`，使用官方 `create_agent(...) + ShellToolMiddleware(...)`，并导出 `langgraph-history.json`、`langgraph-run-summary.json`，以及按需导出的 replay/fork summary artifact。
+- `orphan-process-long-delay`：为真实 Agent 增加更强的长延迟后台进程任务，不要求 `late-effect` 立即出现，并把 process lineage summary、late observation summary 和 task-specific `target_oracle` 摘入 `target-result.json`，用于直接判断 target command boundary 后是否仍有 workspace 相关进程，以及 delayed effect 是否在晚期观测窗口内出现。
+
+下一步：
+
+- 增加 LangGraph adapter wrapper，把 checkpoint/replay/cancel/resume 映射成 SyncFuzz lifecycle events；
+- 把 `targets/langgraph_shell_react/` 从 in-process memory checkpointer 提升到 durable checkpointer；
+- 为 AutoGen command executor 增加真实 shell tool 包装；
+- 把 target run 接入 suite/campaign，使真实 runtime 能消费 Phase 4 matrix candidate。
 
 完成标准：
 

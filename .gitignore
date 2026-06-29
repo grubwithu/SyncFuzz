@@ -2,12 +2,25 @@ runs/
 corpus/
 tmp/
 *.log
+.venv/
+venv/
+.env
+.env.*
+!.env.example
 
 # Go
 bin/
 coverage.out
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Node / TypeScript
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Target-local environments
+targets/*/venv/
+targets/*/.venv/

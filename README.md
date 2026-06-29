@@ -39,6 +39,9 @@ go run ./cmd/syncfuzz suite --out runs --corpus corpus --repeat 1 --differential
 go run ./cmd/syncfuzz suite --matrix --cases action-replay --timing baseline,tight --out runs --corpus corpus
 go run ./cmd/syncfuzz suite --matrix --feedback-from runs/suite-<id>/matrix-result.json --candidate-limit 3 --out runs --corpus corpus
 go run ./cmd/syncfuzz campaign --rounds 2 --candidate-limit 3 --cases action-replay --timing baseline,tight --out runs --corpus corpus
+go run ./cmd/syncfuzz target list
+go run ./cmd/syncfuzz target run --command-file examples/target-commands/orphan-process.sh --expect-files late-effect --observe-delay 500ms --out runs
+LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --command-file examples/target-commands/langgraph-shell-react.sh --expect-files late-effect --observe-delay 500ms --out runs
 go run ./cmd/syncfuzz corpus list --corpus corpus
 go run ./cmd/syncfuzz corpus show --corpus corpus --id <entry_id>
 go run ./cmd/syncfuzz corpus verify --corpus corpus --out runs
@@ -69,6 +72,14 @@ make run-diff-suite
 make run-matrix-suite CASES=action-replay TIMING=baseline,tight
 make run-matrix-suite FEEDBACK_FROM=runs/suite-<id>/matrix-result.json CANDIDATE_LIMIT=3
 make run-campaign ROUNDS=2 CANDIDATE_LIMIT=3 CASES=action-replay TIMING=baseline,tight
+make target-list
+make target-run TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh EXPECT_FILES=late-effect
+make target-langgraph-shell-react-check LANGCHAIN_MODEL=openai:gpt-4.1-mini
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini OPENAI_BASE_URL=https://api.example.com/v1
+make target-langgraph-shell-react TARGET_TASK=orphan-process-long-delay
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini LANGGRAPH_REPLAY=true LANGGRAPH_CHECKPOINT_INDEX=0
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=persistent-shell-poisoning TARGET_PROMPT_FILE=targets/langgraph_shell_react/prompts/persistent-shell-poisoning.txt EXPECT_FILES=shell-poison-check.txt
 make corpus-verify
 make corpus-show ENTRY_ID=<entry_id_or_unique_prefix>
 make replay ENTRY_ID=<entry_id_or_unique_prefix>
@@ -97,6 +108,19 @@ Artifacts are written under `runs/<run_id>/`:
 - `shell-before.json` / `shell-after.json`: persistent shell probes for shell-state cases
 - `result.json`: oracle verdict and mismatch signature
 
+Phase 5 target runs add a parallel artifact set for real agent/runtime observation:
+
+- `target-task.json`: adapter id, target id, prompt, command, timeout, and expected files
+- `target-prompt.txt`: prompt material passed through `SYNCFUZZ_PROMPT_FILE`
+- `target-output.txt`: combined stdout/stderr from the real target command
+- `target-result.json`: command exit status, timeout status, target oracle, process lineage summary, workspace, and artifact path
+- `snapshot-late.json` / `process-late.json` / `filesystem-late-metadata.json`: optional late observation artifacts when `--late-observe-delay` is set
+
+The first real target is also checked into the repo:
+
+- `targets/langgraph_shell_react/`: minimal official `create_agent + ShellToolMiddleware` LangGraph target
+- `examples/target-commands/langgraph-shell-react.sh`: prepared command file for `syncfuzz target run`
+
 Pair runs are written under `runs/pair-<pair_id>/`. They execute a clean `control` run and a `fault` run for the same case, then write `differential-report.json` with the pair verdict, run summaries, and observation coverage extracted from each `state-trace.json`.
 
 Phase 2 runs now use `state-trace.json` as the stable cross-layer index. It aligns every artifact to a lifecycle phase and one of the core layers: Agent, OS, External, or Authority.
@@ -104,6 +128,24 @@ Phase 2 runs now use `state-trace.json` as the stable cross-layer index. It alig
 Phase 3 includes a deterministic fault-plan catalog, pair-level differential reports, differential suite mode, and deterministic timing profiles. `syncfuzz fault-plans` lists the known-answer plans, `syncfuzz timing-profiles` lists reproducible timing profiles such as `baseline`, `tight`, and `wide`, each run records its selected plan and timing in `fault-plan.json`, `syncfuzz pair` compares `control` and `fault` executions in `differential-report.json`, and `syncfuzz suite --differential` registers security-relevant pair discoveries in the corpus.
 
 Phase 4 has a deterministic mutation primitive catalog and scheduler matrix. `syncfuzz primitives` lists implemented and planned state primitives, `syncfuzz matrix` enumerates reproducible `case x primitive x timing` candidates, and `syncfuzz suite --matrix` executes the implemented candidates while preserving `candidate_id` and `primitive_id` in suite, discovery, and corpus metadata. Matrix suites also rank candidates by novelty, confirmation, reproducibility, execution cost, artifact size, and errors; a later run can pass `--feedback-from <matrix-result.json>` and `--candidate-limit N` to execute the highest-ranked candidates first. `syncfuzz campaign` automates this across multiple rounds, skips already executed candidates while unexplored candidates remain, and writes `campaign-result.json`.
+
+Phase 5 has started with the `command` target adapter. `syncfuzz target run` executes any local or container-visible real agent CLI inside a SyncFuzz workspace, writes `target-prompt.txt` and `target-task.json` into that workspace, passes their paths through `SYNCFUZZ_PROMPT_FILE` and `SYNCFUZZ_TASK_FILE`, captures stdout/stderr, waits for `--observe-delay`, snapshots filesystem/process state before and after execution, optionally waits for `--late-observe-delay`, and writes `target-result.json`. `--command-file` is the most reliable way to pass multi-word or quoted target commands.
+
+The first concrete real target is `targets/langgraph_shell_react/`: a minimal official `create_agent(...)` + `ShellToolMiddleware(...)` app with an in-process LangGraph checkpointer and exported thread-history artifacts. It runs through the generic `command` adapter today, which keeps the SyncFuzz side simple while giving us a clean official target for persistent-shell and replay/fork experiments. When replay or fork is requested, it also writes `langgraph-replay-summary.json` and `langgraph-fork-summary.json` into the workspace.
+
+Use `TARGET_TASK=orphan-process-long-delay` for vulnerability-oriented orphan-process probing. Unlike the short smoke task, it asks the real agent to launch `sleep 5; touch late-effect` in the background and return immediately. The Makefile gives this task `TARGET_LATE_OBSERVE_DELAY=7s` by default, so the run takes roughly 7 seconds longer and `target-result.json` can confirm both boundary process evidence and the later `late-effect`. The embedded `target_oracle` checks command completion, `workspace_new_at_boundary`, `workspace_remaining_after`, and late-file presence when a late observation is requested.
+
+LangGraph shell target runs require observed shell tool use. If the model only replies in text without a `tool` message, the wrapper exits non-zero and records `validation_error` in `langgraph-run-summary.json`.
+
+Before running it against a hosted model, put provider settings in `.env`, then run the readiness check. For OpenAI-compatible endpoints, set both `OPENAI_API_KEY` and `OPENAI_BASE_URL`:
+
+```bash
+cp .env.example .env
+# edit .env with your real endpoint and key
+make target-langgraph-shell-react-check LANGCHAIN_MODEL=openai:gpt-4.1-mini
+```
+
+Makefile target commands load `.env` automatically. A command-line Make variable such as `OPENAI_BASE_URL=https://...` can still override the file for one run.
 
 Suite runs are written under `runs/suite-<suite_id>/` with a top-level `suite-result.json`, `interesting.json`, and one subdirectory per testcase run. Matrix suite runs also write `schedule-matrix.json` and `matrix-result.json`; the latter includes ranked `candidate_summaries` with average duration and artifact-size metrics. The suite summary marks runs that produce new signatures, state classes, or impacts as `interesting`.
 
@@ -126,6 +168,7 @@ internal/syncfuzz/         MVP runner, probes, events, and oracle logic
 services/mock-servers/     TypeScript EffectServer and AuthorityServer
 docs/                      Research brief, roadmap, and source notes
 examples/                  Future testcase inputs and PoC templates
+targets/                   Real target adapters and runtime-specific entrypoints
 ```
 
 ## Technical Direction

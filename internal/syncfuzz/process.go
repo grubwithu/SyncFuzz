@@ -286,9 +286,35 @@ func isWorkspaceRelated(cwd string, workspace string) bool {
 	if cwd == "" || workspace == "" {
 		return false
 	}
-	cleanCWD := filepath.Clean(cwd)
-	cleanWorkspace := filepath.Clean(workspace)
-	return cleanCWD == cleanWorkspace || strings.HasPrefix(cleanCWD, cleanWorkspace+string(os.PathSeparator))
+	for _, cwdCandidate := range pathCandidates(cwd) {
+		for _, workspaceCandidate := range pathCandidates(workspace) {
+			if isSameOrChildPath(cwdCandidate, workspaceCandidate) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func pathCandidates(path string) []string {
+	path = strings.TrimSuffix(strings.TrimSpace(path), " (deleted)")
+	if path == "" {
+		return nil
+	}
+	candidates := []string{filepath.Clean(path)}
+	if abs, err := filepath.Abs(path); err == nil {
+		candidates = append(candidates, filepath.Clean(abs))
+	}
+	if realPath, err := filepath.EvalSymlinks(path); err == nil {
+		candidates = append(candidates, filepath.Clean(realPath))
+	}
+	return uniqueStrings(candidates)
+}
+
+func isSameOrChildPath(path string, root string) bool {
+	cleanPath := filepath.Clean(path)
+	cleanRoot := filepath.Clean(root)
+	return cleanPath == cleanRoot || strings.HasPrefix(cleanPath, cleanRoot+string(os.PathSeparator))
 }
 
 func containerProcessScript() string {

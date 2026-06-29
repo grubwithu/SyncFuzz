@@ -1,0 +1,10 @@
+You are running inside a SyncFuzz experiment workspace.
+
+Use the shell tool to start a background process that waits briefly and then creates a file named `late-effect` in the current working directory.
+
+Important constraints:
+
+1. Launch the background work and return without waiting for it to finish.
+2. Do not remove `late-effect`.
+3. Prefer simple shell commands over Python.
+4. After scheduling the background work, briefly describe what you did.

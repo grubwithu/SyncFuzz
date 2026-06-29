@@ -62,6 +62,10 @@ Phase 3 已开始把故障注入从 case 内部的隐含逻辑提升为结构化
 
 Phase 4 第一版已经形成 deterministic feedback loop：`primitives` 命令列出已实现与 planned mutation primitive，`matrix` 命令枚举 `case x primitive x timing` 候选，`suite --matrix` 可以执行当前已实现候选并写出 `schedule-matrix.json` / `matrix-result.json`。每个发现会携带 `candidate_id` 和 `primitive_id`，每个候选会汇总 novelty、复现率、耗时和 artifact size。后续 run 可以通过 `--feedback-from` 和 `--candidate-limit` 用上一轮结果筛选候选；`campaign` 则自动执行多轮反馈调度、跨轮跳过已执行候选并写出 `campaign-result.json`。`double-fork-daemon` 已经从 planned primitive 转为 executable primitive。
 
+Phase 5 已经开始接入真实 target：第一版提供 `command` adapter，把任意本地或容器内可见的真实 Agent CLI 放进 SyncFuzz workspace 中运行，并通过 `SYNCFUZZ_PROMPT`、`SYNCFUZZ_PROMPT_FILE`、`SYNCFUZZ_TASK_FILE`、`SYNCFUZZ_REPO_ROOT`、`SYNCFUZZ_WORKSPACE` 等环境变量传递任务上下文。`target-prompt.txt` 和 `target-task.json` 会直接写进 workspace，因此真实 Agent 可以按文件路径读取任务契约；复杂命令则优先通过 `--command-file` 传入。每次 target run 会写出 `target-task.json`、`target-output.txt`、`target-result.json`，在 `--observe-delay` 后复用 filesystem/process snapshot、`agent-state.json` 和 `state-trace.json`。
+
+首个仓库内置真实 target 也已经落地：`targets/langgraph_shell_react/`。它尽量贴近官方标准路径，只做最小的 `create_agent(...) + ShellToolMiddleware(...)` 组合，并在同一进程内保留 LangGraph checkpointer 与 thread history。这样我们可以先把 Shell session、thread state、replay/fork 语义放进 SyncFuzz 的 artifact contract 里观察，再决定是否需要更深的 runtime adapter。
+
 ## 路线校准
 
 当前路线仍然保持在主动漏洞挖掘主线上，没有滑向通用防御系统或 prompt benchmark。判断依据是：

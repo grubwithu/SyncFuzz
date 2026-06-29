@@ -70,6 +70,27 @@ func TestParseContainerProcessLinesFiltersProbeProcess(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRelatedResolvesSymlinkedWorkspace(t *testing.T) {
+	tmp := t.TempDir()
+	realRoot := filepath.Join(tmp, "real")
+	realWorkspace := filepath.Join(realRoot, "workspace")
+	if err := os.MkdirAll(realWorkspace, 0o755); err != nil {
+		t.Fatalf("create real workspace: %v", err)
+	}
+	linkRoot := filepath.Join(tmp, "link")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	symlinkWorkspace := filepath.Join(linkRoot, "workspace")
+
+	if !isWorkspaceRelated(realWorkspace, symlinkWorkspace) {
+		t.Fatalf("expected real cwd to match symlinked workspace")
+	}
+	if !isWorkspaceRelated(filepath.Join(realWorkspace, "subdir"), symlinkWorkspace) {
+		t.Fatalf("expected child cwd to match symlinked workspace")
+	}
+}
+
 func TestAnalyzeProcessLineage(t *testing.T) {
 	before := ProcessSnapshot{
 		Environment: "local",

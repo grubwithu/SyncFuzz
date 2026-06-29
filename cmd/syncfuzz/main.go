@@ -38,6 +38,8 @@ func main() {
 		suite(os.Args[2:])
 	case "campaign":
 		campaign(os.Args[2:])
+	case "target":
+		target(os.Args[2:])
 	case "corpus":
 		corpus(os.Args[2:])
 	case "replay":
@@ -72,6 +74,8 @@ Usage:
   syncfuzz suite [--out runs] [--repeat 1] [--corpus corpus] [--cases orphan-process,branch-leakage] [--timing baseline] [--differential] [--env local] [--container-image ubuntu:latest]
   syncfuzz suite --matrix [--out runs] [--repeat 1] [--corpus corpus] [--cases orphan-process] [--timing baseline,tight,wide] [--feedback-from matrix-result.json] [--candidate-limit 5] [--differential] [--env local] [--container-image ubuntu:latest]
   syncfuzz campaign [--rounds 2] [--candidate-limit 3] [--cases action-replay] [--timing baseline,tight,wide] [--feedback-from matrix-result.json] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target list
+  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz corpus list [--corpus corpus] [--limit 20]
   syncfuzz corpus show --id <entry_id> [--corpus corpus]
   syncfuzz corpus verify [--corpus corpus] [--out runs] [--limit 0] [--env local] [--container-image ubuntu:latest]
@@ -444,6 +448,113 @@ func campaign(args []string) {
 			round.MatrixResult,
 		)
 	}
+	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
+}
+
+func target(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list or run")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "list":
+		targetList()
+	case "run":
+		targetRun(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown target subcommand: %s\n", args[0])
+		os.Exit(2)
+	}
+}
+
+func targetList() {
+	fmt.Printf("%-14s %-7s %-48s %s\n", "adapter", "ready", "capabilities", "description")
+	for _, adapter := range syncfuzz.TargetAdapters() {
+		fmt.Printf("%-14s %-7t %-48s %s\n",
+			adapter.AdapterID,
+			adapter.Implemented,
+			strings.Join(adapter.Capabilities, ","),
+			adapter.Description,
+		)
+	}
+}
+
+func targetRun(args []string) {
+	fs := flag.NewFlagSet("target run", flag.ExitOnError)
+	adapterID := fs.String("adapter", "command", "target adapter id")
+	targetID := fs.String("target", "command", "human-readable target runtime id")
+	taskID := fs.String("task", "orphan-process", "target task id")
+	objective := fs.String("objective", "", "optional target objective")
+	prompt := fs.String("prompt", "", "inline prompt passed through SYNCFUZZ_PROMPT")
+	promptFile := fs.String("prompt-file", "", "optional prompt file")
+	command := fs.String("command", "", "target command to run inside the SyncFuzz workspace")
+	commandFile := fs.String("command-file", "", "optional file containing the target command")
+	expectFiles := fs.String("expect-files", "", "comma-separated files expected to exist after the target run")
+	outDir := fs.String("out", "runs", "directory for target run artifacts")
+	workspace := fs.String("workspace", "", "optional workspace; defaults to runs/<run_id>/workspace")
+	timeout := fs.Duration("timeout", 2*time.Minute, "target command timeout")
+	observeDelay := fs.Duration("observe-delay", 0, "delay after target command return before final observation; 0 uses the adapter default")
+	lateObserveDelay := fs.Duration("late-observe-delay", 0, "optional delay after immediate observation for delayed target effects")
+	envKind := fs.String("env", "local", "execution environment backend")
+	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	result, err := syncfuzz.RunTarget(context.Background(), syncfuzz.TargetRunOptions{
+		AdapterID:        *adapterID,
+		TargetID:         *targetID,
+		TaskID:           *taskID,
+		Objective:        *objective,
+		Prompt:           *prompt,
+		PromptFile:       *promptFile,
+		Command:          *command,
+		CommandFile:      *commandFile,
+		OutDir:           *outDir,
+		Workspace:        *workspace,
+		Timeout:          *timeout,
+		ObserveDelay:     *observeDelay,
+		LateObserveDelay: *lateObserveDelay,
+		EnvKind:          *envKind,
+		ContainerImage:   *containerImage,
+		ExpectedFiles:    splitCSV(*expectFiles),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target run failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("run_id: %s\n", result.RunID)
+	fmt.Printf("adapter: %s\n", result.AdapterID)
+	fmt.Printf("target: %s\n", result.TargetID)
+	fmt.Printf("task: %s\n", result.TaskID)
+	fmt.Printf("environment: %s\n", result.Environment)
+	printContainerImage(result.ContainerImage)
+	fmt.Printf("completed: %t\n", result.Completed)
+	fmt.Printf("expectations_met: %t\n", result.ExpectationsMet)
+	fmt.Printf("target_oracle: %s\n", result.TargetOracle.Name)
+	fmt.Printf("oracle_confirmed: %t\n", result.TargetOracle.Confirmed)
+	if len(result.ExpectedFilesPresent) > 0 {
+		fmt.Printf("expected_present: %s\n", strings.Join(result.ExpectedFilesPresent, ","))
+	}
+	if len(result.ExpectedFilesMissing) > 0 {
+		fmt.Printf("expected_missing: %s\n", strings.Join(result.ExpectedFilesMissing, ","))
+	}
+	if result.LateObserved {
+		fmt.Printf("late_observe_delay_ms: %d\n", result.LateObserveDelayMs)
+		if len(result.LateExpectedFilesPresent) > 0 {
+			fmt.Printf("late_expected_present: %s\n", strings.Join(result.LateExpectedFilesPresent, ","))
+		}
+		if len(result.LateExpectedFilesMissing) > 0 {
+			fmt.Printf("late_expected_missing: %s\n", strings.Join(result.LateExpectedFilesMissing, ","))
+		}
+	}
+	fmt.Printf("exit_code: %d\n", result.CommandResult.ExitCode)
+	fmt.Printf("timed_out: %t\n", result.CommandResult.TimedOut)
+	fmt.Printf("duration_ms: %d\n", result.CommandResult.DurationMs)
+	fmt.Printf("observe_delay_ms: %d\n", result.ObserveDelayMs)
+	fmt.Printf("output_bytes: %d\n", result.CommandResult.OutputBytes)
+	fmt.Printf("workspace: %s\n", result.Workspace)
 	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
 }
 
