@@ -117,3 +117,54 @@ func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 		t.Fatalf("expected persistent shell replay/fork tasks plus filesystem fork tasks in catalog: %#v", tasks)
 	}
 }
+
+func TestExpandTargetTasksIncludesGroupsAndDeduplicates(t *testing.T) {
+	tasks, groups, err := expandTargetTasks(
+		[]string{deleteResidueForkTargetTaskID, symlinkResidueForkTargetTaskID},
+		[]string{"workspace-residue", "workspace-residue"},
+	)
+	if err != nil {
+		t.Fatalf("expandTargetTasks failed: %v", err)
+	}
+	if len(groups) != 1 || groups[0] != "workspace-residue" {
+		t.Fatalf("unexpected normalized groups: %#v", groups)
+	}
+	expected := []string{
+		fileResidueForkTargetTaskID,
+		deleteResidueForkTargetTaskID,
+		symlinkResidueForkTargetTaskID,
+	}
+	if len(tasks) != len(expected) {
+		t.Fatalf("unexpected expanded task count: got %d want %d (%#v)", len(tasks), len(expected), tasks)
+	}
+	for i := range expected {
+		if tasks[i] != expected[i] {
+			t.Fatalf("unexpected expanded tasks: got %#v want %#v", tasks, expected)
+		}
+	}
+}
+
+func TestExpandTargetTasksRejectsUnknownGroup(t *testing.T) {
+	if _, _, err := expandTargetTasks(nil, []string{"missing-group"}); err == nil {
+		t.Fatalf("expected unknown target task group to fail")
+	}
+}
+
+func TestTargetSuiteAttributionStatsCountsAndSorts(t *testing.T) {
+	stats := make(map[string]*TargetSuiteAttributionStats)
+	recordTargetSuiteAttribution(stats, targetOracleAttributionRuntimeResidue, true)
+	recordTargetSuiteAttribution(stats, targetOracleAttributionRuntimeResidue, false)
+	recordTargetSuiteAttribution(stats, targetOracleAttributionCleanFork, false)
+	recordTargetSuiteAttribution(stats, "", true)
+
+	got := targetSuiteAttributionStats(stats)
+	if len(got) != 2 {
+		t.Fatalf("unexpected attribution summary length: %#v", got)
+	}
+	if got[0].Attribution != targetOracleAttributionCleanFork || got[0].TotalRuns != 1 || got[0].Confirmed != 0 || got[0].Unconfirmed != 1 {
+		t.Fatalf("unexpected clean-fork attribution summary: %#v", got[0])
+	}
+	if got[1].Attribution != targetOracleAttributionRuntimeResidue || got[1].TotalRuns != 2 || got[1].Confirmed != 1 || got[1].Unconfirmed != 1 {
+		t.Fatalf("unexpected runtime residue attribution summary: %#v", got[1])
+	}
+}

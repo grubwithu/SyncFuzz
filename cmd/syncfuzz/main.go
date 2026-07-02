@@ -76,8 +76,9 @@ Usage:
   syncfuzz campaign [--rounds 2] [--candidate-limit 3] [--cases action-replay] [--timing baseline,tight,wide] [--feedback-from matrix-result.json] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz target list
   syncfuzz target tasks
-  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
-  syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target groups
+  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,delete-residue-fork,symlink-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz corpus list [--corpus corpus] [--limit 20]
   syncfuzz corpus show --id <entry_id> [--corpus corpus]
   syncfuzz corpus verify [--corpus corpus] [--out runs] [--limit 0] [--env local] [--container-image ubuntu:latest]
@@ -455,7 +456,7 @@ func campaign(args []string) {
 
 func target(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, run, or suite")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, groups, run, or suite")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -463,6 +464,8 @@ func target(args []string) {
 		targetList()
 	case "tasks":
 		targetTasks()
+	case "groups":
+		targetGroups()
 	case "run":
 		targetRun(args[1:])
 	case "suite":
@@ -493,6 +496,17 @@ func targetTasks() {
 			task.UsesLateObservation,
 			strings.Join(task.DefaultExpectedFiles, ","),
 			task.Description,
+		)
+	}
+}
+
+func targetGroups() {
+	fmt.Printf("%-22s %-60s %s\n", "group", "tasks", "description")
+	for _, group := range syncfuzz.TargetTaskGroups() {
+		fmt.Printf("%-22s %-60s %s\n",
+			group.GroupID,
+			strings.Join(group.Tasks, ","),
+			group.Description,
 		)
 	}
 }
@@ -585,6 +599,8 @@ func targetSuite(args []string) {
 	targetID := fs.String("target", "command", "human-readable target runtime id")
 	taskID := fs.String("task", "orphan-process", "single target task id")
 	taskList := fs.String("tasks", "", "comma-separated target task ids; overrides --task when set")
+	taskGroup := fs.String("group", "", "single built-in target task group to expand into suite tasks")
+	taskGroups := fs.String("groups", "", "comma-separated built-in target task groups to expand before explicit tasks")
 	objective := fs.String("objective", "", "optional shared objective override")
 	prompt := fs.String("prompt", "", "inline prompt passed through SYNCFUZZ_PROMPT")
 	promptFile := fs.String("prompt-file", "", "optional shared prompt file")
@@ -603,8 +619,14 @@ func targetSuite(args []string) {
 		os.Exit(2)
 	}
 
+	groups := splitCSV(*taskGroups)
+	if *taskGroup != "" {
+		groups = append([]string{*taskGroup}, groups...)
+	}
 	tasks := splitCSV(*taskList)
-	if len(tasks) == 0 {
+	if len(tasks) == 0 && len(groups) == 0 {
+		tasks = []string{*taskID}
+	} else if len(tasks) == 0 && *taskID != "orphan-process" {
 		tasks = []string{*taskID}
 	}
 
@@ -612,6 +634,7 @@ func targetSuite(args []string) {
 		AdapterID:        *adapterID,
 		TargetID:         *targetID,
 		Tasks:            tasks,
+		TaskGroups:       groups,
 		Objective:        *objective,
 		Prompt:           *prompt,
 		PromptFile:       *promptFile,
@@ -639,10 +662,21 @@ func targetSuite(args []string) {
 	printContainerImage(result.ContainerImage)
 	fmt.Printf("repeat: %d\n", result.Repeat)
 	fmt.Printf("tasks: %s\n", strings.Join(result.Tasks, ","))
+	if len(result.TaskGroups) > 0 {
+		fmt.Printf("task_groups: %s\n", strings.Join(result.TaskGroups, ","))
+	}
 	fmt.Printf("total_runs: %d\n", result.TotalRuns)
 	fmt.Printf("confirmed: %d\n", result.Confirmed)
 	fmt.Printf("unconfirmed: %d\n", result.Unconfirmed)
 	fmt.Printf("errors: %d\n", result.Errors)
+	for _, stats := range result.AttributionSummaries {
+		fmt.Printf("attribution[%s]: total=%d confirmed=%d unconfirmed=%d\n",
+			stats.Attribution,
+			stats.TotalRuns,
+			stats.Confirmed,
+			stats.Unconfirmed,
+		)
+	}
 	fmt.Printf("corpus_entries: %d\n", len(result.CorpusEntries))
 	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
 }

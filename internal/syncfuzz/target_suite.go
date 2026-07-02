@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"sort"
 	"time"
 )
 
@@ -13,6 +13,7 @@ type TargetSuiteOptions struct {
 	AdapterID        string
 	TargetID         string
 	Tasks            []string
+	TaskGroups       []string
 	Objective        string
 	Prompt           string
 	PromptFile       string
@@ -47,35 +48,45 @@ type TargetSuiteRunResult struct {
 }
 
 type TargetSuiteTaskSummary struct {
-	TaskID      string `json:"task_id"`
+	TaskID               string                        `json:"task_id"`
+	TotalRuns            int                           `json:"total_runs"`
+	Confirmed            int                           `json:"confirmed"`
+	Unconfirmed          int                           `json:"unconfirmed"`
+	Errors               int                           `json:"errors"`
+	AttributionSummaries []TargetSuiteAttributionStats `json:"attribution_summaries,omitempty"`
+}
+
+type TargetSuiteAttributionStats struct {
+	Attribution string `json:"attribution"`
 	TotalRuns   int    `json:"total_runs"`
 	Confirmed   int    `json:"confirmed"`
 	Unconfirmed int    `json:"unconfirmed"`
-	Errors      int    `json:"errors"`
 }
 
 type TargetSuiteResult struct {
-	SchemaVersion      string                   `json:"schema_version"`
-	SuiteID            string                   `json:"suite_id"`
-	StartedAt          string                   `json:"started_at"`
-	FinishedAt         string                   `json:"finished_at"`
-	ArtifactDir        string                   `json:"artifact_dir"`
-	AdapterID          string                   `json:"adapter_id"`
-	TargetID           string                   `json:"target_id"`
-	Environment        string                   `json:"environment"`
-	ContainerImage     string                   `json:"container_image,omitempty"`
-	Repeat             int                      `json:"repeat"`
-	Tasks              []string                 `json:"tasks"`
-	TimeoutMillis      int64                    `json:"timeout_ms"`
-	ObserveDelayMs     int64                    `json:"observe_delay_ms"`
-	LateObserveDelayMs int64                    `json:"late_observe_delay_ms,omitempty"`
-	TotalRuns          int                      `json:"total_runs"`
-	Confirmed          int                      `json:"confirmed"`
-	Unconfirmed        int                      `json:"unconfirmed"`
-	Errors             int                      `json:"errors"`
-	TaskSummaries      []TargetSuiteTaskSummary `json:"task_summaries"`
-	Results            []TargetSuiteRunResult   `json:"results"`
-	CorpusEntries      []CorpusEntry            `json:"corpus_entries,omitempty"`
+	SchemaVersion        string                        `json:"schema_version"`
+	SuiteID              string                        `json:"suite_id"`
+	StartedAt            string                        `json:"started_at"`
+	FinishedAt           string                        `json:"finished_at"`
+	ArtifactDir          string                        `json:"artifact_dir"`
+	AdapterID            string                        `json:"adapter_id"`
+	TargetID             string                        `json:"target_id"`
+	Environment          string                        `json:"environment"`
+	ContainerImage       string                        `json:"container_image,omitempty"`
+	Repeat               int                           `json:"repeat"`
+	Tasks                []string                      `json:"tasks"`
+	TaskGroups           []string                      `json:"task_groups,omitempty"`
+	TimeoutMillis        int64                         `json:"timeout_ms"`
+	ObserveDelayMs       int64                         `json:"observe_delay_ms"`
+	LateObserveDelayMs   int64                         `json:"late_observe_delay_ms,omitempty"`
+	TotalRuns            int                           `json:"total_runs"`
+	Confirmed            int                           `json:"confirmed"`
+	Unconfirmed          int                           `json:"unconfirmed"`
+	Errors               int                           `json:"errors"`
+	AttributionSummaries []TargetSuiteAttributionStats `json:"attribution_summaries,omitempty"`
+	TaskSummaries        []TargetSuiteTaskSummary      `json:"task_summaries"`
+	Results              []TargetSuiteRunResult        `json:"results"`
+	CorpusEntries        []CorpusEntry                 `json:"corpus_entries,omitempty"`
 }
 
 const targetSuiteResultArtifact = "target-suite-result.json"
@@ -100,7 +111,10 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 		return nil, err
 	}
 
-	tasks := normalizeTargetTasks(opts.Tasks)
+	tasks, taskGroups, err := expandTargetTasks(opts.Tasks, opts.TaskGroups)
+	if err != nil {
+		return nil, err
+	}
 	started := time.Now().UTC()
 	suiteID := fmt.Sprintf("target-suite-%d", started.UnixNano())
 	suiteDir := filepath.Join(opts.OutDir, suiteID)
@@ -119,6 +133,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 		ContainerImage:     containerImageForResult(opts.EnvKind, opts.ContainerImage),
 		Repeat:             opts.Repeat,
 		Tasks:              append([]string{}, tasks...),
+		TaskGroups:         append([]string{}, taskGroups...),
 		TimeoutMillis:      opts.Timeout.Milliseconds(),
 		ObserveDelayMs:     opts.ObserveDelay.Milliseconds(),
 		LateObserveDelayMs: opts.LateObserveDelay.Milliseconds(),
@@ -126,8 +141,11 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	}
 
 	summaries := make(map[string]*TargetSuiteTaskSummary, len(tasks))
+	attributionSummary := make(map[string]*TargetSuiteAttributionStats)
+	taskAttributions := make(map[string]map[string]*TargetSuiteAttributionStats, len(tasks))
 	for _, taskID := range tasks {
 		summaries[taskID] = &TargetSuiteTaskSummary{TaskID: taskID}
+		taskAttributions[taskID] = make(map[string]*TargetSuiteAttributionStats)
 	}
 
 	for iteration := 1; iteration <= opts.Repeat; iteration++ {
@@ -188,6 +206,8 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 				result.Unconfirmed++
 				summaries[taskID].Unconfirmed++
 			}
+			recordTargetSuiteAttribution(attributionSummary, item.TargetOracle.Attribution, item.Confirmed)
+			recordTargetSuiteAttribution(taskAttributions[taskID], item.TargetOracle.Attribution, item.Confirmed)
 			result.Results = append(result.Results, item)
 		}
 	}
@@ -195,8 +215,10 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	result.TotalRuns = len(result.Results)
 	result.TaskSummaries = make([]TargetSuiteTaskSummary, 0, len(tasks))
 	for _, taskID := range tasks {
+		summaries[taskID].AttributionSummaries = targetSuiteAttributionStats(taskAttributions[taskID])
 		result.TaskSummaries = append(result.TaskSummaries, *summaries[taskID])
 	}
+	result.AttributionSummaries = targetSuiteAttributionStats(attributionSummary)
 	result.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	corpusEntries, err := WriteTargetCorpus(opts.CorpusDir, result)
 	if err != nil {
@@ -223,22 +245,35 @@ func finalizeTargetSuiteItemMetrics(item *TargetSuiteRunResult, started time.Tim
 	item.ArtifactFiles = metrics.Files
 }
 
-func normalizeTargetTasks(tasks []string) []string {
-	var normalized []string
-	seen := make(map[string]struct{})
-	for _, taskID := range tasks {
-		taskID = strings.TrimSpace(taskID)
-		if taskID == "" {
-			continue
-		}
-		if _, ok := seen[taskID]; ok {
-			continue
-		}
-		seen[taskID] = struct{}{}
-		normalized = append(normalized, taskID)
+func recordTargetSuiteAttribution(stats map[string]*TargetSuiteAttributionStats, attribution string, confirmed bool) {
+	if attribution == "" {
+		return
 	}
-	if len(normalized) == 0 {
-		return []string{defaultTargetTaskID}
+	item, ok := stats[attribution]
+	if !ok {
+		item = &TargetSuiteAttributionStats{Attribution: attribution}
+		stats[attribution] = item
 	}
-	return normalized
+	item.TotalRuns++
+	if confirmed {
+		item.Confirmed++
+		return
+	}
+	item.Unconfirmed++
+}
+
+func targetSuiteAttributionStats(stats map[string]*TargetSuiteAttributionStats) []TargetSuiteAttributionStats {
+	if len(stats) == 0 {
+		return nil
+	}
+	attributions := make([]string, 0, len(stats))
+	for attribution := range stats {
+		attributions = append(attributions, attribution)
+	}
+	sort.Strings(attributions)
+	summary := make([]TargetSuiteAttributionStats, 0, len(attributions))
+	for _, attribution := range attributions {
+		summary = append(summary, *stats[attribution])
+	}
+	return summary
 }
