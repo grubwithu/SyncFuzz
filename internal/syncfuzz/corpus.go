@@ -11,6 +11,7 @@ import (
 )
 
 type CorpusEntry struct {
+	ExecutionKind      string            `json:"execution_kind,omitempty"`
 	EntryID            string            `json:"entry_id"`
 	SuiteID            string            `json:"suite_id"`
 	RunID              string            `json:"run_id"`
@@ -30,6 +31,9 @@ type CorpusEntry struct {
 	Differential       bool              `json:"differential,omitempty"`
 	SecurityRelevant   bool              `json:"security_relevant,omitempty"`
 	DifferentialReport string            `json:"differential_report,omitempty"`
+	AdapterID          string            `json:"adapter_id,omitempty"`
+	TargetID           string            `json:"target_id,omitempty"`
+	TaskID             string            `json:"task_id,omitempty"`
 	ArtifactDir        string            `json:"artifact_dir"`
 	RecordedAt         string            `json:"recorded_at"`
 }
@@ -57,6 +61,7 @@ func WriteCorpus(corpusDir string, suite *SuiteResult) ([]CorpusEntry, error) {
 	entries := make([]CorpusEntry, 0, len(suite.Discoveries))
 	for _, discovery := range suite.Discoveries {
 		entry := CorpusEntry{
+			ExecutionKind:      corpusExecutionCase,
 			EntryID:            corpusEntryID(discovery),
 			SuiteID:            suite.SuiteID,
 			RunID:              discovery.RunID,
@@ -78,6 +83,64 @@ func WriteCorpus(corpusDir string, suite *SuiteResult) ([]CorpusEntry, error) {
 			DifferentialReport: discovery.DifferentialReport,
 			ArtifactDir:        discovery.ArtifactDir,
 			RecordedAt:         recordedAt,
+		}
+		entries = append(entries, entry)
+
+		entryPath := filepath.Join(entriesDir, entry.EntryID+".json")
+		if err := writeJSON(entryPath, entry); err != nil {
+			return nil, err
+		}
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := index.Write(append(raw, '\n')); err != nil {
+			return nil, fmt.Errorf("append corpus index: %w", err)
+		}
+	}
+	return entries, nil
+}
+
+// WriteTargetCorpus registers confirmed real-target runs so they can be
+// replayed and verified with the same corpus tooling used by synthetic cases.
+func WriteTargetCorpus(corpusDir string, suite *TargetSuiteResult) ([]CorpusEntry, error) {
+	if corpusDir == "" || suite == nil || len(suite.Results) == 0 {
+		return nil, nil
+	}
+	entriesDir := filepath.Join(corpusDir, "entries")
+	if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create corpus entries directory: %w", err)
+	}
+
+	indexPath := filepath.Join(corpusDir, "index.jsonl")
+	index, err := os.OpenFile(indexPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open corpus index: %w", err)
+	}
+	defer index.Close()
+
+	recordedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	entries := make([]CorpusEntry, 0, suite.Confirmed)
+	for _, item := range suite.Results {
+		if !item.Confirmed || item.RunID == "" || item.ArtifactDir == "" {
+			continue
+		}
+		entry := CorpusEntry{
+			ExecutionKind: corpusExecutionTarget,
+			EntryID:       targetCorpusEntryID(suite.TargetID, item.TaskID, item.RunID),
+			SuiteID:       suite.SuiteID,
+			RunID:         item.RunID,
+			CaseName:      "",
+			Iteration:     item.Iteration,
+			Kind:          "target-confirmed",
+			Key:           item.Signature.String(),
+			Score:         corpusScore("target-confirmed"),
+			Signature:     item.Signature,
+			AdapterID:     suite.AdapterID,
+			TargetID:      suite.TargetID,
+			TaskID:        item.TaskID,
+			ArtifactDir:   item.ArtifactDir,
+			RecordedAt:    recordedAt,
 		}
 		entries = append(entries, entry)
 
@@ -192,7 +255,48 @@ func corpusScore(kind string) int {
 		return 5
 	case "new-state-class":
 		return 3
+	case "target-confirmed":
+		return 4
 	default:
 		return 1
 	}
+}
+
+const (
+	corpusExecutionCase   = "case"
+	corpusExecutionTarget = "target"
+)
+
+func (e CorpusEntry) EffectiveExecutionKind() string {
+	if e.ExecutionKind == "" {
+		return corpusExecutionCase
+	}
+	return e.ExecutionKind
+}
+
+func (e CorpusEntry) Subject() string {
+	if e.EffectiveExecutionKind() == corpusExecutionTarget {
+		if e.TargetID != "" && e.TaskID != "" {
+			return e.TargetID + "/" + e.TaskID
+		}
+		if e.TaskID != "" {
+			return e.TaskID
+		}
+		if e.TargetID != "" {
+			return e.TargetID
+		}
+	}
+	return e.CaseName
+}
+
+func targetCorpusEntryID(targetID string, taskID string, runID string) string {
+	key := strings.NewReplacer(
+		"<", "",
+		">", "",
+		",", "",
+		" ", "-",
+		"/", "-",
+		":", "-",
+	).Replace("target-confirmed-" + targetID + "-" + taskID + "-" + runID)
+	return strings.Trim(key, "-")
 }

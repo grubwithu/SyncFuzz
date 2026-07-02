@@ -15,7 +15,10 @@ go run ./cmd/syncfuzz target run --command-file examples/target-commands/orphan-
 LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --command-file examples/target-commands/langgraph-shell-react.sh --expect-files late-effect --observe-delay 500ms --out runs
 OPENAI_BASE_URL=https://api.example.com/v1 LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --command-file examples/target-commands/langgraph-shell-react.sh --expect-files late-effect --observe-delay 500ms --out runs
 LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --task orphan-process-long-delay --command-file examples/target-commands/langgraph-shell-react.sh --observe-delay 500ms --out runs
-LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --task persistent-shell-poisoning --prompt-file targets/langgraph_shell_react/prompts/persistent-shell-poisoning.txt --command-file examples/target-commands/langgraph-shell-react.sh --expect-files shell-poison-check.txt --observe-delay 500ms --out runs
+LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --task persistent-shell-poisoning --command-file examples/target-commands/langgraph-shell-react.sh --observe-delay 500ms --out runs
+LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --task persistent-shell-poisoning-replay --command-file examples/target-commands/langgraph-shell-react.sh --observe-delay 500ms --out runs
+LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --task persistent-shell-poisoning-fork --command-file examples/target-commands/langgraph-shell-react.sh --observe-delay 500ms --out runs
+LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target suite --target langgraph-shell-react --tasks orphan-process-long-delay,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork --command-file examples/target-commands/langgraph-shell-react.sh --repeat 2 --observe-delay 500ms --out runs --corpus corpus
 ```
 
 Future examples should include:

@@ -20,9 +20,13 @@ type VerifyOptions struct {
 }
 
 type VerificationEntryResult struct {
+	ExecutionKind     string            `json:"execution_kind"`
 	EntryID           string            `json:"entry_id"`
 	Kind              string            `json:"kind"`
 	CaseName          string            `json:"case_name"`
+	AdapterID         string            `json:"adapter_id,omitempty"`
+	TargetID          string            `json:"target_id,omitempty"`
+	TaskID            string            `json:"task_id,omitempty"`
 	FaultPlanID       string            `json:"fault_plan_id,omitempty"`
 	PrimitiveID       string            `json:"primitive_id,omitempty"`
 	TimingProfileID   string            `json:"timing_profile_id,omitempty"`
@@ -103,9 +107,13 @@ func VerifyCorpus(ctx context.Context, opts VerifyOptions) (*VerificationResult,
 
 	for _, entry := range entries {
 		item := VerificationEntryResult{
+			ExecutionKind:     entry.EffectiveExecutionKind(),
 			EntryID:           entry.EntryID,
 			Kind:              entry.Kind,
-			CaseName:          entry.CaseName,
+			CaseName:          entry.Subject(),
+			AdapterID:         entry.AdapterID,
+			TargetID:          entry.TargetID,
+			TaskID:            entry.TaskID,
 			FaultPlanID:       entry.FaultPlanID,
 			PrimitiveID:       entry.PrimitiveID,
 			TimingProfileID:   entry.TimingProfileID,
@@ -129,6 +137,9 @@ func VerifyCorpus(ctx context.Context, opts VerifyOptions) (*VerificationResult,
 
 		item.ReplayID = replay.ReplayID
 		item.RunID = replay.RunID
+		item.AdapterID = firstNonEmpty(replay.AdapterID, item.AdapterID)
+		item.TargetID = firstNonEmpty(replay.TargetID, item.TargetID)
+		item.TaskID = firstNonEmpty(replay.TaskID, item.TaskID)
 		item.Environment = replay.Environment
 		item.ContainerImage = replay.ContainerImage
 		item.FaultPlanID = replay.FaultPlanID

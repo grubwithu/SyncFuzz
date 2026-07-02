@@ -160,7 +160,7 @@ Phase 4 之后：
 
 目标：从最小 harness 迁移到真实 Agent runtime。
 
-状态：已启动。第一版先实现通用 `command` target adapter，用 observation-only 的方式把任意本地或容器内可见的真实 Agent CLI 放进 SyncFuzz workspace 运行，并复用 Phase 2 的 filesystem/process/state-trace artifact contract。它已经可以把 `target-prompt.txt` 和 `target-task.json` 直接写进 workspace、传递 prompt/task file path、捕获 stdout/stderr、通过 `--observe-delay` 等待 immediate observation、通过 `--late-observe-delay` 捕获 delayed effect、检查 expected files、写出 `target-result.json`，为 LangGraph、AutoGen、OpenHands 的专用 lifecycle adapter 打底。
+状态：Phase 5A 观察里程碑已冻结，Phase 5B LangGraph replay / fork 生命周期任务已启动。当前已经有一条稳定的 observation-first 路线：通用 `command` target adapter 把任意本地或容器内可见的真实 Agent CLI 放进 SyncFuzz workspace 运行，并复用 Phase 2 的 filesystem/process/state-trace artifact contract。它已经可以把 `target-prompt.txt` 和 `target-task.json` 直接写进 workspace、传递 prompt/task file path、捕获 stdout/stderr、通过 `--observe-delay` 等待 immediate observation、通过 `--late-observe-delay` 捕获 delayed effect、检查 expected files、写出 `target-result.json`，为 LangGraph、AutoGen、OpenHands 的专用 lifecycle adapter 打底。
 
 顺序：
 
@@ -187,14 +187,35 @@ Phase 4 之后：
 - target observation：运行前后 filesystem snapshot、process snapshot、process lineage、filesystem metadata、`agent-state.json`、`state-trace.json`；
 - `--observe-delay` / `--late-observe-delay` / `--expect-files`：对真实 delayed-effect target run 做最小可自动判定的 target oracle。
 - 首个真实对象：`targets/langgraph_shell_react/`，使用官方 `create_agent(...) + ShellToolMiddleware(...)`，并导出 `langgraph-history.json`、`langgraph-run-summary.json`，以及按需导出的 replay/fork summary artifact。
+- 首个真实对象：`targets/langgraph_shell_react/`，使用官方 `create_agent(...) + ShellToolMiddleware(...)`，并导出 `langgraph-history.json`、`langgraph-run-summary.json`、`langgraph-lifecycle.json`，以及按需导出的 replay/fork summary artifact。
 - `orphan-process-long-delay`：为真实 Agent 增加更强的长延迟后台进程任务，不要求 `late-effect` 立即出现，并把 process lineage summary、late observation summary 和 task-specific `target_oracle` 摘入 `target-result.json`，用于直接判断 target command boundary 后是否仍有 workspace 相关进程，以及 delayed effect 是否在晚期观测窗口内出现。
+- `persistent-shell-poisoning`：对真实 LangGraph shell target 使用 transcript-backed oracle；当 `shell-poison-check.txt` 里只有 `ATTACKER_GIT` 时，也必须有 `langgraph-history.json` 证明它来自“后续 shell call 无需再次 export PATH 仍继承污染”的场景。
+- `persistent-shell-poisoning-replay`：内建 replay 任务会自动选择 `before-path-export` semantic checkpoint；当前 oracle 会把 replay 结果细分为 `runtime-preserved-residue`、`legitimate-reexecution`、`external-state-smuggling`、`clean-replay` 和 `unknown-causal-path`，并把 honest clean replay 固化为可回归的负结果。
+- `persistent-shell-poisoning-fork`：内建 fork 任务会自动从 `before-path-export` semantic checkpoint 分叉；当前 oracle 既能确认 attacker PATH residue，也能把“fork 后干净回到 system git”的 honest 结果固化为 `clean-fork` 负样本。
+- `file-residue-fork`：把真实攻击面从 PATH 扩到 workspace filesystem；内建 fork 任务会自动从 `before-file-drop` semantic checkpoint 分叉，并用 `branch-note.txt` / `file-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实文件残留、fork 侧重建和 clean fork。
+- `delete-residue-fork`：继续推进 filesystem rollback 语义；内建 fork 任务会自动从 `before-file-delete` semantic checkpoint 分叉，并用 `branch-delete-note.txt` / `delete-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实删除残留、clean fork 对齐和 fork 侧误修改。
+- `symlink-residue-fork`：继续沿 workspace filesystem 扩面；内建 fork 任务会自动从 `before-symlink-create` semantic checkpoint 分叉，并用 `branch-link.txt` / `symlink-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实 symlink 残留、fork 侧重建和 clean fork。
+- durable checkpointer：真实 LangGraph target 新增 `disk` backend，并把 backend 元数据写入 `langgraph-checkpointer.json`；replay / fork / file-residue 这些 lifecycle 任务默认切到 durable backend，后续可以继续推进到跨进程恢复实验。
+- split-process lifecycle mode：真实 LangGraph target 现在还能把 initial branch 与 replay/fork follow-up 拆到两个 Python 进程里执行，并复用同一个 durable checkpoint 目录；phase artifact 与 merged artifact 都会保留，便于后续比较“同进程 replay/fork”和“跨进程 checkpoint-consume”的差异。
+
+Phase 5A 冻结内容：
+
+- 真实 target run / suite / corpus / replay / verify 链路已经打通；
+- 官方 LangGraph `create_agent + ShellToolMiddleware` 已经接入；
+- `orphan-process-long-delay` 与 `persistent-shell-poisoning` 的 observation-first oracle 已稳定；
+- `file-residue-fork` 的 transcript-backed filesystem oracle 已就位；
+- `delete-residue-fork` 的 transcript-backed deletion-residue oracle 已就位；
+- `symlink-residue-fork` 的 transcript-backed filesystem oracle 已就位；
+- replay / fork 所需的历史 artifact、summary artifact 与 semantic checkpoint selector 已就位。
+- durable checkpoint backend 已接入，workspace 内可直接审计 `langgraph-checkpoints/`。
 
 下一步：
 
-- 增加 LangGraph adapter wrapper，把 checkpoint/replay/cancel/resume 映射成 SyncFuzz lifecycle events；
-- 把 `targets/langgraph_shell_react/` 从 in-process memory checkpointer 提升到 durable checkpointer；
+- 把当前 replay / fork 任务从 observation-first 继续推进到 adapter-level lifecycle events；
+- 把 `targets/langgraph_shell_react/` 从“单进程内 durable checkpointer”继续推进到“跨进程恢复可消费的 durable checkpointer”；
 - 为 AutoGen command executor 增加真实 shell tool 包装；
 - 把 target run 接入 suite/campaign，使真实 runtime 能消费 Phase 4 matrix candidate。
+- 把 Phase 5B 的退出标准固定为：真实 runtime lifecycle identity 可观测、真实 target 可消费 campaign、并且 replay/fork 至少能稳定产出“漏洞候选”或“强负结论”之一。
 
 完成标准：
 

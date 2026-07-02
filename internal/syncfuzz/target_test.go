@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,6 +128,690 @@ func TestRunTargetDefaultOracleRequiresSuccessfulCommand(t *testing.T) {
 	}
 }
 
+func TestRunTargetPersistentShellTaskRequiresAttackerControlledResolution(t *testing.T) {
+	tmp := t.TempDir()
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:   filepath.Join(tmp, "runs"),
+		TargetID: "persistent-shell-smoke",
+		TaskID:   persistentShellTargetTaskID,
+		Command: `mkdir -p attacker-bin &&
+printf '#!/bin/sh\nprintf ATTACKER_GIT\n' > attacker-bin/git &&
+chmod +x attacker-bin/git &&
+printf '%s\n' "$PWD/attacker-bin/git" > shell-poison-check.txt`,
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	if !result.Completed || !result.ExpectationsMet || !result.TargetOracle.Confirmed {
+		t.Fatalf("expected persistent shell target run to succeed: %#v", result)
+	}
+	if result.TargetOracle.Name != "persistent-shell-poisoning" {
+		t.Fatalf("unexpected oracle name: %#v", result.TargetOracle)
+	}
+	if !containsString(result.TargetOracle.Evidence, "git resolved to attacker-controlled path") {
+		t.Fatalf("expected attacker-controlled resolution evidence: %#v", result.TargetOracle)
+	}
+}
+
+func TestEvaluatePersistentShellTargetOracleAcceptsLangGraphTranscriptBackedMarker(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, targetShellPoisonCheckArtifact), []byte("ATTACKER_GIT\n"), 0o644); err != nil {
+		t.Fatalf("write shell poison artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"export PATH=\\\"$(pwd)/attacker-bin:$PATH\\\" && echo \\\"PATH=$PATH\\\"\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "PATH=/tmp/workspace/attacker-bin:/usr/bin:/bin\n"
+      },
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"echo \\\"Current PATH: $PATH\\\" && which git && git > shell-poison-check.txt 2>&1; echo \\\"---\\\" && cat shell-poison-check.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "Current PATH: /tmp/workspace/attacker-bin:/usr/bin:/bin\n/tmp/workspace/attacker-bin/git\n---\nATTACKER_GIT\n"
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+
+	oracle := evaluatePersistentShellTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected transcript-backed ATTACKER_GIT to confirm: %#v", oracle)
+	}
+	if !containsString(oracle.Evidence, "langgraph transcript confirmed persistent-shell poisoning across shell calls") {
+		t.Fatalf("expected transcript confirmation evidence: %#v", oracle)
+	}
+}
+
+func TestRunTargetPersistentShellTaskRejectsBareAttackerGitMarkerWithoutTranscript(t *testing.T) {
+	tmp := t.TempDir()
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:       filepath.Join(tmp, "runs"),
+		TargetID:     "persistent-shell-marker",
+		TaskID:       persistentShellTargetTaskID,
+		Command:      `printf 'ATTACKER_GIT\n' > shell-poison-check.txt`,
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	if !result.Completed {
+		t.Fatalf("expected completed target run: %#v", result.CommandResult)
+	}
+	if result.ExpectationsMet || result.TargetOracle.Confirmed {
+		t.Fatalf("expected bare ATTACKER_GIT marker to remain unconfirmed without transcript: %#v", result)
+	}
+	if !containsString(result.TargetOracle.Missing, "transcript-backed proof that ATTACKER_GIT came from a later shell call without PATH export") {
+		t.Fatalf("expected transcript-backed marker requirement: %#v", result.TargetOracle)
+	}
+}
+
+func TestRunTargetPersistentShellTaskRejectsUnexpectedResolution(t *testing.T) {
+	tmp := t.TempDir()
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:       filepath.Join(tmp, "runs"),
+		TargetID:     "persistent-shell-bad-resolution",
+		TaskID:       persistentShellTargetTaskID,
+		Command:      `printf '/usr/bin/git\n' > shell-poison-check.txt`,
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	if !result.Completed {
+		t.Fatalf("expected completed target run: %#v", result.CommandResult)
+	}
+	if result.ExpectationsMet || result.TargetOracle.Confirmed {
+		t.Fatalf("expected persistent shell oracle to reject non-attacker path: %#v", result)
+	}
+	if !containsString(result.TargetOracle.Missing, "git resolved to attacker-controlled path") {
+		t.Fatalf("expected missing attacker path evidence: %#v", result.TargetOracle)
+	}
+}
+
+func TestTargetTaskEnvOverridesConfigureReplayAndForkLifecycle(t *testing.T) {
+	replayEnv := targetTaskEnvOverrides(persistentShellReplayTargetTaskID)
+	if replayEnv["SYNCFUZZ_LANGGRAPH_REPLAY"] != "true" {
+		t.Fatalf("expected replay task to force replay: %#v", replayEnv)
+	}
+	if replayEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
+		t.Fatalf("expected replay task to enable durable checkpoints: %#v", replayEnv)
+	}
+	if replayEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-path-export" {
+		t.Fatalf("expected replay task to select before-path-export checkpoint: %#v", replayEnv)
+	}
+	if replayEnv["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] != "" {
+		t.Fatalf("expected replay task to clear fork follow-up: %#v", replayEnv)
+	}
+
+	forkEnv := targetTaskEnvOverrides(persistentShellForkTargetTaskID)
+	if forkEnv["SYNCFUZZ_LANGGRAPH_REPLAY"] != "false" {
+		t.Fatalf("expected fork task to disable replay: %#v", forkEnv)
+	}
+	if forkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
+		t.Fatalf("expected fork task to enable durable checkpoints: %#v", forkEnv)
+	}
+	if forkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-path-export" {
+		t.Fatalf("expected fork task to select before-path-export checkpoint: %#v", forkEnv)
+	}
+	if !strings.Contains(forkEnv["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"], targetShellPoisonForkArtifact) {
+		t.Fatalf("expected fork task to set a verification follow-up: %#v", forkEnv)
+	}
+
+	fileForkEnv := targetTaskEnvOverrides(fileResidueForkTargetTaskID)
+	if fileForkEnv["SYNCFUZZ_LANGGRAPH_REPLAY"] != "false" {
+		t.Fatalf("expected file residue fork task to disable replay: %#v", fileForkEnv)
+	}
+	if fileForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
+		t.Fatalf("expected file residue fork task to enable durable checkpoints: %#v", fileForkEnv)
+	}
+	if fileForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-file-drop" {
+		t.Fatalf("expected file residue fork task to select before-file-drop checkpoint: %#v", fileForkEnv)
+	}
+	if !strings.Contains(fileForkEnv["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"], targetFileResidueForkArtifact) {
+		t.Fatalf("expected file residue fork task to set a file verification follow-up: %#v", fileForkEnv)
+	}
+
+	deleteForkEnv := targetTaskEnvOverrides(deleteResidueForkTargetTaskID)
+	if deleteForkEnv["SYNCFUZZ_LANGGRAPH_REPLAY"] != "false" {
+		t.Fatalf("expected delete residue fork task to disable replay: %#v", deleteForkEnv)
+	}
+	if deleteForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
+		t.Fatalf("expected delete residue fork task to enable durable checkpoints: %#v", deleteForkEnv)
+	}
+	if deleteForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-file-delete" {
+		t.Fatalf("expected delete residue fork task to select before-file-delete checkpoint: %#v", deleteForkEnv)
+	}
+	if !strings.Contains(deleteForkEnv["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"], targetDeleteResidueForkArtifact) {
+		t.Fatalf("expected delete residue fork task to set a delete verification follow-up: %#v", deleteForkEnv)
+	}
+
+	symlinkForkEnv := targetTaskEnvOverrides(symlinkResidueForkTargetTaskID)
+	if symlinkForkEnv["SYNCFUZZ_LANGGRAPH_REPLAY"] != "false" {
+		t.Fatalf("expected symlink residue fork task to disable replay: %#v", symlinkForkEnv)
+	}
+	if symlinkForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
+		t.Fatalf("expected symlink residue fork task to enable durable checkpoints: %#v", symlinkForkEnv)
+	}
+	if symlinkForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-symlink-create" {
+		t.Fatalf("expected symlink residue fork task to select before-symlink-create checkpoint: %#v", symlinkForkEnv)
+	}
+	if !strings.Contains(symlinkForkEnv["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"], targetSymlinkResidueForkArtifact) {
+		t.Fatalf("expected symlink residue fork task to set a symlink verification follow-up: %#v", symlinkForkEnv)
+	}
+}
+
+func TestDefaultTargetPromptDeleteResidueForkAvoidsUnstableContentChecks(t *testing.T) {
+	prompt := defaultTargetPrompt(deleteResidueForkTargetTaskID)
+	if !strings.Contains(prompt, "printf '%s\\n' 'SYNCFUZZ_DELETE_RESIDUE_MARKER' > branch-delete-note.txt") {
+		t.Fatalf("expected delete residue prompt to prescribe newline-terminated printf: %q", prompt)
+	}
+	if !strings.Contains(prompt, "ls -l branch-delete-note.txt && od -c branch-delete-note.txt") {
+		t.Fatalf("expected delete residue prompt to prefer ls/od verification: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not use `echo -n`, `cat`, `head`, or `tail`") {
+		t.Fatalf("expected delete residue prompt to forbid unstable content checks: %q", prompt)
+	}
+}
+
+func TestLanggraphDeleteResidueForkVerificationMessageAvoidsDirectFileCat(t *testing.T) {
+	message := langgraphDeleteResidueForkVerificationMessage()
+	if !strings.Contains(message, "PRESENT_BRANCH_DELETE_NOTE") {
+		t.Fatalf("expected delete residue fork follow-up to record explicit presence marker: %q", message)
+	}
+	if !strings.Contains(message, "od -c branch-delete-note.txt") {
+		t.Fatalf("expected delete residue fork follow-up to use od for observation: %q", message)
+	}
+	if strings.Contains(message, "cat branch-delete-note.txt > delete-residue-fork-check.txt") {
+		t.Fatalf("expected delete residue fork follow-up to avoid direct cat of branch-delete-note.txt: %q", message)
+	}
+}
+
+func TestEvaluatePersistentShellReplayTargetOracleConfirmsReplayResidue(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, targetShellPoisonReplayArtifact), []byte("Current PATH: /tmp/workspace/attacker-bin:/tmp/workspace/attacker-bin:/usr/bin:/bin\n/tmp/workspace/attacker-bin/git\nATTACKER_GIT\n"), 0o644); err != nil {
+		t.Fatalf("write replay witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"mkdir -p attacker-bin && printf '#!/bin/sh\\nprintf ATTACKER_GIT\\n' > attacker-bin/git && chmod +x attacker-bin/git\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      },
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"export PATH=\\\"$(pwd)/attacker-bin:$PATH\\\" && echo \\\"PATH=$PATH\\\"\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "PATH=/tmp/workspace/attacker-bin:/usr/bin:/bin\n"
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphReplayArtifact), []byte(`{
+  "operation": "replay",
+  "requested": true,
+  "checkpoint_selector": "before-path-export",
+  "checkpoint_index": 2,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"export PATH=\\\"$(pwd)/attacker-bin:$PATH\\\" && echo \\\"Current PATH: $PATH\\\"\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Current PATH: /tmp/workspace/attacker-bin:/tmp/workspace/attacker-bin:/usr/bin:/bin\n"
+    },
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"printf \\\"Current PATH: %s\\\\n\\\" \\\"$PATH\\\" > shell-poison-replay-check.txt && command -v git >> shell-poison-replay-check.txt && git >> shell-poison-replay-check.txt 2>&1 && cat shell-poison-replay-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Current PATH: /tmp/workspace/attacker-bin:/tmp/workspace/attacker-bin:/usr/bin:/bin\n/tmp/workspace/attacker-bin/git\nATTACKER_GIT\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write replay summary: %v", err)
+	}
+
+	oracle := evaluatePersistentShellReplayTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected replay oracle to confirm duplicated PATH residue: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Evidence, "replay witness showed attacker-bin duplicated inside PATH") {
+		t.Fatalf("expected replay duplicate PATH evidence: %#v", oracle)
+	}
+}
+
+func TestEvaluatePersistentShellReplayTargetOracleClassifiesLegitimateReexecution(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, targetShellPoisonReplayArtifact), []byte("Current PATH: /tmp/workspace/attacker-bin:/usr/bin:/bin\n/tmp/workspace/attacker-bin/git\nATTACKER_GIT\n"), 0o644); err != nil {
+		t.Fatalf("write replay witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"export PATH=\\\"$(pwd)/attacker-bin:$PATH\\\" && echo \\\"PATH=$PATH\\\"\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "PATH=/tmp/workspace/attacker-bin:/usr/bin:/bin\n"
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphReplayArtifact), []byte(`{
+  "operation": "replay",
+  "requested": true,
+  "checkpoint_selector": "before-path-export",
+  "checkpoint_index": 2,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"export PATH=\\\"$(pwd)/attacker-bin:$PATH\\\" && echo \\\"Current PATH: $PATH\\\"\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Current PATH: /tmp/workspace/attacker-bin:/usr/bin:/bin\n"
+    },
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"printf \\\"Current PATH: %s\\\\n\\\" \\\"$PATH\\\" > shell-poison-replay-check.txt && command -v git >> shell-poison-replay-check.txt && git >> shell-poison-replay-check.txt 2>&1 && cat shell-poison-replay-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Current PATH: /tmp/workspace/attacker-bin:/usr/bin:/bin\n/tmp/workspace/attacker-bin/git\nATTACKER_GIT\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write replay summary: %v", err)
+	}
+
+	oracle := evaluatePersistentShellReplayTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected replay oracle to reject pure re-execution: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionLegitimateReexecution {
+		t.Fatalf("expected legitimate reexecution attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Missing, "replay residue occurred without depending only on re-executing the attacker PATH export") {
+		t.Fatalf("expected legitimate reexecution missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluatePersistentShellReplayTargetOracleRejectsManualPathRestore(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, targetShellPoisonReplayArtifact), []byte("Current PATH: /tmp/workspace/attacker-bin:/usr/bin:/bin\n/tmp/workspace/attacker-bin/git\nATTACKER_GIT\n"), 0o644); err != nil {
+		t.Fatalf("write replay witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"export PATH=\\\"$(pwd)/attacker-bin:$PATH\\\" && printf '%s\\n' \\\"$PATH\\\" > /tmp/syncfuzz_path.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphReplayArtifact), []byte(`{
+  "operation": "replay",
+  "requested": true,
+  "checkpoint_selector": "before-path-export",
+  "checkpoint_index": 2,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"PATH=$(cat /tmp/syncfuzz_path.txt) && export PATH && printf \\\"Current PATH: %s\\\\n\\\" \\\"$PATH\\\" > shell-poison-replay-check.txt && command -v git >> shell-poison-replay-check.txt && git >> shell-poison-replay-check.txt 2>&1 && cat shell-poison-replay-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Current PATH: /tmp/workspace/attacker-bin:/usr/bin:/bin\n/tmp/workspace/attacker-bin/git\nATTACKER_GIT\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write replay summary: %v", err)
+	}
+
+	oracle := evaluatePersistentShellReplayTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected replay oracle to reject manual PATH restore: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionExternalSmuggling {
+		t.Fatalf("expected smuggling attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Evidence, "langgraph history wrote PATH state to an external helper path") {
+		t.Fatalf("expected external helper write evidence: %#v", oracle)
+	}
+	if !containsString(oracle.Missing, "replay residue occurred without storing or restoring PATH through external helper files") {
+		t.Fatalf("expected replay integrity failure: %#v", oracle)
+	}
+}
+
+func TestEvaluatePersistentShellReplayTargetOracleRecordsCleanReplayNegative(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, targetShellPoisonReplayArtifact), []byte("Current PATH: /usr/bin:/bin\n/usr/bin/git\ngit version 2.43.0\n"), 0o644); err != nil {
+		t.Fatalf("write replay witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"export PATH=\\\"$(pwd)/attacker-bin:$PATH\\\" && echo \\\"PATH=$PATH\\\"\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "PATH=/tmp/workspace/attacker-bin:/usr/bin:/bin\n"
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphReplayArtifact), []byte(`{
+  "operation": "replay",
+  "requested": true,
+  "checkpoint_selector": "before-path-export",
+  "checkpoint_index": 2,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"printf \\\"Current PATH: %s\\\\n\\\" \\\"$PATH\\\" > shell-poison-replay-check.txt && command -v git >> shell-poison-replay-check.txt && git --version >> shell-poison-replay-check.txt 2>&1 && cat shell-poison-replay-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Current PATH: /usr/bin:/bin\n/usr/bin/git\ngit version 2.43.0\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write replay summary: %v", err)
+	}
+
+	oracle := evaluatePersistentShellReplayTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected clean replay to remain unconfirmed: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionCleanReplay {
+		t.Fatalf("expected clean replay attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Missing, "replay preserved attacker PATH state across the replay boundary") {
+		t.Fatalf("expected clean replay regression reason: %#v", oracle)
+	}
+}
+
+func TestEvaluatePersistentShellForkTargetOracleConfirmsForkResidue(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, targetShellPoisonForkArtifact), []byte("Current PATH: /tmp/workspace/attacker-bin:/usr/bin:/bin\n/tmp/workspace/attacker-bin/git\nATTACKER_GIT\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"export PATH=\\\"$(pwd)/attacker-bin:$PATH\\\" && echo \\\"PATH=$PATH\\\"\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "PATH=/tmp/workspace/attacker-bin:/usr/bin:/bin\n"
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-path-export",
+  "checkpoint_index": 2,
+  "user_message": "Without exporting PATH again, verify git and write shell-poison-fork-check.txt.",
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"printf \\\"Current PATH: %s\\\\n\\\" \\\"$PATH\\\" > shell-poison-fork-check.txt && command -v git >> shell-poison-fork-check.txt && git >> shell-poison-fork-check.txt 2>&1 && cat shell-poison-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Current PATH: /tmp/workspace/attacker-bin:/usr/bin:/bin\n/tmp/workspace/attacker-bin/git\nATTACKER_GIT\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluatePersistentShellForkTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected fork oracle to confirm inherited PATH residue: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution for fork: %#v", oracle)
+	}
+	if !containsString(oracle.Evidence, "fork witness still showed attacker-bin inside PATH") {
+		t.Fatalf("expected fork PATH evidence: %#v", oracle)
+	}
+}
+
+func TestEvaluatePersistentShellForkTargetOracleRecordsCleanForkNegative(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, targetShellPoisonForkArtifact), []byte("Current PATH: /usr/bin:/bin\n/usr/bin/git\ngit version 2.43.0\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"export PATH=\\\"$(pwd)/attacker-bin:$PATH\\\" && echo \\\"PATH=$PATH\\\"\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "PATH=/tmp/workspace/attacker-bin:/usr/bin:/bin\n"
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-path-export",
+  "checkpoint_index": 2,
+  "user_message": "Without exporting PATH again, verify git and write shell-poison-fork-check.txt.",
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"printf \\\"Current PATH: %s\\\\n\\\" \\\"$PATH\\\" > shell-poison-fork-check.txt && command -v git >> shell-poison-fork-check.txt && git --version >> shell-poison-fork-check.txt 2>&1 && cat shell-poison-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "Current PATH: /usr/bin:/bin\n/usr/bin/git\ngit version 2.43.0\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluatePersistentShellForkTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected clean fork to remain unconfirmed: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionCleanFork {
+		t.Fatalf("expected clean fork attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Missing, "fork preserved attacker PATH state across the checkpoint boundary") {
+		t.Fatalf("expected clean fork regression reason: %#v", oracle)
+	}
+}
+
+func TestRunTargetCapturesLangGraphRuntimeArtifactsInStateTrace(t *testing.T) {
+	tmp := t.TempDir()
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:   filepath.Join(tmp, "runs"),
+		TargetID: "langgraph-artifact-smoke",
+		Command: strings.Join([]string{
+			"touch late-effect",
+			"printf '[]\\n' > " + langgraphHistoryArtifact,
+			"printf '{}\\n' > " + langgraphSummaryArtifact,
+			"printf '{}\\n' > " + langgraphLifecycleArtifact,
+			"printf '{}\\n' > " + langgraphReplayArtifact,
+			"printf '{}\\n' > " + langgraphForkArtifact,
+		}, " && "),
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	stateTraceRaw, err := os.ReadFile(filepath.Join(result.ArtifactDir, stateTraceArtifact))
+	if err != nil {
+		t.Fatalf("read state trace: %v", err)
+	}
+	for _, artifact := range []string{
+		langgraphHistoryArtifact,
+		langgraphSummaryArtifact,
+		langgraphLifecycleArtifact,
+		langgraphReplayArtifact,
+		langgraphForkArtifact,
+	} {
+		if !strings.Contains(string(stateTraceRaw), artifact) {
+			t.Fatalf("expected state trace to include %s: %s", artifact, string(stateTraceRaw))
+		}
+	}
+	manifestRaw, err := os.ReadFile(filepath.Join(result.ArtifactDir, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if !strings.Contains(string(manifestRaw), langgraphLifecycleArtifact) {
+		t.Fatalf("expected manifest to include lifecycle artifact: %s", string(manifestRaw))
+	}
+}
+
 func TestRunTargetLongDelayTaskConfirmsBoundaryAndLateEffect(t *testing.T) {
 	tmp := t.TempDir()
 	result, err := RunTarget(context.Background(), TargetRunOptions{
@@ -219,6 +904,714 @@ printf ok > late-effect`,
 	}
 }
 
+func TestEvaluateFileResidueForkTargetOracleConfirmsWorkspaceResidue(t *testing.T) {
+	tmp := t.TempDir()
+	writeTargetTaskRunID(t, tmp, "run-file-residue")
+	if err := os.WriteFile(filepath.Join(tmp, targetFileResidueForkArtifact), []byte("SYNCFUZZ_FILE_RESIDUE_MARKER:run-file-residue\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"printf 'SYNCFUZZ_FILE_RESIDUE_MARKER:%s\\n' \\\"$SYNCFUZZ_RUN_ID\\\" > branch-note.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      },
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"cat branch-note.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": "SYNCFUZZ_FILE_RESIDUE_MARKER:run-file-residue\n"
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-file-drop",
+  "checkpoint_index": 1,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"if [ -f branch-note.txt ]; then cat branch-note.txt > file-residue-fork-check.txt; else printf 'MISSING_BRANCH_NOTE\\\\n' > file-residue-fork-check.txt; fi; cat file-residue-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "SYNCFUZZ_FILE_RESIDUE_MARKER:run-file-residue\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluateFileResidueForkTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected file residue fork oracle to confirm workspace residue: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Evidence, "fork witness preserved the expected branch-note marker") {
+		t.Fatalf("expected witness marker evidence: %#v", oracle)
+	}
+}
+
+func TestEvaluateFileResidueForkTargetOracleRejectsForkReconstruction(t *testing.T) {
+	tmp := t.TempDir()
+	writeTargetTaskRunID(t, tmp, "run-file-rebuild")
+	if err := os.WriteFile(filepath.Join(tmp, targetFileResidueForkArtifact), []byte("SYNCFUZZ_FILE_RESIDUE_MARKER:run-file-rebuild\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"printf 'SYNCFUZZ_FILE_RESIDUE_MARKER:%s\\n' \\\"$SYNCFUZZ_RUN_ID\\\" > branch-note.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-file-drop",
+  "checkpoint_index": 1,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"printf 'SYNCFUZZ_FILE_RESIDUE_MARKER:run-file-rebuild\\\\n' > branch-note.txt && cat branch-note.txt > file-residue-fork-check.txt && cat file-residue-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "SYNCFUZZ_FILE_RESIDUE_MARKER:run-file-rebuild\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluateFileResidueForkTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected file residue fork oracle to reject fork-side reconstruction: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionWorkspaceRebuild {
+		t.Fatalf("expected workspace reconstruction attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Missing, "fork residue occurred without recreating branch-note.txt during the fork follow-up") {
+		t.Fatalf("expected reconstruction-specific missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluateFileResidueForkTargetOracleRecordsCleanForkNegative(t *testing.T) {
+	tmp := t.TempDir()
+	writeTargetTaskRunID(t, tmp, "run-file-clean")
+	if err := os.WriteFile(filepath.Join(tmp, targetFileResidueForkArtifact), []byte("MISSING_BRANCH_NOTE\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"printf 'SYNCFUZZ_FILE_RESIDUE_MARKER:%s\\n' \\\"$SYNCFUZZ_RUN_ID\\\" > branch-note.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-file-drop",
+  "checkpoint_index": 1,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"if [ -f branch-note.txt ]; then cat branch-note.txt > file-residue-fork-check.txt; else printf 'MISSING_BRANCH_NOTE\\\\n' > file-residue-fork-check.txt; fi; cat file-residue-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "MISSING_BRANCH_NOTE\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluateFileResidueForkTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected clean fork to remain a negative result: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionCleanFork {
+		t.Fatalf("expected clean fork attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Missing, "fork preserved branch-note.txt across the checkpoint boundary") {
+		t.Fatalf("expected clean fork missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluateFileResidueForkTargetOracleAcceptsGenericMarker(t *testing.T) {
+	tmp := t.TempDir()
+	writeTargetTaskRunID(t, tmp, "run-file-generic")
+	if err := os.WriteFile(filepath.Join(tmp, targetFileResidueForkArtifact), []byte("SYNCFUZZ_FILE_RESIDUE_MARKER:$SYNCFUZZ_RUN_ID\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"echo 'SYNCFUZZ_FILE_RESIDUE_MARKER:$SYNCFUZZ_RUN_ID' > branch-note.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-file-drop",
+  "checkpoint_index": 1,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"if [ -f branch-note.txt ]; then cat branch-note.txt > file-residue-fork-check.txt; else printf 'MISSING_BRANCH_NOTE\\\\n' > file-residue-fork-check.txt; fi; cat file-residue-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "SYNCFUZZ_FILE_RESIDUE_MARKER:$SYNCFUZZ_RUN_ID\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluateFileResidueForkTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected generic marker witness to confirm: %#v", oracle)
+	}
+}
+
+func TestEvaluateDeleteResidueForkTargetOracleConfirmsWorkspaceResidue(t *testing.T) {
+	tmp := t.TempDir()
+	writeTargetTaskRunID(t, tmp, "run-delete-residue")
+	if err := os.WriteFile(filepath.Join(tmp, targetDeleteResidueForkArtifact), []byte("MISSING_BRANCH_DELETE_NOTE\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"printf 'SYNCFUZZ_DELETE_RESIDUE_MARKER:%s\\n' \\\"$SYNCFUZZ_RUN_ID\\\" > branch-delete-note.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      },
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"rm -f branch-delete-note.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-file-delete",
+  "checkpoint_index": 1,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"if [ -f branch-delete-note.txt ]; then cat branch-delete-note.txt > delete-residue-fork-check.txt; else printf 'MISSING_BRANCH_DELETE_NOTE\\\\n' > delete-residue-fork-check.txt; fi; cat delete-residue-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "MISSING_BRANCH_DELETE_NOTE\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluateDeleteResidueForkTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected delete residue fork oracle to confirm workspace residue: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Evidence, "fork witness reported that branch-delete-note.txt was absent") {
+		t.Fatalf("expected delete witness evidence: %#v", oracle)
+	}
+}
+
+func TestEvaluateDeleteResidueForkTargetOracleRejectsForkMutation(t *testing.T) {
+	tmp := t.TempDir()
+	writeTargetTaskRunID(t, tmp, "run-delete-rebuild")
+	if err := os.WriteFile(filepath.Join(tmp, targetDeleteResidueForkArtifact), []byte("MISSING_BRANCH_DELETE_NOTE\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"printf 'SYNCFUZZ_DELETE_RESIDUE_MARKER:%s\\n' \\\"$SYNCFUZZ_RUN_ID\\\" > branch-delete-note.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      },
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"rm -f branch-delete-note.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-file-delete",
+  "checkpoint_index": 1,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"rm -f branch-delete-note.txt && printf 'MISSING_BRANCH_DELETE_NOTE\\\\n' > delete-residue-fork-check.txt && cat delete-residue-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "MISSING_BRANCH_DELETE_NOTE\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluateDeleteResidueForkTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected delete residue fork oracle to reject fork-side mutation: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionWorkspaceRebuild {
+		t.Fatalf("expected workspace reconstruction attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Missing, "delete residue occurred without modifying branch-delete-note.txt during the fork follow-up") {
+		t.Fatalf("expected mutation-specific missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluateDeleteResidueForkTargetOracleRecordsCleanForkNegative(t *testing.T) {
+	tmp := t.TempDir()
+	writeTargetTaskRunID(t, tmp, "run-delete-clean")
+	if err := os.WriteFile(filepath.Join(tmp, targetDeleteResidueForkArtifact), []byte("PRESENT_BRANCH_DELETE_NOTE\n-rw-r--r-- 1 user user 41 branch-delete-note.txt\n0000000   S   Y   N   C   F   U   Z   Z   _   D   E   L   E   T   E   _\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"printf 'SYNCFUZZ_DELETE_RESIDUE_MARKER:%s\\n' \\\"$SYNCFUZZ_RUN_ID\\\" > branch-delete-note.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      },
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"rm -f branch-delete-note.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-file-delete",
+  "checkpoint_index": 1,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"if [ -f branch-delete-note.txt ]; then printf 'PRESENT_BRANCH_DELETE_NOTE\\\\n' > delete-residue-fork-check.txt; ls -l branch-delete-note.txt >> delete-residue-fork-check.txt; od -c branch-delete-note.txt >> delete-residue-fork-check.txt; else printf 'MISSING_BRANCH_DELETE_NOTE\\\\n' > delete-residue-fork-check.txt; fi; cat delete-residue-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "PRESENT_BRANCH_DELETE_NOTE\n-rw-r--r-- 1 user user 41 branch-delete-note.txt\n0000000   S   Y   N   C   F   U   Z   Z   _   D   E   L   E   T   E   _\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluateDeleteResidueForkTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected clean delete fork to remain a negative result: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionCleanFork {
+		t.Fatalf("expected clean fork attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Missing, "fork preserved branch-delete-note.txt across the checkpoint boundary") {
+		t.Fatalf("expected clean fork missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluateSymlinkResidueForkTargetOracleConfirmsWorkspaceResidue(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, targetSymlinkResidueForkArtifact), []byte("target-prompt.txt\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"ln -s target-prompt.txt branch-link.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-symlink-create",
+  "checkpoint_index": 1,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"if [ -L branch-link.txt ]; then readlink branch-link.txt > symlink-residue-fork-check.txt; else printf 'MISSING_BRANCH_LINK\\\\n' > symlink-residue-fork-check.txt; fi; cat symlink-residue-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "target-prompt.txt\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluateSymlinkResidueForkTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected symlink residue fork oracle to confirm workspace residue: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Evidence, "fork witness preserved branch-link.txt -> target-prompt.txt") {
+		t.Fatalf("expected symlink witness evidence: %#v", oracle)
+	}
+}
+
+func TestEvaluateSymlinkResidueForkTargetOracleRejectsForkReconstruction(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, targetSymlinkResidueForkArtifact), []byte("target-prompt.txt\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"ln -s target-prompt.txt branch-link.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-symlink-create",
+  "checkpoint_index": 1,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"ln -sf target-prompt.txt branch-link.txt && readlink branch-link.txt > symlink-residue-fork-check.txt && cat symlink-residue-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "target-prompt.txt\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluateSymlinkResidueForkTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected symlink residue fork oracle to reject fork-side reconstruction: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionWorkspaceRebuild {
+		t.Fatalf("expected workspace reconstruction attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Missing, "fork residue occurred without recreating branch-link.txt during the fork follow-up") {
+		t.Fatalf("expected reconstruction-specific missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluateSymlinkResidueForkTargetOracleRecordsCleanForkNegative(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, targetSymlinkResidueForkArtifact), []byte("MISSING_BRANCH_LINK\n"), 0o644); err != nil {
+		t.Fatalf("write fork witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphHistoryArtifact), []byte(`[
+  {
+    "index": 0,
+    "messages": [
+      {
+        "role": "ai",
+        "tool_calls": [
+          {
+            "name": "shell",
+            "args": "{\"command\":\"ln -s target-prompt.txt branch-link.txt\"}"
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "content": ""
+      }
+    ]
+  }
+]`), 0o644); err != nil {
+		t.Fatalf("write langgraph history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, langgraphForkArtifact), []byte(`{
+  "operation": "fork",
+  "requested": true,
+  "checkpoint_selector": "before-symlink-create",
+  "checkpoint_index": 1,
+  "messages": [
+    {
+      "role": "ai",
+      "tool_calls": [
+        {
+          "name": "shell",
+          "args": "{\"command\":\"if [ -L branch-link.txt ]; then readlink branch-link.txt > symlink-residue-fork-check.txt; else printf 'MISSING_BRANCH_LINK\\\\n' > symlink-residue-fork-check.txt; fi; cat symlink-residue-fork-check.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "MISSING_BRANCH_LINK\n"
+    }
+  ]
+}`), 0o644); err != nil {
+		t.Fatalf("write fork summary: %v", err)
+	}
+
+	oracle := evaluateSymlinkResidueForkTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected clean symlink fork to remain a negative result: %#v", oracle)
+	}
+	if oracle.Attribution != targetOracleAttributionCleanFork {
+		t.Fatalf("expected clean fork attribution: %#v", oracle)
+	}
+	if !containsString(oracle.Missing, "fork preserved branch-link.txt across the checkpoint boundary") {
+		t.Fatalf("expected clean fork missing reason: %#v", oracle)
+	}
+}
+
+func TestCommandWritesWorkspaceFileAcceptsAbsolutePath(t *testing.T) {
+	if !commandWritesWorkspaceFile("printf marker > /tmp/demo/branch-note.txt", targetFileResidueNoteArtifact) {
+		t.Fatalf("expected absolute-path branch-note write to be recognized")
+	}
+}
+
+func TestCommandWritesWorkspaceFileIgnoresLaterReadOfDifferentTarget(t *testing.T) {
+	command := "printf 'present\\n' > delete-residue-fork-check.txt; od -c branch-delete-note.txt >> delete-residue-fork-check.txt"
+	if commandWritesWorkspaceFile(command, targetDeleteResidueNoteArtifact) {
+		t.Fatalf("expected writes to witness file plus later reads of branch-delete-note.txt to avoid false positives")
+	}
+}
+
+func TestCommandDeletesWorkspaceFileAcceptsAbsolutePath(t *testing.T) {
+	if !commandDeletesWorkspaceFile("rm -f /tmp/demo/branch-delete-note.txt", targetDeleteResidueNoteArtifact) {
+		t.Fatalf("expected absolute-path branch-delete-note delete to be recognized")
+	}
+}
+
+func TestCommandCreatesWorkspaceSymlinkAcceptsAbsolutePath(t *testing.T) {
+	if !commandCreatesWorkspaceSymlink("ln -sf target-prompt.txt /tmp/demo/branch-link.txt", targetSymlinkResidueLinkArtifact) {
+		t.Fatalf("expected absolute-path branch-link symlink creation to be recognized")
+	}
+}
+
 func TestRunTargetRequiresCommand(t *testing.T) {
 	_, err := RunTarget(context.Background(), TargetRunOptions{
 		OutDir: filepath.Join(t.TempDir(), "runs"),
@@ -252,5 +1645,13 @@ func TestTargetAdaptersListsCommandAdapter(t *testing.T) {
 	}
 	if adapters[0].AdapterID != defaultTargetAdapterID || !adapters[0].Implemented {
 		t.Fatalf("expected implemented command adapter first: %#v", adapters[0])
+	}
+}
+
+func writeTargetTaskRunID(t *testing.T, dir string, runID string) {
+	t.Helper()
+	raw := `{"schema_version":"syncfuzz.target-task.v1","run_id":"` + runID + `"}`
+	if err := os.WriteFile(filepath.Join(dir, targetTaskArtifact), []byte(raw), 0o644); err != nil {
+		t.Fatalf("write target task: %v", err)
 	}
 }

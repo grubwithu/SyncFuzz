@@ -57,9 +57,11 @@ go run ./cmd/syncfuzz suite --matrix --cases action-replay --timing baseline,tig
 go run ./cmd/syncfuzz suite --matrix --feedback-from runs/suite-<id>/matrix-result.json --candidate-limit 3 --out runs --corpus corpus
 go run ./cmd/syncfuzz campaign --rounds 2 --candidate-limit 3 --cases action-replay --timing baseline,tight --out runs --corpus corpus
 go run ./cmd/syncfuzz target list
+go run ./cmd/syncfuzz target tasks
 go run ./cmd/syncfuzz target run --command-file examples/target-commands/orphan-process.sh --expect-files late-effect --observe-delay 500ms --out runs
 LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --command-file examples/target-commands/langgraph-shell-react.sh --expect-files late-effect --observe-delay 500ms --out runs
 LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --task orphan-process-long-delay --command-file examples/target-commands/langgraph-shell-react.sh --observe-delay 500ms --late-observe-delay 7s --out runs
+LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target suite --target langgraph-shell-react --tasks orphan-process-long-delay,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,delete-residue-fork,symlink-residue-fork --command-file examples/target-commands/langgraph-shell-react.sh --repeat 2 --observe-delay 500ms --out runs --corpus corpus
 go run ./cmd/syncfuzz corpus list --corpus corpus
 go run ./cmd/syncfuzz corpus show --corpus corpus --id <entry_id>
 go run ./cmd/syncfuzz corpus verify --corpus corpus --out runs
@@ -79,12 +81,20 @@ make run-matrix-suite CASES=action-replay TIMING=baseline,tight
 make run-matrix-suite FEEDBACK_FROM=runs/suite-<id>/matrix-result.json CANDIDATE_LIMIT=3
 make run-campaign ROUNDS=2 CANDIDATE_LIMIT=3 CASES=action-replay TIMING=baseline,tight
 make target-list
+make target-tasks
 make target-run TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh EXPECT_FILES=late-effect
+make target-suite TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh REPEAT=3
 make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini
+make target-langgraph-shell-react-suite LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASKS=orphan-process-long-delay,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,delete-residue-fork,symlink-residue-fork REPEAT=2
 make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini OPENAI_BASE_URL=https://api.example.com/v1
 make target-langgraph-shell-react TARGET_TASK=orphan-process-long-delay
 make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini LANGGRAPH_REPLAY=true LANGGRAPH_CHECKPOINT_INDEX=0
-make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=persistent-shell-poisoning TARGET_PROMPT_FILE=targets/langgraph_shell_react/prompts/persistent-shell-poisoning.txt EXPECT_FILES=shell-poison-check.txt
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=persistent-shell-poisoning
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=persistent-shell-poisoning-replay
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=persistent-shell-poisoning-fork
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=file-residue-fork
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=delete-residue-fork
+make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=symlink-residue-fork
 make corpus-list
 make corpus-verify
 make corpus-show ENTRY_ID=<entry_id_or_unique_prefix>
@@ -237,13 +247,29 @@ runs/<run_id>/
 
 For `orphan-process-long-delay`, the target oracle requires the command to return successfully, a workspace-related process to appear at the command boundary, that process to remain through immediate observation, and, when late observation is enabled, `late-effect` to appear during the late snapshot window.
 
+For `persistent-shell-poisoning`, SyncFuzz now treats `langgraph-history.json` as part of the oracle contract. A bare `ATTACKER_GIT` marker in `shell-poison-check.txt` is not enough; the transcript must also show that a later shell call, without re-exporting PATH, still inherited the poisoned `PATH`.
+
+For `persistent-shell-poisoning-replay`, SyncFuzz replays from the semantic checkpoint `before-path-export` and requires both `shell-poison-replay-check.txt` and `langgraph-replay-summary.json` to show duplicated `attacker-bin` entries inside `PATH`.
+
+For `persistent-shell-poisoning-fork`, SyncFuzz forks from `before-path-export` and requires both `shell-poison-fork-check.txt` and `langgraph-fork-summary.json` to show whether the fork follow-up shell call, without a new PATH export, inherited the attacker-controlled `git` or cleanly fell back to the system `git`.
+
+For `file-residue-fork`, SyncFuzz forks from `before-file-drop` and requires both `file-residue-fork-check.txt` and `langgraph-fork-summary.json` to show whether `branch-note.txt` survived as genuine workspace residue or was merely recreated during the fork follow-up.
+
+For `delete-residue-fork`, SyncFuzz forks from `before-file-delete` and requires both `delete-residue-fork-check.txt` and `langgraph-fork-summary.json` to show whether `branch-delete-note.txt` wrongly stayed absent across the rollback boundary or was instead present because the fork stayed aligned with the checkpointed workspace.
+
+For `symlink-residue-fork`, SyncFuzz forks from `before-symlink-create` and requires both `symlink-residue-fork-check.txt` and `langgraph-fork-summary.json` to show whether `branch-link.txt` survived as genuine workspace symlink residue or was merely recreated during the fork follow-up.
+
+Replay and fork lifecycle tasks now also switch the LangGraph target to a durable disk-backed checkpoint mode. The wrapper writes `langgraph-checkpointer.json` plus a `langgraph-checkpoints/` directory inside the workspace so checkpoint backend choice and on-disk state can be audited alongside the normal target artifacts.
+
+For cross-process experiments, the same LangGraph target can also run with `LANGGRAPH_PROCESS_MODE=split-process`. In that mode the initial branch and replay/fork follow-up execute in separate Python processes while reusing the durable checkpoint directory, and the workspace keeps both phase-local artifacts and merged canonical summaries.
+
 The first repository-owned real target is `targets/langgraph_shell_react/`. It intentionally stays close to the official LangChain and LangGraph path:
 
 - `create_agent(...)`
 - `ShellToolMiddleware(...)`
 - LangGraph thread state and checkpointer
 
-It writes `langgraph-history.json` and `langgraph-run-summary.json` into the SyncFuzz workspace so the run can be inspected and replay/fork behavior can be correlated with the normal SyncFuzz filesystem and process artifacts.
+It writes `langgraph-history.json`, `langgraph-run-summary.json`, and `langgraph-checkpointer.json` into the SyncFuzz workspace so the run can be inspected and replay/fork behavior can be correlated with the normal SyncFuzz filesystem and process artifacts.
 For shell tasks, the wrapper requires observed shell tool use and records `validation_error` if the model returns a text-only answer without executing ShellToolMiddleware.
 If replay or fork is requested, it also writes `langgraph-replay-summary.json` and `langgraph-fork-summary.json`.
 

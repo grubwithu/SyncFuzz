@@ -2,6 +2,7 @@ package syncfuzz
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,9 +23,13 @@ type ReplayOptions struct {
 }
 
 type ReplayResult struct {
+	ExecutionKind     string            `json:"execution_kind"`
 	ReplayID          string            `json:"replay_id"`
 	EntryID           string            `json:"entry_id"`
 	CaseName          string            `json:"case_name"`
+	AdapterID         string            `json:"adapter_id,omitempty"`
+	TargetID          string            `json:"target_id,omitempty"`
+	TaskID            string            `json:"task_id,omitempty"`
 	Environment       string            `json:"environment"`
 	ContainerImage    string            `json:"container_image,omitempty"`
 	FaultPlanID       string            `json:"fault_plan_id,omitempty"`
@@ -74,6 +79,15 @@ func replayEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions) (*R
 		return nil, fmt.Errorf("create replay directory: %w", err)
 	}
 
+	switch entry.EffectiveExecutionKind() {
+	case corpusExecutionTarget:
+		return replayTargetEntry(ctx, entry, opts, replayID, replayDir, started)
+	default:
+		return replayCaseEntry(ctx, entry, opts, replayID, replayDir, started)
+	}
+}
+
+func replayCaseEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions, replayID string, replayDir string, started time.Time) (*ReplayResult, error) {
 	runResult, err := Run(ctx, RunOptions{
 		CaseName:        entry.CaseName,
 		OutDir:          replayDir,
@@ -92,6 +106,7 @@ func replayEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions) (*R
 	signatureMatched := runResult.Signature.String() == entry.Signature.String()
 	finished := time.Now().UTC()
 	result := &ReplayResult{
+		ExecutionKind:     entry.EffectiveExecutionKind(),
 		ReplayID:          replayID,
 		EntryID:           entry.EntryID,
 		CaseName:          entry.CaseName,
@@ -117,4 +132,72 @@ func replayEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions) (*R
 		return nil, err
 	}
 	return result, nil
+}
+
+func replayTargetEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions, replayID string, replayDir string, started time.Time) (*ReplayResult, error) {
+	task, err := loadTargetTask(filepath.Join(entry.ArtifactDir, targetTaskArtifact))
+	if err != nil {
+		return nil, err
+	}
+
+	runResult, err := RunTarget(ctx, TargetRunOptions{
+		AdapterID:        task.AdapterID,
+		TargetID:         task.TargetID,
+		TaskID:           task.TaskID,
+		Objective:        task.Objective,
+		Prompt:           task.Prompt,
+		Command:          task.Command,
+		OutDir:           replayDir,
+		Timeout:          time.Duration(task.TimeoutMillis) * time.Millisecond,
+		ObserveDelay:     time.Duration(task.ObserveDelayMs) * time.Millisecond,
+		LateObserveDelay: time.Duration(task.LateObserveDelayMs) * time.Millisecond,
+		EnvKind:          firstNonEmpty(opts.EnvKind, task.Environment),
+		ContainerImage:   firstNonEmpty(opts.ContainerImage, task.ContainerImage),
+		ExpectedFiles:    append([]string{}, task.ExpectedFiles...),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	signatureMatched := runResult.Signature.String() == entry.Signature.String()
+	finished := time.Now().UTC()
+	result := &ReplayResult{
+		ExecutionKind:     entry.EffectiveExecutionKind(),
+		ReplayID:          replayID,
+		EntryID:           entry.EntryID,
+		CaseName:          entry.Subject(),
+		AdapterID:         runResult.AdapterID,
+		TargetID:          runResult.TargetID,
+		TaskID:            runResult.TaskID,
+		Environment:       runResult.Environment,
+		ContainerImage:    runResult.ContainerImage,
+		SourceSuiteID:     entry.SuiteID,
+		SourceRunID:       entry.RunID,
+		ExpectedSignature: entry.Signature,
+		RunID:             runResult.RunID,
+		Confirmed:         runResult.ExpectationsMet,
+		ActualSignature:   runResult.Signature,
+		SignatureMatched:  signatureMatched,
+		Reproduced:        runResult.ExpectationsMet && signatureMatched,
+		ArtifactDir:       replayDir,
+		RunArtifactDir:    runResult.ArtifactDir,
+		StartedAt:         started.Format(time.RFC3339Nano),
+		FinishedAt:        finished.Format(time.RFC3339Nano),
+	}
+	if err := writeJSON(filepath.Join(replayDir, "replay-result.json"), result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func loadTargetTask(path string) (TargetTask, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return TargetTask{}, fmt.Errorf("read target task %q: %w", path, err)
+	}
+	var task TargetTask
+	if err := json.Unmarshal(raw, &task); err != nil {
+		return TargetTask{}, fmt.Errorf("decode target task %q: %w", path, err)
+	}
+	return task, nil
 }

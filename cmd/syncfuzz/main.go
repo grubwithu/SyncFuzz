@@ -75,7 +75,9 @@ Usage:
   syncfuzz suite --matrix [--out runs] [--repeat 1] [--corpus corpus] [--cases orphan-process] [--timing baseline,tight,wide] [--feedback-from matrix-result.json] [--candidate-limit 5] [--differential] [--env local] [--container-image ubuntu:latest]
   syncfuzz campaign [--rounds 2] [--candidate-limit 3] [--cases action-replay] [--timing baseline,tight,wide] [--feedback-from matrix-result.json] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz target list
-  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target tasks
+  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz corpus list [--corpus corpus] [--limit 20]
   syncfuzz corpus show --id <entry_id> [--corpus corpus]
   syncfuzz corpus verify [--corpus corpus] [--out runs] [--limit 0] [--env local] [--container-image ubuntu:latest]
@@ -453,14 +455,18 @@ func campaign(args []string) {
 
 func target(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list or run")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, run, or suite")
 		os.Exit(2)
 	}
 	switch args[0] {
 	case "list":
 		targetList()
+	case "tasks":
+		targetTasks()
 	case "run":
 		targetRun(args[1:])
+	case "suite":
+		targetSuite(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown target subcommand: %s\n", args[0])
 		os.Exit(2)
@@ -475,6 +481,18 @@ func targetList() {
 			adapter.Implemented,
 			strings.Join(adapter.Capabilities, ","),
 			adapter.Description,
+		)
+	}
+}
+
+func targetTasks() {
+	fmt.Printf("%-28s %-5s %-28s %s\n", "task", "late", "default_expected", "description")
+	for _, task := range syncfuzz.TargetTasks() {
+		fmt.Printf("%-28s %-5t %-28s %s\n",
+			task.TaskID,
+			task.UsesLateObservation,
+			strings.Join(task.DefaultExpectedFiles, ","),
+			task.Description,
 		)
 	}
 }
@@ -534,6 +552,9 @@ func targetRun(args []string) {
 	fmt.Printf("expectations_met: %t\n", result.ExpectationsMet)
 	fmt.Printf("target_oracle: %s\n", result.TargetOracle.Name)
 	fmt.Printf("oracle_confirmed: %t\n", result.TargetOracle.Confirmed)
+	if result.TargetOracle.Attribution != "" {
+		fmt.Printf("oracle_attribution: %s\n", result.TargetOracle.Attribution)
+	}
 	if len(result.ExpectedFilesPresent) > 0 {
 		fmt.Printf("expected_present: %s\n", strings.Join(result.ExpectedFilesPresent, ","))
 	}
@@ -555,6 +576,74 @@ func targetRun(args []string) {
 	fmt.Printf("observe_delay_ms: %d\n", result.ObserveDelayMs)
 	fmt.Printf("output_bytes: %d\n", result.CommandResult.OutputBytes)
 	fmt.Printf("workspace: %s\n", result.Workspace)
+	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
+}
+
+func targetSuite(args []string) {
+	fs := flag.NewFlagSet("target suite", flag.ExitOnError)
+	adapterID := fs.String("adapter", "command", "target adapter id")
+	targetID := fs.String("target", "command", "human-readable target runtime id")
+	taskID := fs.String("task", "orphan-process", "single target task id")
+	taskList := fs.String("tasks", "", "comma-separated target task ids; overrides --task when set")
+	objective := fs.String("objective", "", "optional shared objective override")
+	prompt := fs.String("prompt", "", "inline prompt passed through SYNCFUZZ_PROMPT")
+	promptFile := fs.String("prompt-file", "", "optional shared prompt file")
+	command := fs.String("command", "", "target command to run inside the SyncFuzz workspace")
+	commandFile := fs.String("command-file", "", "optional file containing the target command")
+	expectFiles := fs.String("expect-files", "", "comma-separated files expected to exist after every target task")
+	outDir := fs.String("out", "runs", "directory for target suite artifacts")
+	corpusDir := fs.String("corpus", "corpus", "directory for confirmed target corpus entries; empty disables corpus output")
+	repeat := fs.Int("repeat", 1, "number of repetitions per target task")
+	timeout := fs.Duration("timeout", 2*time.Minute, "target command timeout")
+	observeDelay := fs.Duration("observe-delay", 0, "delay after target command return before final observation; 0 uses the adapter default")
+	lateObserveDelay := fs.Duration("late-observe-delay", 0, "optional delay after immediate observation for delayed target effects")
+	envKind := fs.String("env", "local", "execution environment backend")
+	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	tasks := splitCSV(*taskList)
+	if len(tasks) == 0 {
+		tasks = []string{*taskID}
+	}
+
+	result, err := syncfuzz.RunTargetSuite(context.Background(), syncfuzz.TargetSuiteOptions{
+		AdapterID:        *adapterID,
+		TargetID:         *targetID,
+		Tasks:            tasks,
+		Objective:        *objective,
+		Prompt:           *prompt,
+		PromptFile:       *promptFile,
+		Command:          *command,
+		CommandFile:      *commandFile,
+		OutDir:           *outDir,
+		CorpusDir:        *corpusDir,
+		Repeat:           *repeat,
+		Timeout:          *timeout,
+		ObserveDelay:     *observeDelay,
+		LateObserveDelay: *lateObserveDelay,
+		EnvKind:          *envKind,
+		ContainerImage:   *containerImage,
+		ExpectedFiles:    splitCSV(*expectFiles),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target suite failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("suite_id: %s\n", result.SuiteID)
+	fmt.Printf("adapter: %s\n", result.AdapterID)
+	fmt.Printf("target: %s\n", result.TargetID)
+	fmt.Printf("environment: %s\n", result.Environment)
+	printContainerImage(result.ContainerImage)
+	fmt.Printf("repeat: %d\n", result.Repeat)
+	fmt.Printf("tasks: %s\n", strings.Join(result.Tasks, ","))
+	fmt.Printf("total_runs: %d\n", result.TotalRuns)
+	fmt.Printf("confirmed: %d\n", result.Confirmed)
+	fmt.Printf("unconfirmed: %d\n", result.Unconfirmed)
+	fmt.Printf("errors: %d\n", result.Errors)
+	fmt.Printf("corpus_entries: %d\n", len(result.CorpusEntries))
 	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
 }
 
@@ -590,12 +679,13 @@ func corpusList(args []string) {
 		fmt.Fprintf(os.Stderr, "syncfuzz corpus list failed: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("%-48s %-18s %-28s %-5s %s\n", "entry_id", "kind", "case", "score", "signature")
+	fmt.Printf("%-48s %-18s %-8s %-36s %-5s %s\n", "entry_id", "kind", "exec", "subject", "score", "signature")
 	for _, entry := range entries {
-		fmt.Printf("%-48s %-18s %-28s %-5d %s\n",
+		fmt.Printf("%-48s %-18s %-8s %-36s %-5d %s\n",
 			entry.EntryID,
 			entry.Kind,
-			entry.CaseName,
+			entry.EffectiveExecutionKind(),
+			entry.Subject(),
 			entry.Score,
 			entry.Signature.String(),
 		)
@@ -617,9 +707,17 @@ func corpusShow(args []string) {
 	}
 
 	fmt.Printf("entry_id: %s\n", entry.EntryID)
+	fmt.Printf("execution_kind: %s\n", entry.EffectiveExecutionKind())
 	fmt.Printf("kind: %s\n", entry.Kind)
 	fmt.Printf("score: %d\n", entry.Score)
-	fmt.Printf("case: %s\n", entry.CaseName)
+	if entry.EffectiveExecutionKind() == "target" {
+		fmt.Printf("adapter: %s\n", entry.AdapterID)
+		fmt.Printf("target: %s\n", entry.TargetID)
+		fmt.Printf("task: %s\n", entry.TaskID)
+		fmt.Printf("subject: %s\n", entry.Subject())
+	} else {
+		fmt.Printf("case: %s\n", entry.CaseName)
+	}
 	if entry.CandidateID != "" {
 		fmt.Printf("candidate: %s\n", entry.CandidateID)
 	}
@@ -726,7 +824,14 @@ func replay(args []string) {
 
 	fmt.Printf("replay_id: %s\n", result.ReplayID)
 	fmt.Printf("entry_id: %s\n", result.EntryID)
-	fmt.Printf("case: %s\n", result.CaseName)
+	fmt.Printf("execution_kind: %s\n", result.ExecutionKind)
+	if result.ExecutionKind == "target" {
+		fmt.Printf("target: %s\n", result.TargetID)
+		fmt.Printf("task: %s\n", result.TaskID)
+		fmt.Printf("subject: %s\n", result.CaseName)
+	} else {
+		fmt.Printf("case: %s\n", result.CaseName)
+	}
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
 	printFaultPlan(result.FaultPlanID)

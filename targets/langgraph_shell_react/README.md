@@ -88,14 +88,51 @@ make target-langgraph-shell-react \
   EXPECT_FILES=shell-poison-check.txt
 ```
 
+SyncFuzz now also ships several lifecycle-oriented built-in tasks on top of the same target:
+
+```bash
+make target-langgraph-shell-react \
+  TARGET_TASK=persistent-shell-poisoning-replay
+
+make target-langgraph-shell-react \
+  TARGET_TASK=persistent-shell-poisoning-fork
+
+make target-langgraph-shell-react \
+  TARGET_TASK=file-residue-fork
+
+make target-langgraph-shell-react \
+  TARGET_TASK=delete-residue-fork
+
+make target-langgraph-shell-react \
+  TARGET_TASK=symlink-residue-fork
+```
+
 The run writes extra workspace artifacts:
 
 - `langgraph-history.json`
 - `langgraph-run-summary.json`
+- `langgraph-checkpointer.json`
+- `langgraph-lifecycle.json`
 - `langgraph-replay-summary.json` when replay is requested
 - `langgraph-fork-summary.json` when fork is requested
 
-These summarize thread history, checkpoint ids, and the final messages returned by the agent.
+These summarize thread history, checkpoint ids, checkpoint backend selection, shell/session identity, replay/fork boundaries, and the final messages returned by the agent.
+
+For `persistent-shell-poisoning`, SyncFuzz uses `langgraph-history.json` as structured oracle evidence when it is available. A bare `ATTACKER_GIT` string in `shell-poison-check.txt` is not enough by itself; the transcript also needs to show a later shell call, without re-exporting PATH, still inheriting the poisoned `PATH` and executing the attacker-controlled `git`.
+
+For `persistent-shell-poisoning-replay`, SyncFuzz automatically replays from the semantic checkpoint `before-path-export`. The replay oracle requires `shell-poison-replay-check.txt` plus `langgraph-replay-summary.json` to show duplicated `attacker-bin` entries in `PATH` and attacker-controlled `git` resolution after replay.
+
+For `persistent-shell-poisoning-fork`, SyncFuzz automatically forks from `before-path-export`. The fork oracle requires `shell-poison-fork-check.txt` plus `langgraph-fork-summary.json` to show whether the fork follow-up shell call, without a new PATH export, inherited attacker-controlled `git` or cleanly fell back to the system `git`.
+
+For `file-residue-fork`, SyncFuzz automatically forks from `before-file-drop`. The fork oracle requires `file-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether `branch-note.txt` survived as genuine workspace residue or was rebuilt during the fork follow-up.
+
+For `delete-residue-fork`, SyncFuzz automatically forks from `before-file-delete`. The fork oracle requires `delete-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether `branch-delete-note.txt` wrongly stayed absent across the rollback boundary or whether the fork stayed aligned with the checkpointed workspace.
+
+For `symlink-residue-fork`, SyncFuzz automatically forks from `before-symlink-create`. The fork oracle requires `symlink-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether `branch-link.txt` survived as genuine workspace symlink residue or was rebuilt during the fork follow-up.
+
+Replay and fork lifecycle tasks now default to the durable `disk` checkpoint backend. That backend persists checkpoint state under `langgraph-checkpoints/` inside the SyncFuzz workspace and describes the resulting files in `langgraph-checkpointer.json`.
+
+If you set `LANGGRAPH_PROCESS_MODE=split-process`, the wrapper performs the initial branch and the replay/fork follow-up in separate Python processes while reusing the same durable checkpoint directory. In that mode the workspace keeps phase artifacts such as `langgraph-run-summary-initial.json`, `langgraph-run-summary-resume.json`, `langgraph-lifecycle-initial.json`, `langgraph-lifecycle-resume.json`, `langgraph-checkpointer-initial.json`, and `langgraph-checkpointer-resume.json`, then merges them back into the canonical artifact names.
 
 When `--late-observe-delay` is enabled, SyncFuzz also writes `snapshot-late.json`, `process-late.json`, and `filesystem-late-metadata.json` in the run artifact directory.
 
@@ -130,7 +167,9 @@ go run ./cmd/syncfuzz target run \
 
 The shell wrapper in [examples/target-commands/langgraph-shell-react.sh](/home/grub/workspace/agent_sec/SyncFuzz/examples/target-commands/langgraph-shell-react.sh) forwards these environment variables to `run_target.py`.
 
+When you use the built-in SyncFuzz tasks `persistent-shell-poisoning-replay`, `persistent-shell-poisoning-fork`, `file-residue-fork`, `delete-residue-fork`, or `symlink-residue-fork`, SyncFuzz sets these replay/fork environment variables automatically and switches the checkpointer backend to `disk`. Add `LANGGRAPH_PROCESS_MODE=split-process` when you want the replay/fork step to consume those checkpoints from a fresh target process. The manual environment form remains useful for ad hoc experiments.
+
 ## Notes
 
 - This target is intentionally observation-first. It proves that a real official `create_agent + ShellToolMiddleware` stack can sit inside the SyncFuzz artifact contract.
-- The current implementation uses an in-process memory checkpointer. That is enough for first-run observation, replay, and fork within one target invocation, but it is not yet a durable multi-process checkpoint backend.
+- The wrapper now supports both the default in-process `memory` checkpointer and a durable `disk` backend. `split-process` mode is the current bridge from same-process replay/fork into cross-process checkpoint-consumption experiments.
