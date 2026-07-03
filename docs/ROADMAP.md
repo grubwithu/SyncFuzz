@@ -160,7 +160,15 @@ Phase 4 之后：
 
 目标：从最小 harness 迁移到真实 Agent runtime。
 
-状态：Phase 5A 观察里程碑已冻结，Phase 5B LangGraph replay / fork 生命周期任务已启动。当前已经有一条稳定的 observation-first 路线：通用 `command` target adapter 把任意本地或容器内可见的真实 Agent CLI 放进 SyncFuzz workspace 运行，并复用 Phase 2 的 filesystem/process/state-trace artifact contract。它已经可以把 `target-prompt.txt` 和 `target-task.json` 直接写进 workspace、传递 prompt/task file path、捕获 stdout/stderr、通过 `--observe-delay` 等待 immediate observation、通过 `--late-observe-delay` 捕获 delayed effect、检查 expected files、写出 `target-result.json`，为 LangGraph、AutoGen、OpenHands 的专用 lifecycle adapter 打底。
+状态：Phase 5A 观察里程碑已冻结，Phase 5B 现在正式转入 **contract-aware validation**。当前已经有一条稳定的 observation-first 路线：通用 `command` target adapter 把任意本地或容器内可见的真实 Agent CLI 放进 SyncFuzz workspace 运行，并复用 Phase 2 的 filesystem/process/state-trace artifact contract。它已经可以把 `target-prompt.txt` 和 `target-task.json` 直接写进 workspace、传递 prompt/task file path、捕获 stdout/stderr、通过 `--observe-delay` 等待 immediate observation、通过 `--late-observe-delay` 捕获 delayed effect、检查 expected files、写出 `target-result.json`，为 LangGraph、AutoGen、OpenHands 的专用 lifecycle adapter 打底。
+
+最新校准：
+
+- LangGraph 实验已经证明：真实 runtime 中确实存在可稳定观测的 shell / workspace / process residue；
+- 但 residue 的存在不自动等于漏洞，它可能是既定持久化语义、contract violation，或仅仅是尚未激活的风险状态；
+- 因此，Phase 5B 的重心从“继续证明 residue 存在”转向“把 residue 放回 target 的恢复契约里解释，并让真实 target 开始消费 fuzz candidate”。
+
+详细设计见 [PHASE5B_STRATEGY.md](PHASE5B_STRATEGY.md)。
 
 顺序：
 
@@ -211,17 +219,28 @@ Phase 5A 冻结内容：
 - replay / fork 所需的历史 artifact、summary artifact 与 semantic checkpoint selector 已就位。
 - durable checkpoint backend 已接入，workspace 内可直接审计 `langgraph-checkpoints/`。
 
-下一步：
+Phase 5B 主线：
 
-- 把当前 replay / fork 任务从 observation-first 继续推进到 adapter-level lifecycle events；
+- 为 LangGraph 写出第一份 `Recovery Contract Profile`，明确 graph state、workspace、shell session、child process、external / authority state 在 replay / fork / discard / resume 上预期是 `preserve`、`reset` 还是 `unspecified`；
+- 在 target oracle 之上增加 contract interpretation 层，把结果区分为 residue observation、contract-consistent、contract-violation 和 contract-unknown；
+- 继续保留少量 activation 验证实验，但不把 exploit generation 变成框架主目标；
 - 把 `targets/langgraph_shell_react/` 从“单进程内 durable checkpointer”继续推进到“跨进程恢复可消费的 durable checkpointer”；
 - 为 AutoGen command executor 增加真实 shell tool 包装；
-- 把 target run 接入 suite/campaign，使真实 runtime 能消费 Phase 4 matrix candidate。
-- 把 Phase 5B 的退出标准固定为：真实 runtime lifecycle identity 可观测、真实 target 可消费 campaign、并且 replay/fork 至少能稳定产出“漏洞候选”或“强负结论”之一。
+- 把 target run 接入 suite/campaign，使真实 runtime 能消费 Phase 4 matrix candidate；
+- 把 replay / verify 的失败原因细化成 taxonomy，而不再只停留在 failed / unconfirmed / error。
+
+Phase 5B 退出标准：
+
+- LangGraph contract profile 已成文；
+- target result / suite / corpus 能区分 observation 与 contract interpretation；
+- verify failure taxonomy 稳定；
+- 至少一个真实 target 可以消费 matrix/campaign；
+- 至少形成一个非手写真实 target discovery，或一个可重复的强负结论；
+- 第二个真实 target adapter 启动。
 
 完成标准：
 
-> 同一个 seed 能在至少两个 runtime 上运行，并比较状态语义差异。
+> 同一个 seed 能在至少两个 runtime 上运行并比较状态语义差异，同时真实 target 结果已经从“看见 residue”推进到“知道它是否违反恢复契约”。
 
 ## Phase 6：漏洞确认与论文评估
 
