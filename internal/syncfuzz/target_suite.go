@@ -31,20 +31,21 @@ type TargetSuiteOptions struct {
 }
 
 type TargetSuiteRunResult struct {
-	TaskID             string             `json:"task_id"`
-	Iteration          int                `json:"iteration"`
-	RunID              string             `json:"run_id,omitempty"`
-	Confirmed          bool               `json:"confirmed"`
-	Completed          bool               `json:"completed"`
-	LateObserveDelayMs int64              `json:"late_observe_delay_ms,omitempty"`
-	TargetOracle       TargetOracleResult `json:"target_oracle"`
-	Signature          MismatchSignature  `json:"signature"`
-	ArtifactDir        string             `json:"artifact_dir,omitempty"`
-	DurationMillis     int64              `json:"duration_ms,omitempty"`
-	ArtifactBytes      int64              `json:"artifact_bytes,omitempty"`
-	ArtifactFiles      int                `json:"artifact_files,omitempty"`
-	MetricError        string             `json:"metric_error,omitempty"`
-	Error              string             `json:"error,omitempty"`
+	TaskID             string                     `json:"task_id"`
+	Iteration          int                        `json:"iteration"`
+	RunID              string                     `json:"run_id,omitempty"`
+	Confirmed          bool                       `json:"confirmed"`
+	Completed          bool                       `json:"completed"`
+	LateObserveDelayMs int64                      `json:"late_observe_delay_ms,omitempty"`
+	TargetOracle       TargetOracleResult         `json:"target_oracle"`
+	TaskCompliance     TargetTaskComplianceResult `json:"task_compliance"`
+	Signature          MismatchSignature          `json:"signature"`
+	ArtifactDir        string                     `json:"artifact_dir,omitempty"`
+	DurationMillis     int64                      `json:"duration_ms,omitempty"`
+	ArtifactBytes      int64                      `json:"artifact_bytes,omitempty"`
+	ArtifactFiles      int                        `json:"artifact_files,omitempty"`
+	MetricError        string                     `json:"metric_error,omitempty"`
+	Error              string                     `json:"error,omitempty"`
 }
 
 type TargetSuiteTaskSummary struct {
@@ -54,6 +55,7 @@ type TargetSuiteTaskSummary struct {
 	Unconfirmed          int                           `json:"unconfirmed"`
 	Errors               int                           `json:"errors"`
 	AttributionSummaries []TargetSuiteAttributionStats `json:"attribution_summaries,omitempty"`
+	ComplianceSummaries  []TargetSuiteComplianceStats  `json:"compliance_summaries,omitempty"`
 }
 
 type TargetSuiteAttributionStats struct {
@@ -61,6 +63,13 @@ type TargetSuiteAttributionStats struct {
 	TotalRuns   int    `json:"total_runs"`
 	Confirmed   int    `json:"confirmed"`
 	Unconfirmed int    `json:"unconfirmed"`
+}
+
+type TargetSuiteComplianceStats struct {
+	Status      TargetTaskComplianceStatus `json:"status"`
+	TotalRuns   int                        `json:"total_runs"`
+	Confirmed   int                        `json:"confirmed"`
+	Unconfirmed int                        `json:"unconfirmed"`
 }
 
 type TargetSuiteResult struct {
@@ -84,6 +93,7 @@ type TargetSuiteResult struct {
 	Unconfirmed          int                           `json:"unconfirmed"`
 	Errors               int                           `json:"errors"`
 	AttributionSummaries []TargetSuiteAttributionStats `json:"attribution_summaries,omitempty"`
+	ComplianceSummaries  []TargetSuiteComplianceStats  `json:"compliance_summaries,omitempty"`
 	TaskSummaries        []TargetSuiteTaskSummary      `json:"task_summaries"`
 	Results              []TargetSuiteRunResult        `json:"results"`
 	CorpusEntries        []CorpusEntry                 `json:"corpus_entries,omitempty"`
@@ -143,9 +153,12 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	summaries := make(map[string]*TargetSuiteTaskSummary, len(tasks))
 	attributionSummary := make(map[string]*TargetSuiteAttributionStats)
 	taskAttributions := make(map[string]map[string]*TargetSuiteAttributionStats, len(tasks))
+	complianceSummary := make(map[TargetTaskComplianceStatus]*TargetSuiteComplianceStats)
+	taskCompliances := make(map[string]map[TargetTaskComplianceStatus]*TargetSuiteComplianceStats, len(tasks))
 	for _, taskID := range tasks {
 		summaries[taskID] = &TargetSuiteTaskSummary{TaskID: taskID}
 		taskAttributions[taskID] = make(map[string]*TargetSuiteAttributionStats)
+		taskCompliances[taskID] = make(map[TargetTaskComplianceStatus]*TargetSuiteComplianceStats)
 	}
 
 	for iteration := 1; iteration <= opts.Repeat; iteration++ {
@@ -193,6 +206,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 			item.Completed = runResult.Completed
 			item.LateObserveDelayMs = runResult.LateObserveDelayMs
 			item.TargetOracle = runResult.TargetOracle
+			item.TaskCompliance = runResult.TaskCompliance
 			item.Signature = runResult.Signature
 			item.ArtifactDir = runResult.ArtifactDir
 			finalizeTargetSuiteItemMetrics(&item, startedRun)
@@ -208,6 +222,8 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 			}
 			recordTargetSuiteAttribution(attributionSummary, item.TargetOracle.Attribution, item.Confirmed)
 			recordTargetSuiteAttribution(taskAttributions[taskID], item.TargetOracle.Attribution, item.Confirmed)
+			recordTargetSuiteCompliance(complianceSummary, item.TaskCompliance.Status, item.Confirmed)
+			recordTargetSuiteCompliance(taskCompliances[taskID], item.TaskCompliance.Status, item.Confirmed)
 			result.Results = append(result.Results, item)
 		}
 	}
@@ -216,9 +232,11 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	result.TaskSummaries = make([]TargetSuiteTaskSummary, 0, len(tasks))
 	for _, taskID := range tasks {
 		summaries[taskID].AttributionSummaries = targetSuiteAttributionStats(taskAttributions[taskID])
+		summaries[taskID].ComplianceSummaries = targetSuiteComplianceStats(taskCompliances[taskID])
 		result.TaskSummaries = append(result.TaskSummaries, *summaries[taskID])
 	}
 	result.AttributionSummaries = targetSuiteAttributionStats(attributionSummary)
+	result.ComplianceSummaries = targetSuiteComplianceStats(complianceSummary)
 	result.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	corpusEntries, err := WriteTargetCorpus(opts.CorpusDir, result)
 	if err != nil {
@@ -262,6 +280,23 @@ func recordTargetSuiteAttribution(stats map[string]*TargetSuiteAttributionStats,
 	item.Unconfirmed++
 }
 
+func recordTargetSuiteCompliance(stats map[TargetTaskComplianceStatus]*TargetSuiteComplianceStats, status TargetTaskComplianceStatus, confirmed bool) {
+	if status == "" {
+		return
+	}
+	item, ok := stats[status]
+	if !ok {
+		item = &TargetSuiteComplianceStats{Status: status}
+		stats[status] = item
+	}
+	item.TotalRuns++
+	if confirmed {
+		item.Confirmed++
+		return
+	}
+	item.Unconfirmed++
+}
+
 func targetSuiteAttributionStats(stats map[string]*TargetSuiteAttributionStats) []TargetSuiteAttributionStats {
 	if len(stats) == 0 {
 		return nil
@@ -276,4 +311,42 @@ func targetSuiteAttributionStats(stats map[string]*TargetSuiteAttributionStats) 
 		summary = append(summary, *stats[attribution])
 	}
 	return summary
+}
+
+func targetSuiteComplianceStats(stats map[TargetTaskComplianceStatus]*TargetSuiteComplianceStats) []TargetSuiteComplianceStats {
+	if len(stats) == 0 {
+		return nil
+	}
+	statuses := make([]TargetTaskComplianceStatus, 0, len(stats))
+	for status := range stats {
+		statuses = append(statuses, status)
+	}
+	sort.Slice(statuses, func(i, j int) bool {
+		li := targetTaskComplianceStatusOrder(statuses[i])
+		lj := targetTaskComplianceStatusOrder(statuses[j])
+		if li != lj {
+			return li < lj
+		}
+		return statuses[i] < statuses[j]
+	})
+	summary := make([]TargetSuiteComplianceStats, 0, len(statuses))
+	for _, status := range statuses {
+		summary = append(summary, *stats[status])
+	}
+	return summary
+}
+
+func targetTaskComplianceStatusOrder(status TargetTaskComplianceStatus) int {
+	switch status {
+	case targetTaskComplianceStatusCompliant:
+		return 0
+	case targetTaskComplianceStatusViolated:
+		return 1
+	case targetTaskComplianceStatusUnknown:
+		return 2
+	case targetTaskComplianceStatusNotApplicable:
+		return 3
+	default:
+		return 4
+	}
 }

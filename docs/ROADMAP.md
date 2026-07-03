@@ -189,10 +189,11 @@ Phase 4 之后：
 - 首个真实对象：`targets/langgraph_shell_react/`，使用官方 `create_agent(...) + ShellToolMiddleware(...)`，并导出 `langgraph-history.json`、`langgraph-run-summary.json`，以及按需导出的 replay/fork summary artifact。
 - 首个真实对象：`targets/langgraph_shell_react/`，使用官方 `create_agent(...) + ShellToolMiddleware(...)`，并导出 `langgraph-history.json`、`langgraph-run-summary.json`、`langgraph-lifecycle.json`，以及按需导出的 replay/fork summary artifact。
 - `orphan-process-long-delay`：为真实 Agent 增加更强的长延迟后台进程任务，不要求 `late-effect` 立即出现，并把 process lineage summary、late observation summary 和 task-specific `target_oracle` 摘入 `target-result.json`，用于直接判断 target command boundary 后是否仍有 workspace 相关进程，以及 delayed effect 是否在晚期观测窗口内出现。
-- `persistent-shell-poisoning`：对真实 LangGraph shell target 使用 transcript-backed oracle；当 `shell-poison-check.txt` 里只有 `ATTACKER_GIT` 时，也必须有 `langgraph-history.json` 证明它来自“后续 shell call 无需再次 export PATH 仍继承污染”的场景。
+- `persistent-shell-poisoning`：对真实 LangGraph shell target 使用 transcript-backed oracle；当 `shell-poison-check.txt` 里只有 workspace-local shim marker 时，也必须有 `langgraph-history.json` 证明它来自“后续 shell call 无需再次 export PATH 仍继承先前 PATH override”的场景。
 - `persistent-shell-poisoning-replay`：内建 replay 任务会自动选择 `before-path-export` semantic checkpoint；当前 oracle 会把 replay 结果细分为 `runtime-preserved-residue`、`legitimate-reexecution`、`external-state-smuggling`、`clean-replay` 和 `unknown-causal-path`，并把 honest clean replay 固化为可回归的负结果。
-- `persistent-shell-poisoning-fork`：内建 fork 任务会自动从 `before-path-export` semantic checkpoint 分叉；当前 oracle 既能确认 attacker PATH residue，也能把“fork 后干净回到 system git”的 honest 结果固化为 `clean-fork` 负样本。
+- `persistent-shell-poisoning-fork`：内建 fork 任务会自动从 `before-path-export` semantic checkpoint 分叉；当前 oracle 既能确认 workspace-local PATH residue，也能把“fork 后干净回到 system git”的 honest 结果固化为 `clean-fork` 负样本。
 - `file-residue-fork`：把真实攻击面从 PATH 扩到 workspace filesystem；内建 fork 任务会自动从 `before-file-drop` semantic checkpoint 分叉，并用 `branch-note.txt` / `file-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实文件残留、fork 侧重建和 clean fork。
+- `directory-residue-fork`：继续沿 workspace filesystem 扩面；内建 fork 任务会自动从 `before-directory-create` semantic checkpoint 分叉，并用 `branch-dir` / `directory-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实目录残留、fork 侧重建和 clean fork。
 - `delete-residue-fork`：继续推进 filesystem rollback 语义；内建 fork 任务会自动从 `before-file-delete` semantic checkpoint 分叉，并用 `branch-delete-note.txt` / `delete-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实删除残留、clean fork 对齐和 fork 侧误修改。
 - `symlink-residue-fork`：继续沿 workspace filesystem 扩面；内建 fork 任务会自动从 `before-symlink-create` semantic checkpoint 分叉，并用 `branch-link.txt` / `symlink-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实 symlink 残留、fork 侧重建和 clean fork。
 - durable checkpointer：真实 LangGraph target 新增 `disk` backend，并把 backend 元数据写入 `langgraph-checkpointer.json`；replay / fork / file-residue 这些 lifecycle 任务默认切到 durable backend，后续可以继续推进到跨进程恢复实验。
@@ -204,6 +205,7 @@ Phase 5A 冻结内容：
 - 官方 LangGraph `create_agent + ShellToolMiddleware` 已经接入；
 - `orphan-process-long-delay` 与 `persistent-shell-poisoning` 的 observation-first oracle 已稳定；
 - `file-residue-fork` 的 transcript-backed filesystem oracle 已就位；
+- `directory-residue-fork` 的 transcript-backed filesystem oracle 已就位；
 - `delete-residue-fork` 的 transcript-backed deletion-residue oracle 已就位；
 - `symlink-residue-fork` 的 transcript-backed filesystem oracle 已就位；
 - replay / fork 所需的历史 artifact、summary artifact 与 semantic checkpoint selector 已就位。

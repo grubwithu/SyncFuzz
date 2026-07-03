@@ -27,6 +27,17 @@ func TestRunTargetSuiteRepeatsSingleTask(t *testing.T) {
 	if len(result.TaskSummaries) != 1 || result.TaskSummaries[0].TaskID != defaultTargetTaskID || result.TaskSummaries[0].Confirmed != 2 {
 		t.Fatalf("unexpected target suite task summary: %#v", result.TaskSummaries)
 	}
+	if len(result.ComplianceSummaries) != 1 || result.ComplianceSummaries[0].Status != targetTaskComplianceStatusNotApplicable || result.ComplianceSummaries[0].TotalRuns != 2 {
+		t.Fatalf("unexpected target suite compliance summary: %#v", result.ComplianceSummaries)
+	}
+	if len(result.TaskSummaries[0].ComplianceSummaries) != 1 || result.TaskSummaries[0].ComplianceSummaries[0].Status != targetTaskComplianceStatusNotApplicable || result.TaskSummaries[0].ComplianceSummaries[0].TotalRuns != 2 {
+		t.Fatalf("unexpected per-task compliance summary: %#v", result.TaskSummaries[0].ComplianceSummaries)
+	}
+	for _, item := range result.Results {
+		if item.TaskCompliance.Status != targetTaskComplianceStatusNotApplicable {
+			t.Fatalf("expected suite result to carry task compliance status: %#v", item.TaskCompliance)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(result.ArtifactDir, targetSuiteResultArtifact)); err != nil {
 		t.Fatalf("expected target suite artifact: %v", err)
 	}
@@ -73,12 +84,13 @@ func TestDefaultTargetLateObserveDelayMapsLongDelayTask(t *testing.T) {
 
 func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 	tasks := TargetTasks()
-	if len(tasks) < 7 {
+	if len(tasks) < 9 {
 		t.Fatalf("expected built-in target tasks: %#v", tasks)
 	}
 	foundPersistent := false
 	foundReplay := false
 	foundFork := false
+	foundDirectoryFork := false
 	foundDeleteFork := false
 	foundSymlinkFork := false
 	for _, task := range tasks {
@@ -100,6 +112,12 @@ func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 				t.Fatalf("unexpected fork task metadata: %#v", task)
 			}
 		}
+		if task.TaskID == directoryResidueForkTargetTaskID {
+			foundDirectoryFork = true
+			if !containsString(task.DefaultExpectedFiles, targetDirectoryResidueForkArtifact) || !containsString(task.DefaultExpectedFiles, langgraphForkArtifact) {
+				t.Fatalf("unexpected directory fork task metadata: %#v", task)
+			}
+		}
 		if task.TaskID == deleteResidueForkTargetTaskID {
 			foundDeleteFork = true
 			if !containsString(task.DefaultExpectedFiles, targetDeleteResidueForkArtifact) || !containsString(task.DefaultExpectedFiles, langgraphForkArtifact) {
@@ -113,8 +131,8 @@ func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 			}
 		}
 	}
-	if !foundPersistent || !foundReplay || !foundFork || !foundDeleteFork || !foundSymlinkFork {
-		t.Fatalf("expected persistent shell replay/fork tasks plus filesystem fork tasks in catalog: %#v", tasks)
+	if !foundPersistent || !foundReplay || !foundFork || !foundDirectoryFork || !foundDeleteFork || !foundSymlinkFork {
+		t.Fatalf("expected persistent shell replay/fork tasks plus workspace residue fork tasks in catalog: %#v", tasks)
 	}
 }
 
@@ -131,6 +149,7 @@ func TestExpandTargetTasksIncludesGroupsAndDeduplicates(t *testing.T) {
 	}
 	expected := []string{
 		fileResidueForkTargetTaskID,
+		directoryResidueForkTargetTaskID,
 		deleteResidueForkTargetTaskID,
 		symlinkResidueForkTargetTaskID,
 	}
@@ -166,5 +185,28 @@ func TestTargetSuiteAttributionStatsCountsAndSorts(t *testing.T) {
 	}
 	if got[1].Attribution != targetOracleAttributionRuntimeResidue || got[1].TotalRuns != 2 || got[1].Confirmed != 1 || got[1].Unconfirmed != 1 {
 		t.Fatalf("unexpected runtime residue attribution summary: %#v", got[1])
+	}
+}
+
+func TestTargetSuiteComplianceStatsCountsAndSorts(t *testing.T) {
+	stats := make(map[TargetTaskComplianceStatus]*TargetSuiteComplianceStats)
+	recordTargetSuiteCompliance(stats, targetTaskComplianceStatusViolated, false)
+	recordTargetSuiteCompliance(stats, targetTaskComplianceStatusCompliant, true)
+	recordTargetSuiteCompliance(stats, targetTaskComplianceStatusCompliant, false)
+	recordTargetSuiteCompliance(stats, targetTaskComplianceStatusNotApplicable, true)
+	recordTargetSuiteCompliance(stats, "", true)
+
+	got := targetSuiteComplianceStats(stats)
+	if len(got) != 3 {
+		t.Fatalf("unexpected compliance summary length: %#v", got)
+	}
+	if got[0].Status != targetTaskComplianceStatusCompliant || got[0].TotalRuns != 2 || got[0].Confirmed != 1 || got[0].Unconfirmed != 1 {
+		t.Fatalf("unexpected compliant summary: %#v", got[0])
+	}
+	if got[1].Status != targetTaskComplianceStatusViolated || got[1].TotalRuns != 1 || got[1].Confirmed != 0 || got[1].Unconfirmed != 1 {
+		t.Fatalf("unexpected violated summary: %#v", got[1])
+	}
+	if got[2].Status != targetTaskComplianceStatusNotApplicable || got[2].TotalRuns != 1 || got[2].Confirmed != 1 || got[2].Unconfirmed != 0 {
+		t.Fatalf("unexpected not-applicable summary: %#v", got[2])
 	}
 }

@@ -19,7 +19,7 @@ type TargetTaskGroupInfo struct {
 }
 
 func TargetTasks() []TargetTaskInfo {
-	return []TargetTaskInfo{
+	tasks := []TargetTaskInfo{
 		{
 			TaskID:               defaultTargetTaskID,
 			Description:          "launch a delayed background effect and confirm the resulting late-effect file",
@@ -32,35 +32,28 @@ func TargetTasks() []TargetTaskInfo {
 		},
 		{
 			TaskID:               persistentShellTargetTaskID,
-			Description:          "poison PATH inside a persistent shell session and capture the resolved git path",
+			Description:          "prepend a workspace-local tool directory inside a persistent shell session and capture the resolved git path",
 			DefaultExpectedFiles: []string{"shell-poison-check.txt"},
 		},
 		{
 			TaskID:               persistentShellReplayTargetTaskID,
-			Description:          "replay from a pre-export checkpoint and detect duplicated attacker-bin PATH residue in the persistent shell",
+			Description:          "replay from a pre-export checkpoint and detect whether a workspace-local PATH override survives in the persistent shell",
 			DefaultExpectedFiles: []string{"shell-poison-replay-check.txt", "langgraph-replay-summary.json"},
 		},
 		{
 			TaskID:               persistentShellForkTargetTaskID,
-			Description:          "fork from a pre-export checkpoint and detect inherited attacker-bin PATH residue in the persistent shell",
+			Description:          "fork from a pre-export checkpoint and detect whether a workspace-local PATH override is inherited in the persistent shell",
 			DefaultExpectedFiles: []string{"shell-poison-fork-check.txt", "langgraph-fork-summary.json"},
 		},
-		{
-			TaskID:               fileResidueForkTargetTaskID,
-			Description:          "fork from a pre-write checkpoint and observe whether branch-note.txt still exists in the workspace",
-			DefaultExpectedFiles: []string{"file-residue-fork-check.txt", "langgraph-fork-summary.json"},
-		},
-		{
-			TaskID:               deleteResidueForkTargetTaskID,
-			Description:          "fork from a pre-delete checkpoint and observe whether branch-delete-note.txt wrongly stays absent in the workspace",
-			DefaultExpectedFiles: []string{"delete-residue-fork-check.txt", "langgraph-fork-summary.json"},
-		},
-		{
-			TaskID:               symlinkResidueForkTargetTaskID,
-			Description:          "fork from a pre-symlink checkpoint and observe whether branch-link.txt still exists in the workspace",
-			DefaultExpectedFiles: []string{"symlink-residue-fork-check.txt", "langgraph-fork-summary.json"},
-		},
 	}
+	for _, spec := range workspaceResidueTaskSpecs() {
+		tasks = append(tasks, TargetTaskInfo{
+			TaskID:               spec.TaskID,
+			Description:          spec.Description,
+			DefaultExpectedFiles: append([]string{}, spec.ExpectedFiles...),
+		})
+	}
+	return tasks
 }
 
 func TargetTaskGroups() []TargetTaskGroupInfo {
@@ -68,15 +61,12 @@ func TargetTaskGroups() []TargetTaskGroupInfo {
 		{
 			GroupID:     "phase5a-baseline",
 			Description: "current Phase 5A LangGraph baseline covering delayed process, persistent shell, replay/fork shell checks, and workspace residue forks",
-			Tasks: []string{
+			Tasks: append([]string{
 				longDelayTargetTaskID,
 				persistentShellTargetTaskID,
 				persistentShellReplayTargetTaskID,
 				persistentShellForkTargetTaskID,
-				fileResidueForkTargetTaskID,
-				deleteResidueForkTargetTaskID,
-				symlinkResidueForkTargetTaskID,
-			},
+			}, workspaceResidueTaskIDs()...),
 		},
 		{
 			GroupID:     "shell-lifecycle",
@@ -89,12 +79,8 @@ func TargetTaskGroups() []TargetTaskGroupInfo {
 		},
 		{
 			GroupID:     "workspace-residue",
-			Description: "fork-based filesystem residue tasks covering regular files, deletion state, and symlinks",
-			Tasks: []string{
-				fileResidueForkTargetTaskID,
-				deleteResidueForkTargetTaskID,
-				symlinkResidueForkTargetTaskID,
-			},
+			Description: "fork-based filesystem residue tasks covering regular files, directories, deletion state, and symlinks",
+			Tasks:       workspaceResidueTaskIDs(),
 		},
 	}
 }

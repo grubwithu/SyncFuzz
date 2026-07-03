@@ -103,6 +103,7 @@ help:
 	@echo "  make target-langgraph-shell-react TARGET_TASK=persistent-shell-poisoning-replay"
 	@echo "  make target-langgraph-shell-react TARGET_TASK=persistent-shell-poisoning-fork"
 	@echo "  make target-langgraph-shell-react TARGET_TASK=file-residue-fork"
+	@echo "  make target-langgraph-shell-react TARGET_TASK=directory-residue-fork"
 	@echo "  make target-langgraph-shell-react TARGET_TASK=delete-residue-fork"
 	@echo "  make target-langgraph-shell-react TARGET_TASK=symlink-residue-fork"
 	@echo "  make target-langgraph-shell-react LANGGRAPH_CHECKPOINT_BACKEND=disk"

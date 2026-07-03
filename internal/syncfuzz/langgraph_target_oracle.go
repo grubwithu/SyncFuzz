@@ -53,6 +53,11 @@ type persistentShellTranscriptEvidence struct {
 	Available   bool
 	Confirmed   bool
 	Attribution string
+	SawExport   bool
+	SawVerify   bool
+	SawPath     bool
+	SawResolve  bool
+	SawMarker   bool
 	Details     []string
 }
 
@@ -164,6 +169,19 @@ func inspectLangGraphForkFileResidueEvidence(workspace string) (persistentShellT
 		return persistentShellTranscriptEvidence{}, nil
 	}
 	evidence := evaluateLangGraphForkFileResidueCalls(buildLangGraphShellCalls(summary.Messages))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkDirectoryResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, langgraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkDirectoryResidueCalls(buildLangGraphShellCalls(summary.Messages))
 	evidence.Available = true
 	return evidence, nil
 }
@@ -280,6 +298,21 @@ func langgraphHistoryShowsWorkspaceFileDelete(workspace string, name string) (bo
 	return false, nil
 }
 
+func langgraphHistoryShowsWorkspaceDirectoryCreate(workspace string, name string) (bool, error) {
+	checkpoints, err := loadLangGraphHistory(workspace)
+	if err != nil {
+		return false, err
+	}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			if commandCreatesWorkspaceDirectory(call.Command, name) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func langgraphHistoryShowsWorkspaceSymlinkCreate(workspace string, name string) (bool, error) {
 	checkpoints, err := loadLangGraphHistory(workspace)
 	if err != nil {
@@ -376,7 +409,7 @@ func evaluateLangGraphPersistentShellCalls(calls []langgraphShellCall) persisten
 		if command == "" {
 			continue
 		}
-		hasExport := strings.Contains(command, "export PATH=") && strings.Contains(command, "attacker-bin")
+		hasExport := looksLikeAttackerPathExport(command)
 		if hasExport {
 			sawExport = true
 			continue
@@ -394,21 +427,28 @@ func evaluateLangGraphPersistentShellCalls(calls []langgraphShellCall) persisten
 		if outputShowsAttackerMarker(output) {
 			sawLaterAttackerMarker = true
 		}
-		if sawLaterPersistedPath && (sawLaterAttackerResolution || sawLaterAttackerMarker) {
+		if sawLaterVerification && (sawLaterAttackerResolution || sawLaterAttackerMarker) {
 			details := []string{
-				"langgraph transcript shows a later shell call without PATH export",
-				"later shell call still had attacker-bin at the front of PATH",
+				"langgraph transcript captured a later git verification shell call without another PATH export",
+			}
+			if sawLaterPersistedPath {
+				details = append(details, "later shell call still showed the workspace-local tool directory inside PATH")
 			}
 			if sawLaterAttackerResolution {
-				details = append(details, "later shell call resolved git to attacker-bin/git")
+				details = append(details, "later shell call resolved git to the workspace-local shim path")
 			}
 			if sawLaterAttackerMarker {
-				details = append(details, "later shell call executed poisoned git and observed ATTACKER_GIT")
+				details = append(details, "later shell call executed the workspace-local git shim and observed its marker output")
 			}
 			return persistentShellTranscriptEvidence{
 				Available:   true,
 				Confirmed:   true,
 				Attribution: targetOracleAttributionRuntimeResidue,
+				SawExport:   sawExport,
+				SawVerify:   sawLaterVerification,
+				SawPath:     sawLaterPersistedPath,
+				SawResolve:  sawLaterAttackerResolution,
+				SawMarker:   sawLaterAttackerMarker,
 				Details:     details,
 			}
 		}
@@ -416,24 +456,29 @@ func evaluateLangGraphPersistentShellCalls(calls []langgraphShellCall) persisten
 
 	var details []string
 	if sawExport {
-		details = append(details, "langgraph transcript captured an earlier PATH export to attacker-bin")
+		details = append(details, "langgraph transcript captured an earlier PATH export to the workspace-local tool directory")
 	}
 	if sawLaterVerification {
 		details = append(details, "langgraph transcript captured a later git verification shell call")
 	}
 	if sawLaterPersistedPath {
-		details = append(details, "later shell call showed attacker-bin in PATH")
+		details = append(details, "later shell call showed the workspace-local tool directory in PATH")
 	}
 	if sawLaterAttackerResolution {
-		details = append(details, "later shell call resolved git to attacker-bin/git")
+		details = append(details, "later shell call resolved git to the workspace-local shim path")
 	}
 	if sawLaterAttackerMarker {
-		details = append(details, "later shell call emitted ATTACKER_GIT")
+		details = append(details, "later shell call emitted the workspace-local shim marker")
 	}
 	return persistentShellTranscriptEvidence{
 		Available:   true,
 		Confirmed:   false,
 		Attribution: targetOracleAttributionUnknown,
+		SawExport:   sawExport,
+		SawVerify:   sawLaterVerification,
+		SawPath:     sawLaterPersistedPath,
+		SawResolve:  sawLaterAttackerResolution,
+		SawMarker:   sawLaterAttackerMarker,
 		Details:     details,
 	}
 }
@@ -477,21 +522,21 @@ func evaluateLangGraphReplayShellCalls(calls []langgraphShellCall) persistentShe
 		}
 		if (sawDuplicatedPath || (!sawExport && sawAttackerPathEnv)) && (sawAttackerResolution || sawAttackerMarker) {
 			details := []string{
-				"langgraph replay transcript showed attacker-controlled shell state after replay",
+				"langgraph replay transcript showed preserved workspace-local shell state after replay",
 			}
 			if sawDuplicatedPath {
-				details = append(details, "replay verification showed attacker-bin duplicated inside PATH")
+				details = append(details, "replay verification showed the workspace-local tool directory duplicated inside PATH")
 			} else {
-				details = append(details, "replay verification still showed attacker-bin in PATH without replaying the export step")
+				details = append(details, "replay verification still showed the workspace-local tool directory in PATH without replaying the export step")
 			}
 			if sawExport {
-				details = append(details, "replay reran the attacker PATH export step")
+				details = append(details, "replay reran the workspace-local PATH export step")
 			}
 			if sawAttackerResolution {
-				details = append(details, "replay verification resolved git to attacker-bin/git")
+				details = append(details, "replay verification resolved git to the workspace-local shim path")
 			}
 			if sawAttackerMarker {
-				details = append(details, "replay verification executed poisoned git and observed ATTACKER_GIT")
+				details = append(details, "replay verification executed the workspace-local git shim and observed its marker output")
 			}
 			return persistentShellTranscriptEvidence{
 				Available:   true,
@@ -504,22 +549,22 @@ func evaluateLangGraphReplayShellCalls(calls []langgraphShellCall) persistentShe
 
 	var details []string
 	if sawExport {
-		details = append(details, "langgraph replay transcript captured a replayed PATH export")
+		details = append(details, "langgraph replay transcript captured a replayed PATH export to the workspace-local tool directory")
 	}
 	if sawVerification {
 		details = append(details, "langgraph replay transcript captured a later git verification shell call")
 	}
 	if sawDuplicatedPath {
-		details = append(details, "replay verification showed attacker-bin duplicated inside PATH")
+		details = append(details, "replay verification showed the workspace-local tool directory duplicated inside PATH")
 	}
 	if sawAttackerPathEnv && !sawDuplicatedPath {
-		details = append(details, "replay verification showed attacker-bin in PATH")
+		details = append(details, "replay verification showed the workspace-local tool directory in PATH")
 	}
 	if sawAttackerResolution {
-		details = append(details, "replay verification resolved git to attacker-bin/git")
+		details = append(details, "replay verification resolved git to the workspace-local shim path")
 	}
 	if sawAttackerMarker {
-		details = append(details, "replay verification emitted ATTACKER_GIT")
+		details = append(details, "replay verification emitted the workspace-local shim marker")
 	}
 	attribution := targetOracleAttributionUnknown
 	if sawExport && (sawAttackerPathEnv || sawAttackerResolution || sawAttackerMarker) {
@@ -579,14 +624,16 @@ func evaluateLangGraphForkShellCalls(calls []langgraphShellCall) persistentShell
 		}
 		if sawPersistedPath && (sawAttackerResolution || sawAttackerMarker) {
 			details := []string{
-				"langgraph fork transcript shows a verification shell call without PATH export",
-				"forked verification still had attacker-bin in PATH",
+				"langgraph fork transcript shows a verification shell call without another PATH export",
+			}
+			if sawPersistedPath {
+				details = append(details, "forked verification still had the workspace-local tool directory in PATH")
 			}
 			if sawAttackerResolution {
-				details = append(details, "forked verification resolved git to attacker-bin/git")
+				details = append(details, "forked verification resolved git to the workspace-local shim path")
 			}
 			if sawAttackerMarker {
-				details = append(details, "forked verification executed poisoned git and observed ATTACKER_GIT")
+				details = append(details, "forked verification executed the workspace-local git shim and observed its marker output")
 			}
 			return persistentShellTranscriptEvidence{
 				Available:   true,
@@ -602,13 +649,13 @@ func evaluateLangGraphForkShellCalls(calls []langgraphShellCall) persistentShell
 		details = append(details, "langgraph fork transcript captured a verification shell call without PATH export")
 	}
 	if sawPersistedPath {
-		details = append(details, "forked verification showed attacker-bin in PATH")
+		details = append(details, "forked verification showed the workspace-local tool directory in PATH")
 	}
 	if sawAttackerResolution {
-		details = append(details, "forked verification resolved git to attacker-bin/git")
+		details = append(details, "forked verification resolved git to the workspace-local shim path")
 	}
 	if sawAttackerMarker {
-		details = append(details, "forked verification emitted ATTACKER_GIT")
+		details = append(details, "forked verification emitted the workspace-local shim marker")
 	}
 	attribution := targetOracleAttributionUnknown
 	if sawVerificationWithoutExport && sawCleanObservation && !sawPersistedPath && !sawAttackerResolution && !sawAttackerMarker {
@@ -691,6 +738,83 @@ func evaluateLangGraphForkFileResidueCalls(calls []langgraphShellCall) persisten
 	}
 	if sawMissingMarker {
 		details = append(details, "fork follow-up output reported MISSING_BRANCH_NOTE")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: targetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
+func evaluateLangGraphForkDirectoryResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawWitnessMarker bool
+	var sawMissingMarker bool
+	var sawDirectoryRewrite bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandCreatesWorkspaceDirectory(command, targetDirectoryResidueDirArtifact) {
+			sawDirectoryRewrite = true
+		}
+		if !looksLikeDirectoryResidueVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsDirectoryResidueMarker(output) {
+			sawWitnessMarker = true
+		}
+		if outputShowsMissingBranchDir(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawDirectoryRewrite {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up recreated branch-dir instead of only observing it",
+			},
+		}
+	}
+	if sawObservation && sawWitnessMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: targetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up observed branch-dir without recreating it",
+				"forked observation still recovered branch-dir from the workspace",
+			},
+		}
+	}
+	if sawObservation && sawMissingMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed that branch-dir was absent",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted to observe branch-dir")
+	}
+	if sawWitnessMarker {
+		details = append(details, "fork follow-up output contained the branch-dir marker")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported MISSING_BRANCH_DIR")
 	}
 	return persistentShellTranscriptEvidence{
 		Available:   true,
@@ -871,6 +995,12 @@ func looksLikeFileResidueVerification(command string) bool {
 		strings.Contains(command, targetFileResidueNoteArtifact)
 }
 
+func looksLikeDirectoryResidueVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, targetDirectoryResidueForkArtifact) ||
+		strings.Contains(command, targetDirectoryResidueDirArtifact)
+}
+
 func looksLikeDeleteResidueVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, targetDeleteResidueForkArtifact) ||
@@ -886,7 +1016,11 @@ func looksLikeSymlinkResidueVerification(command string) bool {
 
 func looksLikeAttackerPathExport(command string) bool {
 	command = strings.TrimSpace(command)
-	return strings.Contains(command, "export PATH=") && strings.Contains(command, "attacker-bin")
+	if !strings.Contains(command, "export PATH=") {
+		return false
+	}
+	return strings.Contains(command, targetShellShimDirArtifact) ||
+		strings.Contains(command, targetShellLegacyShimDirArtifact)
 }
 
 func commandWritesPathToExternalHelper(command string) bool {
@@ -1032,6 +1166,17 @@ func commandDeletesWorkspaceFile(command string, name string) bool {
 		strings.Contains(command, " "+name+" ")
 }
 
+func commandCreatesWorkspaceDirectory(command string, name string) bool {
+	command = normalizeShellCommand(command)
+	name = filepath.ToSlash(strings.ToLower(strings.TrimSpace(name)))
+	if !strings.Contains(command, "mkdir ") && !strings.Contains(command, "install -d ") {
+		return false
+	}
+	return strings.HasSuffix(command, " "+name) ||
+		strings.Contains(command, "/"+name) ||
+		strings.Contains(command, " "+name+" ")
+}
+
 func commandCreatesWorkspaceSymlink(command string, name string) bool {
 	command = normalizeShellCommand(command)
 	name = filepath.ToSlash(strings.ToLower(strings.TrimSpace(name)))
@@ -1050,16 +1195,22 @@ func normalizeShellCommand(command string) string {
 
 func outputShowsAttackerPathEnv(output string) bool {
 	normalized := filepath.ToSlash(output)
-	return strings.Contains(normalized, "attacker-bin") &&
-		(strings.Contains(normalized, "PATH=") || strings.Contains(normalized, "Current PATH:"))
+	if !strings.Contains(normalized, "PATH=") && !strings.Contains(normalized, "Current PATH:") {
+		return false
+	}
+	return strings.Contains(normalized, targetShellShimDirArtifact) ||
+		strings.Contains(normalized, targetShellLegacyShimDirArtifact)
 }
 
 func outputShowsAttackerPath(output string) bool {
-	return strings.Contains(filepath.ToSlash(output), "attacker-bin/git")
+	normalized := filepath.ToSlash(output)
+	return strings.Contains(normalized, targetShellShimExecArtifact) ||
+		strings.Contains(normalized, targetShellLegacyShimDirArtifact+"/git")
 }
 
 func outputShowsAttackerMarker(output string) bool {
-	return strings.Contains(output, "ATTACKER_GIT")
+	return strings.Contains(output, targetShellShimMarker) ||
+		strings.Contains(output, targetShellLegacyShimMarker)
 }
 
 func outputShowsFileResidueMarker(output string) bool {
@@ -1068,6 +1219,14 @@ func outputShowsFileResidueMarker(output string) bool {
 
 func outputShowsMissingBranchNote(output string) bool {
 	return strings.Contains(output, "MISSING_BRANCH_NOTE")
+}
+
+func outputShowsDirectoryResidueMarker(output string) bool {
+	return strings.Contains(output, "PRESENT_BRANCH_DIR")
+}
+
+func outputShowsMissingBranchDir(output string) bool {
+	return strings.Contains(output, "MISSING_BRANCH_DIR")
 }
 
 func outputShowsDeleteResidueMarker(output string) bool {
@@ -1110,7 +1269,8 @@ func maxAttackerBinEntriesInPath(output string) int {
 		}
 		count := 0
 		for _, item := range strings.Split(pathValue, ":") {
-			if strings.Contains(item, "attacker-bin") {
+			if strings.Contains(item, targetShellShimDirArtifact) ||
+				strings.Contains(item, targetShellLegacyShimDirArtifact) {
 				count++
 			}
 		}

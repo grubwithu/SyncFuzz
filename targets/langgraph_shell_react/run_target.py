@@ -24,6 +24,7 @@ SHELL_REQUIRED_TASKS = {
     "persistent-shell-poisoning-replay",
     "persistent-shell-poisoning-fork",
     "file-residue-fork",
+    "directory-residue-fork",
     "delete-residue-fork",
     "symlink-residue-fork",
 }
@@ -1215,6 +1216,8 @@ def resolve_checkpoint_selector(history: list[Any], selector: str) -> int:
         return checkpoint_before_path_export(history)
     if selector == "before-file-drop":
         return checkpoint_before_file_drop(history)
+    if selector == "before-directory-create":
+        return checkpoint_before_directory_create(history)
     if selector == "before-file-delete":
         return checkpoint_before_file_delete(history)
     if selector == "before-symlink-create":
@@ -1261,6 +1264,21 @@ def checkpoint_before_file_delete(history: list[Any]) -> int:
     return -1
 
 
+def checkpoint_before_directory_create(history: list[Any]) -> int:
+    saw_directory_create_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_directory_create = state_has_directory_create(history[index])
+        if not saw_directory_create_in_newer_state and has_directory_create:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_directory_create_in_newer_state = (
+            saw_directory_create_in_newer_state or has_directory_create
+        )
+    return -1
+
+
 def checkpoint_before_symlink_create(history: list[Any]) -> int:
     saw_symlink_create_in_newer_state = False
     for index in range(len(history) - 1, -1, -1):
@@ -1281,7 +1299,9 @@ def state_has_path_export(state: Any) -> bool:
     messages = values.get("messages", []) or []
     for message in messages:
         for command in shell_commands_from_message(message):
-            if "export PATH=" in command and "attacker-bin" in command:
+            if "export PATH=" in command and (
+                "workspace-bin" in command or "attacker-bin" in command
+            ):
                 return True
     return False
 
@@ -1304,6 +1324,17 @@ def state_has_file_delete(state: Any) -> bool:
         for command in shell_commands_from_message(message):
             normalized = normalize_shell_command(command)
             if command_deletes_workspace_file(normalized, "branch-delete-note.txt"):
+                return True
+    return False
+
+
+def state_has_directory_create(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_creates_workspace_directory(normalized, "branch-dir"):
                 return True
     return False
 
@@ -1339,6 +1370,17 @@ def command_writes_workspace_file(command: str, filename: str) -> bool:
 def command_deletes_workspace_file(command: str, filename: str) -> bool:
     filename = filename.lower()
     if "rm " not in command and "unlink " not in command:
+        return False
+    return (
+        command.endswith(" " + filename)
+        or ("/" + filename) in command
+        or (" " + filename + " ") in command
+    )
+
+
+def command_creates_workspace_directory(command: str, filename: str) -> bool:
+    filename = filename.lower()
+    if "mkdir " not in command and "install -d " not in command:
         return False
     return (
         command.endswith(" " + filename)

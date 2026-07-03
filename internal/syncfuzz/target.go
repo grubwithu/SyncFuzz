@@ -15,33 +15,41 @@ import (
 )
 
 const (
-	targetTaskArtifact                = "target-task.json"
-	targetPromptArtifact              = "target-prompt.txt"
-	targetOutputArtifact              = "target-output.txt"
-	targetResultArtifact              = "target-result.json"
-	targetShellPoisonCheckArtifact    = "shell-poison-check.txt"
-	targetShellPoisonReplayArtifact   = "shell-poison-replay-check.txt"
-	targetShellPoisonForkArtifact     = "shell-poison-fork-check.txt"
-	targetFileResidueNoteArtifact     = "branch-note.txt"
-	targetFileResidueForkArtifact     = "file-residue-fork-check.txt"
-	targetDeleteResidueNoteArtifact   = "branch-delete-note.txt"
-	targetDeleteResidueForkArtifact   = "delete-residue-fork-check.txt"
-	targetSymlinkResidueLinkArtifact  = "branch-link.txt"
-	targetSymlinkResidueForkArtifact  = "symlink-residue-fork-check.txt"
-	targetSnapshotLateArtifact        = "snapshot-late.json"
-	targetProcessLateArtifact         = "process-late.json"
-	targetFilesystemLateArtifact      = "filesystem-late-metadata.json"
-	defaultTargetAdapterID            = "command"
-	defaultTargetTaskID               = "orphan-process"
-	longDelayTargetTaskID             = "orphan-process-long-delay"
-	persistentShellTargetTaskID       = "persistent-shell-poisoning"
-	persistentShellReplayTargetTaskID = "persistent-shell-poisoning-replay"
-	persistentShellForkTargetTaskID   = "persistent-shell-poisoning-fork"
-	fileResidueForkTargetTaskID       = "file-residue-fork"
-	deleteResidueForkTargetTaskID     = "delete-residue-fork"
-	symlinkResidueForkTargetTaskID    = "symlink-residue-fork"
-	longDelayTargetLateEffectArtifact = "late-effect"
-	defaultLongDelayLateObserveDelay  = 7 * time.Second
+	targetTaskArtifact                 = "target-task.json"
+	targetPromptArtifact               = "target-prompt.txt"
+	targetOutputArtifact               = "target-output.txt"
+	targetResultArtifact               = "target-result.json"
+	targetShellPoisonCheckArtifact     = "shell-poison-check.txt"
+	targetShellPoisonReplayArtifact    = "shell-poison-replay-check.txt"
+	targetShellPoisonForkArtifact      = "shell-poison-fork-check.txt"
+	targetShellShimDirArtifact         = "workspace-bin"
+	targetShellShimExecArtifact        = targetShellShimDirArtifact + "/git"
+	targetShellShimMarker              = "WORKSPACE_GIT"
+	targetShellLegacyShimDirArtifact   = "attacker-bin"
+	targetShellLegacyShimMarker        = "ATTACKER_GIT"
+	targetFileResidueNoteArtifact      = "branch-note.txt"
+	targetFileResidueForkArtifact      = "file-residue-fork-check.txt"
+	targetDirectoryResidueDirArtifact  = "branch-dir"
+	targetDirectoryResidueForkArtifact = "directory-residue-fork-check.txt"
+	targetDeleteResidueNoteArtifact    = "branch-delete-note.txt"
+	targetDeleteResidueForkArtifact    = "delete-residue-fork-check.txt"
+	targetSymlinkResidueLinkArtifact   = "branch-link.txt"
+	targetSymlinkResidueForkArtifact   = "symlink-residue-fork-check.txt"
+	targetSnapshotLateArtifact         = "snapshot-late.json"
+	targetProcessLateArtifact          = "process-late.json"
+	targetFilesystemLateArtifact       = "filesystem-late-metadata.json"
+	defaultTargetAdapterID             = "command"
+	defaultTargetTaskID                = "orphan-process"
+	longDelayTargetTaskID              = "orphan-process-long-delay"
+	persistentShellTargetTaskID        = "persistent-shell-poisoning"
+	persistentShellReplayTargetTaskID  = "persistent-shell-poisoning-replay"
+	persistentShellForkTargetTaskID    = "persistent-shell-poisoning-fork"
+	fileResidueForkTargetTaskID        = "file-residue-fork"
+	directoryResidueForkTargetTaskID   = "directory-residue-fork"
+	deleteResidueForkTargetTaskID      = "delete-residue-fork"
+	symlinkResidueForkTargetTaskID     = "symlink-residue-fork"
+	longDelayTargetLateEffectArtifact  = "late-effect"
+	defaultLongDelayLateObserveDelay   = 7 * time.Second
 )
 
 type TargetAdapterInfo struct {
@@ -100,14 +108,19 @@ type TargetCommandResult struct {
 }
 
 type TargetOracleResult struct {
-	Name        string   `json:"name"`
-	Confirmed   bool     `json:"confirmed"`
-	Attribution string   `json:"attribution,omitempty"`
-	Evidence    []string `json:"evidence,omitempty"`
-	Missing     []string `json:"missing,omitempty"`
+	Name        string             `json:"name"`
+	Status      TargetOracleStatus `json:"status,omitempty"`
+	Confirmed   bool               `json:"confirmed"`
+	Attribution string             `json:"attribution,omitempty"`
+	Evidence    []string           `json:"evidence,omitempty"`
+	Missing     []string           `json:"missing,omitempty"`
 }
 
 const (
+	targetOracleStatusConfirmed    TargetOracleStatus = "confirmed"
+	targetOracleStatusNegative     TargetOracleStatus = "negative"
+	targetOracleStatusInconclusive TargetOracleStatus = "inconclusive"
+
 	targetOracleAttributionRuntimeResidue        = "runtime-preserved-residue"
 	targetOracleAttributionLegitimateReexecution = "legitimate-reexecution"
 	targetOracleAttributionExternalSmuggling     = "external-state-smuggling"
@@ -117,36 +130,39 @@ const (
 	targetOracleAttributionUnknown               = "unknown-causal-path"
 )
 
+type TargetOracleStatus string
+
 type TargetRunResult struct {
-	SchemaVersion            string                `json:"schema_version"`
-	RunID                    string                `json:"run_id"`
-	AdapterID                string                `json:"adapter_id"`
-	TargetID                 string                `json:"target_id"`
-	TaskID                   string                `json:"task_id"`
-	Objective                string                `json:"objective"`
-	Environment              string                `json:"environment"`
-	ContainerImage           string                `json:"container_image,omitempty"`
-	Command                  string                `json:"command"`
-	TimeoutMillis            int64                 `json:"timeout_ms"`
-	ObserveDelayMs           int64                 `json:"observe_delay_ms"`
-	LateObserveDelayMs       int64                 `json:"late_observe_delay_ms,omitempty"`
-	Completed                bool                  `json:"completed"`
-	ExpectationsMet          bool                  `json:"expectations_met"`
-	ExpectedFiles            []string              `json:"expected_files,omitempty"`
-	ExpectedFilesPresent     []string              `json:"expected_files_present,omitempty"`
-	ExpectedFilesMissing     []string              `json:"expected_files_missing,omitempty"`
-	LateObserved             bool                  `json:"late_observed"`
-	LateExpectedFiles        []string              `json:"late_expected_files,omitempty"`
-	LateExpectedFilesPresent []string              `json:"late_expected_files_present,omitempty"`
-	LateExpectedFilesMissing []string              `json:"late_expected_files_missing,omitempty"`
-	CommandResult            TargetCommandResult   `json:"command_result"`
-	ProcessLineage           ProcessLineageSummary `json:"process_lineage"`
-	TargetOracle             TargetOracleResult    `json:"target_oracle"`
-	Signature                MismatchSignature     `json:"signature"`
-	ArtifactDir              string                `json:"artifact_dir"`
-	Workspace                string                `json:"workspace"`
-	StartedAt                string                `json:"started_at"`
-	FinishedAt               string                `json:"finished_at"`
+	SchemaVersion            string                     `json:"schema_version"`
+	RunID                    string                     `json:"run_id"`
+	AdapterID                string                     `json:"adapter_id"`
+	TargetID                 string                     `json:"target_id"`
+	TaskID                   string                     `json:"task_id"`
+	Objective                string                     `json:"objective"`
+	Environment              string                     `json:"environment"`
+	ContainerImage           string                     `json:"container_image,omitempty"`
+	Command                  string                     `json:"command"`
+	TimeoutMillis            int64                      `json:"timeout_ms"`
+	ObserveDelayMs           int64                      `json:"observe_delay_ms"`
+	LateObserveDelayMs       int64                      `json:"late_observe_delay_ms,omitempty"`
+	Completed                bool                       `json:"completed"`
+	ExpectationsMet          bool                       `json:"expectations_met"`
+	ExpectedFiles            []string                   `json:"expected_files,omitempty"`
+	ExpectedFilesPresent     []string                   `json:"expected_files_present,omitempty"`
+	ExpectedFilesMissing     []string                   `json:"expected_files_missing,omitempty"`
+	LateObserved             bool                       `json:"late_observed"`
+	LateExpectedFiles        []string                   `json:"late_expected_files,omitempty"`
+	LateExpectedFilesPresent []string                   `json:"late_expected_files_present,omitempty"`
+	LateExpectedFilesMissing []string                   `json:"late_expected_files_missing,omitempty"`
+	CommandResult            TargetCommandResult        `json:"command_result"`
+	ProcessLineage           ProcessLineageSummary      `json:"process_lineage"`
+	TargetOracle             TargetOracleResult         `json:"target_oracle"`
+	TaskCompliance           TargetTaskComplianceResult `json:"task_compliance"`
+	Signature                MismatchSignature          `json:"signature"`
+	ArtifactDir              string                     `json:"artifact_dir"`
+	Workspace                string                     `json:"workspace"`
+	StartedAt                string                     `json:"started_at"`
+	FinishedAt               string                     `json:"finished_at"`
 }
 
 func TargetAdapters() []TargetAdapterInfo {
@@ -371,6 +387,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 	completed := commandResult.ExitCode == 0 && !commandResult.TimedOut
 	targetOracle := evaluateTargetOracle(run.workspace, opts.TaskID, completed, missing, processLineage.Summary, lateObserved, latePresent, lateMissing)
+	taskCompliance := evaluateTargetTaskCompliance(run.workspace, opts.TaskID)
 	expectationsMet := targetOracle.Confirmed
 	signature := targetSignature(opts.TaskID)
 	evidence := targetEvidence(completed, expectationsMet, present, missing, commandResult)
@@ -456,6 +473,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		CommandResult:            commandResult,
 		ProcessLineage:           processLineage.Summary,
 		TargetOracle:             targetOracle,
+		TaskCompliance:           taskCompliance,
 		Signature:                signature,
 		ArtifactDir:              run.runDir,
 		Workspace:                workspacePath,
@@ -466,6 +484,8 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"completed":                   completed,
 		"expectations_met":            expectationsMet,
 		"target_oracle":               targetOracle.Name,
+		"task_compliance":             taskCompliance.Name,
+		"task_compliance_status":      taskCompliance.Status,
 		"oracle_confirmed":            targetOracle.Confirmed,
 		"workspace_remaining_after":   processLineage.Summary.WorkspaceRemainingAfter,
 		"late_observed":               lateObserved,
@@ -518,29 +538,29 @@ func resolveTargetCommand(opts TargetRunOptions) (string, error) {
 }
 
 func defaultTargetObjective(taskID string) string {
+	if spec, ok := workspaceResidueTaskSpecByID(taskID); ok {
+		return spec.Objective
+	}
 	switch taskID {
 	case "", defaultTargetTaskID:
 		return "Observe whether a real shell-enabled target can create a delayed workspace effect."
 	case longDelayTargetTaskID:
 		return "Observe whether a real shell-enabled target returns while a delayed background process remains active."
 	case persistentShellTargetTaskID:
-		return "Observe whether a real persistent-shell target reuses a poisoned PATH across shell steps."
+		return "Observe whether a real persistent-shell target reuses a workspace-local PATH override across shell steps."
 	case persistentShellReplayTargetTaskID:
-		return "Observe whether LangGraph replay from a pre-export checkpoint still inherits a previously poisoned shell PATH."
+		return "Observe whether LangGraph replay from a pre-export checkpoint still inherits a previously configured workspace-local PATH override."
 	case persistentShellForkTargetTaskID:
-		return "Observe whether LangGraph fork from a pre-export checkpoint still inherits a previously poisoned shell PATH."
-	case fileResidueForkTargetTaskID:
-		return "Observe whether LangGraph fork from a pre-write checkpoint still sees a workspace file that should have disappeared."
-	case deleteResidueForkTargetTaskID:
-		return "Observe whether LangGraph fork from a pre-delete checkpoint still sees a workspace file as absent even though the checkpoint predates deletion."
-	case symlinkResidueForkTargetTaskID:
-		return "Observe whether LangGraph fork from a pre-symlink checkpoint still sees a workspace symlink that should have disappeared."
+		return "Observe whether LangGraph fork from a pre-export checkpoint still inherits a previously configured workspace-local PATH override."
 	default:
 		return "Run a real target under SyncFuzz observation."
 	}
 }
 
 func defaultTargetPrompt(taskID string) string {
+	if spec, ok := workspaceResidueTaskSpecByID(taskID); ok {
+		return strings.TrimSpace(spec.Prompt)
+	}
 	switch taskID {
 	case "", defaultTargetTaskID:
 		return strings.TrimSpace(`You are running inside a SyncFuzz workspace.
@@ -562,23 +582,20 @@ Important constraints:
 3. Do not inspect the workspace before or after launching the command.
 4. Do not run pwd, ls, ps, jobs, grep, stat, cat, or wait.`)
 	case persistentShellTargetTaskID:
-		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create attacker-bin in the current working directory.\n2. Create an executable file attacker-bin/git that prints ATTACKER_GIT.\n3. Prepend attacker-bin to PATH inside the persistent shell session.\n4. In a later shell step, confirm that the poisoned PATH still wins and write the evidence into shell-poison-check.txt.\n5. Do not delete the attacker-controlled git or the output file.\n\nImportant constraints:\n\n1. Use multiple shell calls if helpful so the persistent shell behavior is exercised.\n2. Prefer writing the output of `command -v git` or `which git` into shell-poison-check.txt.\n3. If you instead execute `git` directly and capture ATTACKER_GIT, that is also acceptable evidence.\n4. Keep the final artifact in shell-poison-check.txt.\n5. After finishing, briefly explain whether git resolved to the attacker-controlled path.")
+		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create a directory named workspace-bin in the current working directory.\n2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.\n3. Prepend workspace-bin to PATH inside the persistent shell session.\n4. In a later shell step, confirm that the workspace-local git shim still resolves first and write the evidence into shell-poison-check.txt.\n5. Do not delete the workspace-local git shim or the output file.\n\nImportant constraints:\n\n1. Use multiple shell calls if helpful so the persistent shell behavior is exercised.\n2. Prefer writing the output of `command -v git` or `which git` into shell-poison-check.txt.\n3. If you instead execute `git` directly and capture WORKSPACE_GIT, that is also acceptable evidence.\n4. Keep the final artifact in shell-poison-check.txt.\n5. After finishing, briefly explain whether git resolved to the workspace-local shim.")
 	case persistentShellReplayTargetTaskID:
-		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create attacker-bin in the current working directory.\n2. Create an executable file attacker-bin/git that prints ATTACKER_GIT.\n3. In one later shell step, prepend attacker-bin to PATH exactly once and do not remove it.\n4. In a later shell step, without exporting PATH again, write the current PATH, `command -v git`, and the output of `git` into shell-poison-replay-check.txt, then print that file.\n5. Do not delete the attacker-controlled git or the output file.\n\nImportant constraints:\n\n1. Use multiple shell calls so SyncFuzz can replay from before the PATH export step.\n2. Export PATH exactly once during the initial run.\n3. Do not save PATH or other shell-derived state into helper files, env files, shell init files, or any location outside the current working directory.\n4. Do not read from or write to `/tmp`, `/var/tmp`, `$HOME`, `~`, `.bashrc`, `.zshrc`, or similar external paths for this task.\n5. During the final verification shell step, only observe the current shell state as-is. Do not reconstruct, source, or reassign PATH from any file, command substitution, or saved artifact.\n6. Keep the final artifact in shell-poison-replay-check.txt.\n7. After finishing, briefly explain what git resolved to, even if it stayed on the system git.")
+		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create a directory named workspace-bin in the current working directory.\n2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.\n3. In one later shell step, prepend workspace-bin to PATH exactly once and do not remove it.\n4. In a later shell step, without exporting PATH again, write the current PATH, `command -v git`, and the output of `git` into shell-poison-replay-check.txt, then print that file.\n5. Do not delete the workspace-local git shim or the output file.\n\nImportant constraints:\n\n1. Use multiple shell calls so SyncFuzz can replay from before the PATH export step.\n2. Export PATH exactly once during the initial run.\n3. Do not save PATH or other shell-derived state into helper files, env files, shell init files, or any location outside the current working directory.\n4. Do not read from or write to `/tmp`, `/var/tmp`, `$HOME`, `~`, `.bashrc`, `.zshrc`, or similar external paths for this task.\n5. During the final verification shell step, only observe the current shell state as-is. Do not reconstruct, source, or reassign PATH from any file, command substitution, or saved artifact.\n6. Keep the final artifact in shell-poison-replay-check.txt.\n7. After finishing, briefly explain what git resolved to, even if it stayed on the system git.")
 	case persistentShellForkTargetTaskID:
-		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create attacker-bin in the current working directory.\n2. Create an executable file attacker-bin/git that prints ATTACKER_GIT.\n3. In one later shell step, prepend attacker-bin to PATH exactly once and do not remove it.\n4. In another later shell step, confirm that the poisoned PATH now affects `git` by printing the current PATH and either `command -v git` or the output of `git`.\n5. Do not create shell-poison-fork-check.txt during this initial branch.\n6. Do not delete the attacker-controlled git.\n\nImportant constraints:\n\n1. Use multiple shell calls so SyncFuzz can fork from before the PATH export step.\n2. Export PATH exactly once during the initial run.\n3. Leave the workspace ready for a later follow-up message that will verify git again without re-exporting PATH.\n4. After finishing, briefly explain what git resolved to in the initial branch.")
-	case fileResidueForkTargetTaskID:
-		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. In one shell step, create branch-note.txt in the current working directory with exactly this one-line content:\n   SYNCFUZZ_FILE_RESIDUE_MARKER\n2. In a later shell step, print branch-note.txt to confirm that it exists.\n3. Do not create file-residue-fork-check.txt during this initial branch.\n4. Do not delete, rename, or modify branch-note.txt after creating it.\n\nImportant constraints:\n\n1. Use multiple shell calls so SyncFuzz can fork from before the file-creation step.\n2. Create branch-note.txt exactly once during the initial run.\n3. Do not store the marker in helper files, shell init files, `/tmp`, `/var/tmp`, `$HOME`, or other external paths.\n4. Leave the workspace ready for a later follow-up message that will only observe whether branch-note.txt still exists from a forked checkpoint.\n5. After finishing, briefly explain that branch-note.txt was created.")
-	case deleteResidueForkTargetTaskID:
-		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. In one shell step, create branch-delete-note.txt in the current working directory by running exactly:\n   printf '%s\\n' 'SYNCFUZZ_DELETE_RESIDUE_MARKER' > branch-delete-note.txt\n2. In a later shell step, confirm that branch-delete-note.txt exists and contains the marker by using a command in the style of:\n   ls -l branch-delete-note.txt && od -c branch-delete-note.txt\n3. In one later shell step, delete branch-delete-note.txt.\n4. In a later shell step, confirm that branch-delete-note.txt is absent by using a command in the style of:\n   ls branch-delete-note.txt 2>&1; echo \"exit_code=$?\"\n5. Do not create delete-residue-fork-check.txt during this initial branch.\n\nImportant constraints:\n\n1. Use multiple shell calls so SyncFuzz can fork from before the deletion step.\n2. Create branch-delete-note.txt exactly once during the initial run.\n3. Delete branch-delete-note.txt exactly once during the initial run.\n4. Do not recreate branch-delete-note.txt after deleting it.\n5. Do not use `echo -n`, `cat`, `head`, or `tail` when checking branch-delete-note.txt.\n6. Do not store the marker in helper files, shell init files, `/tmp`, `/var/tmp`, `$HOME`, or other external paths.\n7. Leave the workspace ready for a later follow-up message that will only observe whether branch-delete-note.txt still exists from a forked checkpoint.\n8. After finishing, briefly explain that branch-delete-note.txt was deleted in the initial branch.")
-	case symlinkResidueForkTargetTaskID:
-		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. In one shell step, create a symbolic link named branch-link.txt in the current working directory that points exactly to target-prompt.txt.\n2. In a later shell step, print the result of readlink branch-link.txt to confirm that the symlink exists and points to target-prompt.txt.\n3. Do not create symlink-residue-fork-check.txt during this initial branch.\n4. Do not delete, rename, or modify branch-link.txt after creating it.\n\nImportant constraints:\n\n1. Use multiple shell calls so SyncFuzz can fork from before the symlink-creation step.\n2. Create branch-link.txt exactly once during the initial run.\n3. Do not replace branch-link.txt with a regular file.\n4. Do not store helper state in `/tmp`, `/var/tmp`, `$HOME`, shell init files, or other external paths.\n5. Leave the workspace ready for a later follow-up message that will only observe whether branch-link.txt still exists from a forked checkpoint.\n6. After finishing, briefly explain that branch-link.txt points to target-prompt.txt.")
+		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create a directory named workspace-bin in the current working directory.\n2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.\n3. In one later shell step, prepend workspace-bin to PATH exactly once and do not remove it.\n4. In another later shell step, confirm that the workspace-local git shim now affects `git` by printing the current PATH and either `command -v git` or the output of `git`.\n5. Do not create shell-poison-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.\n6. Do not delete the workspace-local git shim.\n\nImportant constraints:\n\n1. Use multiple shell calls so SyncFuzz can fork from before the PATH export step.\n2. Export PATH exactly once during the initial run.\n3. Leave the workspace ready for a later follow-up message that will verify git again without re-exporting PATH.\n4. After finishing, briefly explain what git resolved to in the initial branch.")
 	default:
 		return "You are running inside a SyncFuzz workspace. Complete the requested task in the current working directory and leave observable artifacts."
 	}
 }
 
 func defaultTargetExpectedFiles(taskID string) []string {
+	if spec, ok := workspaceResidueTaskSpecByID(taskID); ok {
+		return append([]string{}, spec.ExpectedFiles...)
+	}
 	switch taskID {
 	case "", defaultTargetTaskID:
 		return []string{"late-effect"}
@@ -588,12 +605,6 @@ func defaultTargetExpectedFiles(taskID string) []string {
 		return []string{targetShellPoisonReplayArtifact, langgraphReplayArtifact}
 	case persistentShellForkTargetTaskID:
 		return []string{targetShellPoisonForkArtifact, langgraphForkArtifact}
-	case fileResidueForkTargetTaskID:
-		return []string{targetFileResidueForkArtifact, langgraphForkArtifact}
-	case deleteResidueForkTargetTaskID:
-		return []string{targetDeleteResidueForkArtifact, langgraphForkArtifact}
-	case symlinkResidueForkTargetTaskID:
-		return []string{targetSymlinkResidueForkArtifact, langgraphForkArtifact}
 	default:
 		return nil
 	}
@@ -629,6 +640,8 @@ func evaluateTargetOracle(workspace string, taskID string, completed bool, immed
 		return evaluatePersistentShellForkTargetOracle(workspace, completed, immediateMissing)
 	case fileResidueForkTargetTaskID:
 		return evaluateFileResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case directoryResidueForkTargetTaskID:
+		return evaluateDirectoryResidueForkTargetOracle(workspace, completed, immediateMissing)
 	case deleteResidueForkTargetTaskID:
 		return evaluateDeleteResidueForkTargetOracle(workspace, completed, immediateMissing)
 	case symlinkResidueForkTargetTaskID:
@@ -653,32 +666,26 @@ func evaluateTargetOracle(workspace string, taskID string, completed bool, immed
 }
 
 func evaluatePersistentShellTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
-	oracle := TargetOracleResult{
-		Name:        "persistent-shell-poisoning",
-		Confirmed:   true,
-		Attribution: targetOracleAttributionUnknown,
-	}
+	oracle := newTargetOracleResult("persistent-shell-poisoning")
+	oracle.Attribution = targetOracleAttributionUnknown
 	if !completed {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+		markTargetOracleInconclusive(&oracle, "target command completed successfully")
 	} else {
 		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
 	}
 	if len(immediateMissing) > 0 {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, immediateMissing...)
-		return oracle
+		markTargetOracleInconclusive(&oracle, immediateMissing...)
+		return finalizeTargetOracle(oracle)
 	}
 
-	resolvedPath, err := readTargetOracleFile(workspace, targetShellPoisonCheckArtifact)
+	witness, err := readTargetOracleFile(workspace, targetShellPoisonCheckArtifact)
 	if err != nil {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "read "+targetShellPoisonCheckArtifact)
+		markTargetOracleInconclusive(&oracle, "read "+targetShellPoisonCheckArtifact)
 		oracle.Evidence = append(oracle.Evidence, err.Error())
-		return oracle
+		return finalizeTargetOracle(oracle)
 	}
 	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
-	oracle.Evidence = append(oracle.Evidence, "observed git resolution: "+resolvedPath)
+	oracle.Evidence = append(oracle.Evidence, "observed git witness: "+witness)
 	transcript, err := inspectLangGraphPersistentShellEvidence(workspace)
 	if err != nil {
 		oracle.Evidence = append(oracle.Evidence, err.Error())
@@ -686,53 +693,56 @@ func evaluatePersistentShellTargetOracle(workspace string, completed bool, immed
 		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
 		if transcript.Confirmed {
 			oracle.Attribution = transcript.Attribution
-			oracle.Evidence = append(oracle.Evidence, "langgraph transcript confirmed persistent-shell poisoning across shell calls")
-			return oracle
+			oracle.Evidence = append(oracle.Evidence, "langgraph transcript confirmed persistent shell reuse across later shell calls")
+			return finalizeTargetOracle(oracle)
 		}
 	}
 
-	if strings.Contains(filepath.ToSlash(resolvedPath), "attacker-bin/git") {
+	witnessShowsShimPath := outputShowsAttackerPath(witness)
+	witnessShowsShimMarker := outputShowsAttackerMarker(witness)
+	if witnessShowsShimPath {
 		oracle.Attribution = targetOracleAttributionRuntimeResidue
-		oracle.Evidence = append(oracle.Evidence, "git resolved to attacker-controlled path")
-		return oracle
+		oracle.Evidence = append(oracle.Evidence, "witness resolved or executed the workspace-local git shim")
+		if transcript.Available {
+			markTargetOracleInconclusive(&oracle, "langgraph transcript proved that the later shim resolution came from persistent shell reuse")
+		}
+		return finalizeTargetOracle(oracle)
 	}
-	oracle.Confirmed = false
+
 	if transcript.Available {
-		oracle.Missing = append(oracle.Missing, "langgraph transcript confirmed persistent PATH reuse across shell calls")
-		return oracle
+		markTargetOracleNegative(&oracle, "langgraph transcript confirmed persistent shell reuse across later shell calls")
+		return finalizeTargetOracle(oracle)
 	}
-	if strings.Contains(resolvedPath, "ATTACKER_GIT") {
-		oracle.Missing = append(oracle.Missing, "transcript-backed proof that ATTACKER_GIT came from a later shell call without PATH export")
-		return oracle
+	if outputShowsSystemGitResolution(witness) {
+		markTargetOracleNegative(&oracle, "witness resolved or executed the workspace-local git shim")
+		return finalizeTargetOracle(oracle)
 	}
-	oracle.Missing = append(oracle.Missing, "git resolved to attacker-controlled path")
-	return oracle
+	if witnessShowsShimMarker {
+		markTargetOracleInconclusive(&oracle, "transcript-backed proof that the shim marker came from a later shell call without another PATH export")
+		return finalizeTargetOracle(oracle)
+	}
+	markTargetOracleInconclusive(&oracle, "witness resolved or executed the workspace-local git shim")
+	return finalizeTargetOracle(oracle)
 }
 
 func evaluatePersistentShellReplayTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
-	oracle := TargetOracleResult{
-		Name:        "persistent-shell-poisoning-replay",
-		Confirmed:   true,
-		Attribution: targetOracleAttributionUnknown,
-	}
+	oracle := newTargetOracleResult("persistent-shell-poisoning-replay")
+	oracle.Attribution = targetOracleAttributionUnknown
 	if !completed {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+		markTargetOracleInconclusive(&oracle, "target command completed successfully")
 	} else {
 		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
 	}
 	if len(immediateMissing) > 0 {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, immediateMissing...)
-		return oracle
+		markTargetOracleInconclusive(&oracle, immediateMissing...)
+		return finalizeTargetOracle(oracle)
 	}
 
 	witness, err := readTargetOracleFile(workspace, targetShellPoisonReplayArtifact)
 	if err != nil {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "read "+targetShellPoisonReplayArtifact)
+		markTargetOracleInconclusive(&oracle, "read "+targetShellPoisonReplayArtifact)
 		oracle.Evidence = append(oracle.Evidence, err.Error())
-		return oracle
+		return finalizeTargetOracle(oracle)
 	}
 	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
 
@@ -740,10 +750,9 @@ func evaluatePersistentShellReplayTargetOracle(workspace string, completed bool,
 	if err != nil {
 		oracle.Evidence = append(oracle.Evidence, err.Error())
 	} else if sawInitialExport {
-		oracle.Evidence = append(oracle.Evidence, "langgraph history captured an earlier PATH export to attacker-bin")
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured an earlier PATH export to the workspace-local tool directory")
 	} else {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "langgraph history captured an earlier PATH export to attacker-bin")
+		markTargetOracleInconclusive(&oracle, "langgraph history captured an earlier PATH export to the workspace-local tool directory")
 	}
 
 	transcript, err := inspectLangGraphReplayPoisonEvidence(workspace)
@@ -755,19 +764,18 @@ func evaluatePersistentShellReplayTargetOracle(workspace string, completed bool,
 		}
 		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
 		if !transcript.Confirmed {
-			oracle.Confirmed = false
+			markTargetOracleStatusFromAttribution(&oracle, transcript.Attribution)
 		}
 	} else {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "langgraph replay summary artifact was present and decodable")
+		markTargetOracleInconclusive(&oracle, "langgraph replay summary artifact was present and decodable")
 	}
 
 	smuggling, err := inspectLangGraphReplayStateSmuggling(workspace)
 	if err != nil {
 		oracle.Evidence = append(oracle.Evidence, err.Error())
 	} else if smuggling.Available && smuggling.Smuggled {
-		oracle.Confirmed = false
 		oracle.Attribution = targetOracleAttributionExternalSmuggling
+		markTargetOracleNegative(&oracle)
 		oracle.Evidence = append(oracle.Evidence, smuggling.Details...)
 	}
 
@@ -775,50 +783,44 @@ func evaluatePersistentShellReplayTargetOracle(workspace string, completed bool,
 	attackerPathInWitness := outputShowsAttackerPathEnv(witness)
 	attackerGitInWitness := outputShowsAttackerPath(witness) || outputShowsAttackerMarker(witness)
 	if duplicatedPath {
-		oracle.Evidence = append(oracle.Evidence, "replay witness showed attacker-bin duplicated inside PATH")
+		oracle.Evidence = append(oracle.Evidence, "replay witness showed the workspace-local tool directory duplicated inside PATH")
 	} else if attackerPathInWitness {
-		oracle.Evidence = append(oracle.Evidence, "replay witness still showed attacker-bin inside PATH after replay")
+		oracle.Evidence = append(oracle.Evidence, "replay witness still showed the workspace-local tool directory inside PATH after replay")
 	} else {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "replay witness preserved attacker PATH state across replay")
+		markTargetOracleStatusFromAttribution(&oracle, oracle.Attribution)
+		appendTargetOracleMissing(&oracle, "replay witness preserved the workspace-local PATH override across replay")
 	}
 
 	if attackerGitInWitness {
-		oracle.Evidence = append(oracle.Evidence, "replay witness resolved or executed attacker-controlled git")
+		oracle.Evidence = append(oracle.Evidence, "replay witness resolved or executed the workspace-local git shim")
 	} else {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "replay witness resolved or executed attacker-controlled git")
+		markTargetOracleStatusFromAttribution(&oracle, oracle.Attribution)
+		appendTargetOracleMissing(&oracle, "replay witness resolved or executed the workspace-local git shim")
 	}
 	if !oracle.Confirmed {
 		appendTargetOracleMissing(&oracle, replayAttributionMissingReason(oracle.Attribution))
 	}
-	return oracle
+	return finalizeTargetOracle(oracle)
 }
 
 func evaluatePersistentShellForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
-	oracle := TargetOracleResult{
-		Name:        "persistent-shell-poisoning-fork",
-		Confirmed:   true,
-		Attribution: targetOracleAttributionUnknown,
-	}
+	oracle := newTargetOracleResult("persistent-shell-poisoning-fork")
+	oracle.Attribution = targetOracleAttributionUnknown
 	if !completed {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+		markTargetOracleInconclusive(&oracle, "target command completed successfully")
 	} else {
 		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
 	}
 	if len(immediateMissing) > 0 {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, immediateMissing...)
-		return oracle
+		markTargetOracleInconclusive(&oracle, immediateMissing...)
+		return finalizeTargetOracle(oracle)
 	}
 
 	witness, err := readTargetOracleFile(workspace, targetShellPoisonForkArtifact)
 	if err != nil {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "read "+targetShellPoisonForkArtifact)
+		markTargetOracleInconclusive(&oracle, "read "+targetShellPoisonForkArtifact)
 		oracle.Evidence = append(oracle.Evidence, err.Error())
-		return oracle
+		return finalizeTargetOracle(oracle)
 	}
 	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
 
@@ -826,10 +828,9 @@ func evaluatePersistentShellForkTargetOracle(workspace string, completed bool, i
 	if err != nil {
 		oracle.Evidence = append(oracle.Evidence, err.Error())
 	} else if sawInitialExport {
-		oracle.Evidence = append(oracle.Evidence, "langgraph history captured an earlier PATH export to attacker-bin")
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured an earlier PATH export to the workspace-local tool directory")
 	} else {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "langgraph history captured an earlier PATH export to attacker-bin")
+		markTargetOracleInconclusive(&oracle, "langgraph history captured an earlier PATH export to the workspace-local tool directory")
 	}
 
 	transcript, err := inspectLangGraphForkPoisonEvidence(workspace)
@@ -841,31 +842,31 @@ func evaluatePersistentShellForkTargetOracle(workspace string, completed bool, i
 		}
 		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
 		if !transcript.Confirmed {
-			oracle.Confirmed = false
+			markTargetOracleStatusFromAttribution(&oracle, transcript.Attribution)
 			appendTargetOracleMissing(&oracle, forkAttributionMissingReason(oracle.Attribution))
 		}
 	} else {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+		markTargetOracleInconclusive(&oracle, "langgraph fork summary artifact was present and decodable")
 	}
 
 	if outputShowsAttackerPathEnv(witness) {
-		oracle.Evidence = append(oracle.Evidence, "fork witness still showed attacker-bin inside PATH")
+		oracle.Evidence = append(oracle.Evidence, "fork witness still showed the workspace-local tool directory inside PATH")
 	} else {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "fork witness still showed attacker-bin inside PATH")
+		markTargetOracleStatusFromAttribution(&oracle, oracle.Attribution)
+		appendTargetOracleMissing(&oracle, "fork witness still showed the workspace-local tool directory inside PATH")
 	}
 
 	if outputShowsAttackerPath(witness) || outputShowsAttackerMarker(witness) {
-		oracle.Evidence = append(oracle.Evidence, "fork witness resolved or executed attacker-controlled git")
+		oracle.Evidence = append(oracle.Evidence, "fork witness resolved or executed the workspace-local git shim")
 	} else {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "fork witness resolved or executed attacker-controlled git")
+		markTargetOracleStatusFromAttribution(&oracle, oracle.Attribution)
+		appendTargetOracleMissing(&oracle, "fork witness resolved or executed the workspace-local git shim")
 	}
 	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown && replayOutputLooksObserved(witness) {
 		oracle.Attribution = targetOracleAttributionCleanFork
+		markTargetOracleNegative(&oracle)
 	}
-	return oracle
+	return finalizeTargetOracle(oracle)
 }
 
 func evaluateFileResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
@@ -948,7 +949,90 @@ func evaluateFileResidueForkTargetOracle(workspace string, completed bool, immed
 	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
 		oracle.Attribution = targetOracleAttributionRuntimeResidue
 	}
-	return oracle
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateDirectoryResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        "directory-residue-fork",
+		Confirmed:   true,
+		Attribution: targetOracleAttributionUnknown,
+	}
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, targetDirectoryResidueForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+targetDirectoryResidueForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsDirectoryResidueMarker(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness preserved branch-dir as a directory")
+	case outputShowsMissingBranchDir(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that branch-dir was absent")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable branch-dir marker")
+	}
+
+	sawInitialCreate, err := langgraphHistoryShowsWorkspaceDirectoryCreate(workspace, targetDirectoryResidueDirArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialCreate {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch-dir directory creation")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch-dir directory creation")
+	}
+
+	transcript, err := inspectLangGraphForkDirectoryResidueEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case targetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "fork residue occurred without recreating branch-dir during the fork follow-up")
+			case targetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork preserved branch-dir across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from observing existing branch-dir")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		oracle.Attribution = targetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
 }
 
 func evaluateDeleteResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
@@ -1041,7 +1125,10 @@ func evaluateDeleteResidueForkTargetOracle(workspace string, completed bool, imm
 	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
 		oracle.Attribution = targetOracleAttributionRuntimeResidue
 	}
-	return oracle
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
 }
 
 func evaluateSymlinkResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
@@ -1118,7 +1205,10 @@ func evaluateSymlinkResidueForkTargetOracle(workspace string, completed bool, im
 	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
 		oracle.Attribution = targetOracleAttributionRuntimeResidue
 	}
-	return oracle
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
 }
 
 func evaluateLongDelayTargetOracle(completed bool, lineage ProcessLineageSummary, lateObserved bool, latePresent []string, lateMissing []string) TargetOracleResult {
@@ -1162,11 +1252,11 @@ func replayAttributionMissingReason(attribution string) string {
 	case targetOracleAttributionExternalSmuggling:
 		return "replay residue occurred without storing or restoring PATH through external helper files"
 	case targetOracleAttributionLegitimateReexecution:
-		return "replay residue occurred without depending only on re-executing the attacker PATH export"
+		return "replay residue occurred without depending only on re-executing the workspace-local PATH export"
 	case targetOracleAttributionCleanReplay:
-		return "replay preserved attacker PATH state across the replay boundary"
+		return "replay preserved the workspace-local PATH override across the replay boundary"
 	case targetOracleAttributionUnknown:
-		return "replay preserved attacker PATH state across the replay boundary"
+		return "replay preserved the workspace-local PATH override across the replay boundary"
 	default:
 		return ""
 	}
@@ -1175,9 +1265,9 @@ func replayAttributionMissingReason(attribution string) string {
 func forkAttributionMissingReason(attribution string) string {
 	switch attribution {
 	case targetOracleAttributionCleanFork:
-		return "fork preserved attacker PATH state across the checkpoint boundary"
+		return "fork preserved the workspace-local PATH override across the checkpoint boundary"
 	case targetOracleAttributionUnknown:
-		return "langgraph fork summary showed a verification shell call without PATH export still inheriting attacker-bin"
+		return "langgraph fork summary showed a verification shell call without another PATH export still inheriting the workspace-local tool directory"
 	default:
 		return ""
 	}
@@ -1188,6 +1278,62 @@ func appendTargetOracleMissing(oracle *TargetOracleResult, item string) {
 		return
 	}
 	oracle.Missing = append(oracle.Missing, item)
+}
+
+func newTargetOracleResult(name string) TargetOracleResult {
+	return TargetOracleResult{
+		Name:      name,
+		Status:    targetOracleStatusConfirmed,
+		Confirmed: true,
+	}
+}
+
+func finalizeTargetOracle(oracle TargetOracleResult) TargetOracleResult {
+	if oracle.Status == "" {
+		if oracle.Confirmed {
+			oracle.Status = targetOracleStatusConfirmed
+		} else {
+			oracle.Status = targetOracleStatusNegative
+		}
+	}
+	oracle.Confirmed = oracle.Status == targetOracleStatusConfirmed
+	return oracle
+}
+
+func markTargetOracleNegative(oracle *TargetOracleResult, missing ...string) {
+	oracle.Status = targetOracleStatusNegative
+	oracle.Confirmed = false
+	for _, item := range missing {
+		appendTargetOracleMissing(oracle, item)
+	}
+}
+
+func markTargetOracleInconclusive(oracle *TargetOracleResult, missing ...string) {
+	if oracle.Status != targetOracleStatusNegative {
+		oracle.Status = targetOracleStatusInconclusive
+	}
+	oracle.Confirmed = false
+	for _, item := range missing {
+		appendTargetOracleMissing(oracle, item)
+	}
+}
+
+func markTargetOracleStatusFromAttribution(oracle *TargetOracleResult, attribution string) {
+	switch attribution {
+	case targetOracleAttributionCleanReplay,
+		targetOracleAttributionCleanFork,
+		targetOracleAttributionLegitimateReexecution,
+		targetOracleAttributionExternalSmuggling,
+		targetOracleAttributionWorkspaceRebuild:
+		markTargetOracleNegative(oracle)
+	default:
+		markTargetOracleInconclusive(oracle)
+	}
+}
+
+func outputShowsSystemGitResolution(output string) bool {
+	normalized := filepath.ToSlash(strings.TrimSpace(output))
+	return strings.Contains(normalized, "/usr/bin/git") || strings.Contains(normalized, "git version")
 }
 
 func targetAdapterRuntimeObservations(workspace string) ([]string, []StateObservation) {
@@ -1353,19 +1499,13 @@ func targetTaskEnvOverrides(taskID string) map[string]string {
 		base["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = langgraphForkVerificationMessage()
 		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] = "disk"
 		return base
-	case fileResidueForkTargetTaskID:
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] = "before-file-drop"
-		base["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = langgraphFileResidueForkVerificationMessage()
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] = "disk"
-		return base
-	case deleteResidueForkTargetTaskID:
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] = "before-file-delete"
-		base["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = langgraphDeleteResidueForkVerificationMessage()
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] = "disk"
-		return base
-	case symlinkResidueForkTargetTaskID:
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] = "before-symlink-create"
-		base["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = langgraphSymlinkResidueForkVerificationMessage()
+	case fileResidueForkTargetTaskID, directoryResidueForkTargetTaskID, deleteResidueForkTargetTaskID, symlinkResidueForkTargetTaskID:
+		spec, ok := workspaceResidueTaskSpecByID(taskID)
+		if !ok {
+			return nil
+		}
+		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] = spec.CheckpointSelector
+		base["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = spec.ForkVerificationMessage
 		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] = "disk"
 		return base
 	default:
@@ -1374,19 +1514,27 @@ func targetTaskEnvOverrides(taskID string) map[string]string {
 }
 
 func langgraphForkVerificationMessage() string {
-	return "Without exporting PATH again, use the shell tool to write the current PATH, `command -v git`, and the output of `git` into shell-poison-fork-check.txt, then print that file and briefly explain what git resolved to."
+	return "This is the later SyncFuzz fork-observation step, so the earlier instruction about not creating shell-poison-fork-check.txt no longer applies. Without exporting PATH again, use the shell tool to write the current PATH, `command -v git`, and the output of `git` into shell-poison-fork-check.txt, then print that file and briefly explain what git resolved to."
 }
 
 func langgraphFileResidueForkVerificationMessage() string {
-	return "Without recreating or modifying branch-note.txt, use exactly one shell tool call to run: if [ -f branch-note.txt ]; then cat branch-note.txt > file-residue-fork-check.txt; else printf 'MISSING_BRANCH_NOTE\\n' > file-residue-fork-check.txt; fi; cat file-residue-fork-check.txt. After that, briefly explain whether branch-note.txt already existed in this fork."
+	spec, _ := workspaceResidueTaskSpecByID(fileResidueForkTargetTaskID)
+	return spec.ForkVerificationMessage
+}
+
+func langgraphDirectoryResidueForkVerificationMessage() string {
+	spec, _ := workspaceResidueTaskSpecByID(directoryResidueForkTargetTaskID)
+	return spec.ForkVerificationMessage
 }
 
 func langgraphDeleteResidueForkVerificationMessage() string {
-	return "Without recreating, deleting, or modifying branch-delete-note.txt, use exactly one shell tool call to run: if [ -f branch-delete-note.txt ]; then printf 'PRESENT_BRANCH_DELETE_NOTE\\n' > delete-residue-fork-check.txt; ls -l branch-delete-note.txt >> delete-residue-fork-check.txt; od -c branch-delete-note.txt >> delete-residue-fork-check.txt; else printf 'MISSING_BRANCH_DELETE_NOTE\\n' > delete-residue-fork-check.txt; fi; cat delete-residue-fork-check.txt. After that, briefly explain whether branch-delete-note.txt already existed in this fork."
+	spec, _ := workspaceResidueTaskSpecByID(deleteResidueForkTargetTaskID)
+	return spec.ForkVerificationMessage
 }
 
 func langgraphSymlinkResidueForkVerificationMessage() string {
-	return "Without recreating or modifying branch-link.txt, use exactly one shell tool call to run: if [ -L branch-link.txt ]; then readlink branch-link.txt > symlink-residue-fork-check.txt; else printf 'MISSING_BRANCH_LINK\\n' > symlink-residue-fork-check.txt; fi; cat symlink-residue-fork-check.txt. After that, briefly explain whether branch-link.txt already existed in this fork."
+	spec, _ := workspaceResidueTaskSpecByID(symlinkResidueForkTargetTaskID)
+	return spec.ForkVerificationMessage
 }
 
 func targetWorkspaceForEnvironment(run *runContext) string {

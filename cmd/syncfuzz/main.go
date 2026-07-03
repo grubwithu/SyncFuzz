@@ -77,8 +77,8 @@ Usage:
   syncfuzz target list
   syncfuzz target tasks
   syncfuzz target groups
-  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
-  syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,delete-residue-fork,symlink-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz corpus list [--corpus corpus] [--limit 20]
   syncfuzz corpus show --id <entry_id> [--corpus corpus]
   syncfuzz corpus verify [--corpus corpus] [--out runs] [--limit 0] [--env local] [--container-image ubuntu:latest]
@@ -565,7 +565,16 @@ func targetRun(args []string) {
 	fmt.Printf("completed: %t\n", result.Completed)
 	fmt.Printf("expectations_met: %t\n", result.ExpectationsMet)
 	fmt.Printf("target_oracle: %s\n", result.TargetOracle.Name)
+	if result.TargetOracle.Status != "" {
+		fmt.Printf("oracle_status: %s\n", result.TargetOracle.Status)
+	}
 	fmt.Printf("oracle_confirmed: %t\n", result.TargetOracle.Confirmed)
+	if result.TaskCompliance.Name != "" {
+		fmt.Printf("task_compliance: %s\n", result.TaskCompliance.Name)
+	}
+	if result.TaskCompliance.Status != "" {
+		fmt.Printf("task_compliance_status: %s\n", result.TaskCompliance.Status)
+	}
 	if result.TargetOracle.Attribution != "" {
 		fmt.Printf("oracle_attribution: %s\n", result.TargetOracle.Attribution)
 	}
@@ -672,6 +681,14 @@ func targetSuite(args []string) {
 	for _, stats := range result.AttributionSummaries {
 		fmt.Printf("attribution[%s]: total=%d confirmed=%d unconfirmed=%d\n",
 			stats.Attribution,
+			stats.TotalRuns,
+			stats.Confirmed,
+			stats.Unconfirmed,
+		)
+	}
+	for _, stats := range result.ComplianceSummaries {
+		fmt.Printf("compliance[%s]: total=%d confirmed=%d unconfirmed=%d\n",
+			stats.Status,
 			stats.TotalRuns,
 			stats.Confirmed,
 			stats.Unconfirmed,

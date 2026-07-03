@@ -101,6 +101,9 @@ make target-langgraph-shell-react \
   TARGET_TASK=file-residue-fork
 
 make target-langgraph-shell-react \
+  TARGET_TASK=directory-residue-fork
+
+make target-langgraph-shell-react \
   TARGET_TASK=delete-residue-fork
 
 make target-langgraph-shell-react \
@@ -118,13 +121,19 @@ The run writes extra workspace artifacts:
 
 These summarize thread history, checkpoint ids, checkpoint backend selection, shell/session identity, replay/fork boundaries, and the final messages returned by the agent.
 
-For `persistent-shell-poisoning`, SyncFuzz uses `langgraph-history.json` as structured oracle evidence when it is available. A bare `ATTACKER_GIT` string in `shell-poison-check.txt` is not enough by itself; the transcript also needs to show a later shell call, without re-exporting PATH, still inheriting the poisoned `PATH` and executing the attacker-controlled `git`.
+In `target-result.json`, the embedded `target_oracle` now exposes both a backward-compatible boolean `confirmed` and a more explicit `status` field. `status=negative` means the run produced evidence for a clean or non-vulnerable outcome, while `status=inconclusive` means the run produced some evidence but not enough to support a confident residue attribution.
 
-For `persistent-shell-poisoning-replay`, SyncFuzz automatically replays from the semantic checkpoint `before-path-export`. The replay oracle requires `shell-poison-replay-check.txt` plus `langgraph-replay-summary.json` to show duplicated `attacker-bin` entries in `PATH` and attacker-controlled `git` resolution after replay.
+The same result file now also includes `task_compliance`. That field is separate from the residue oracle: it says whether the agent actually followed the intended built-in task shape. A run can therefore be `target_oracle.status=confirmed` but still `task_compliance.status=violated`, which is exactly the split SyncFuzz now uses to avoid over-trusting prompt-drifted executions. Today that coverage includes the long-delay orphan-process task, persistent-shell baseline/replay/fork, and the built-in workspace residue fork tasks.
 
-For `persistent-shell-poisoning-fork`, SyncFuzz automatically forks from `before-path-export`. The fork oracle requires `shell-poison-fork-check.txt` plus `langgraph-fork-summary.json` to show whether the fork follow-up shell call, without a new PATH export, inherited attacker-controlled `git` or cleanly fell back to the system `git`.
+For `persistent-shell-poisoning`, SyncFuzz uses `langgraph-history.json` as structured oracle evidence when it is available. A bare shim-marker string in `shell-poison-check.txt` is not enough by itself; the transcript also needs to show a later shell call, without re-exporting PATH, still inheriting the earlier PATH override and executing the workspace-local `git` shim.
+
+For `persistent-shell-poisoning-replay`, SyncFuzz automatically replays from the semantic checkpoint `before-path-export`. The replay oracle requires `shell-poison-replay-check.txt` plus `langgraph-replay-summary.json` to show duplicated workspace-local tool-directory entries in `PATH` and workspace-local `git` resolution after replay.
+
+For `persistent-shell-poisoning-fork`, SyncFuzz automatically forks from `before-path-export`. The fork oracle requires `shell-poison-fork-check.txt` plus `langgraph-fork-summary.json` to show whether the fork follow-up shell call, without a new PATH export, inherited the workspace-local `git` shim or cleanly fell back to the system `git`.
 
 For `file-residue-fork`, SyncFuzz automatically forks from `before-file-drop`. The fork oracle requires `file-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether `branch-note.txt` survived as genuine workspace residue or was rebuilt during the fork follow-up.
+
+For `directory-residue-fork`, SyncFuzz automatically forks from `before-directory-create`. The fork oracle requires `directory-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether `branch-dir` survived as genuine workspace residue or was rebuilt during the fork follow-up.
 
 For `delete-residue-fork`, SyncFuzz automatically forks from `before-file-delete`. The fork oracle requires `delete-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether `branch-delete-note.txt` wrongly stayed absent across the rollback boundary or whether the fork stayed aligned with the checkpointed workspace.
 
@@ -167,7 +176,7 @@ go run ./cmd/syncfuzz target run \
 
 The shell wrapper in [examples/target-commands/langgraph-shell-react.sh](/home/grub/workspace/agent_sec/SyncFuzz/examples/target-commands/langgraph-shell-react.sh) forwards these environment variables to `run_target.py`.
 
-When you use the built-in SyncFuzz tasks `persistent-shell-poisoning-replay`, `persistent-shell-poisoning-fork`, `file-residue-fork`, `delete-residue-fork`, or `symlink-residue-fork`, SyncFuzz sets these replay/fork environment variables automatically and switches the checkpointer backend to `disk`. Add `LANGGRAPH_PROCESS_MODE=split-process` when you want the replay/fork step to consume those checkpoints from a fresh target process. The manual environment form remains useful for ad hoc experiments.
+When you use the built-in SyncFuzz tasks `persistent-shell-poisoning-replay`, `persistent-shell-poisoning-fork`, `file-residue-fork`, `directory-residue-fork`, `delete-residue-fork`, or `symlink-residue-fork`, SyncFuzz sets these replay/fork environment variables automatically and switches the checkpointer backend to `disk`. Add `LANGGRAPH_PROCESS_MODE=split-process` when you want the replay/fork step to consume those checkpoints from a fresh target process. The manual environment form remains useful for ad hoc experiments.
 
 ## Notes
 
