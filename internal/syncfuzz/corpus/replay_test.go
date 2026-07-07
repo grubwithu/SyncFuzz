@@ -1,4 +1,4 @@
-package scheduler
+package corpus_test
 
 import (
 	"context"
@@ -6,15 +6,16 @@ import (
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/scheduler"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
 func TestReplayCorpusEntryReproducesSignature(t *testing.T) {
 	tmp := t.TempDir()
 	corpusDir := tmp + "/corpus"
-	suite := &SuiteResult{
+	suite := &scheduler.SuiteResult{
 		SuiteID: "suite-test",
-		Discoveries: []SuiteDiscovery{
+		Discoveries: []scheduler.SuiteDiscovery{
 			{
 				Kind:      "new-signature",
 				Key:       "<replay, after-external-commit, external-effect, duplicate-create, missing-receipt, forgotten-external-effect>",
@@ -33,9 +34,9 @@ func TestReplayCorpusEntryReproducesSignature(t *testing.T) {
 			},
 		},
 	}
-	entries, err := WriteCorpus(corpusDir, suite)
+	entries, err := scheduler.WriteCorpus(corpusDir, suite)
 	if err != nil {
-		t.Fatalf("WriteCorpus failed: %v", err)
+		t.Fatalf("scheduler.WriteCorpus failed: %v", err)
 	}
 
 	result, err := corpus.ReplayCorpusEntry(context.Background(), corpus.ReplayOptions{

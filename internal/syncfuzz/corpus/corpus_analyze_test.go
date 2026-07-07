@@ -1,4 +1,4 @@
-package scheduler
+package corpus_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/scheduler"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
@@ -16,7 +17,7 @@ func TestAnalyzeCorpusSummarizesTargetEntriesAndVerification(t *testing.T) {
 	tmp := t.TempDir()
 	corpusDir := filepath.Join(tmp, "corpus")
 
-	suite, err := RunTargetSuite(context.Background(), TargetSuiteOptions{
+	suite, err := scheduler.RunTargetSuite(context.Background(), scheduler.TargetSuiteOptions{
 		TargetID: "local-target",
 		Tasks:    []string{target.DefaultTargetTaskID, target.PersistentShellTargetTaskID},
 		Command: `case "$SYNCFUZZ_TASK_ID" in
@@ -30,7 +31,7 @@ esac`,
 		ObserveDelay: 10 * time.Millisecond,
 	})
 	if err != nil {
-		t.Fatalf("RunTargetSuite failed: %v", err)
+		t.Fatalf("scheduler.RunTargetSuite failed: %v", err)
 	}
 	if len(suite.CorpusEntries) != 2 {
 		t.Fatalf("expected 2 corpus entries, got %d", len(suite.CorpusEntries))

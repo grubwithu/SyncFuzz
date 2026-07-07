@@ -1,4 +1,4 @@
-package scheduler
+package target_test
 
 import (
 	"context"
@@ -136,28 +136,5 @@ printf '%s\n' "$PWD/attacker-bin/git" > shell-poison-check.txt`,
 	}
 	if _, err := os.Stat(filepath.Join(result.ArtifactDir, target.TargetContractProfileArtifact)); err != nil {
 		t.Fatalf("expected contract profile artifact: %v", err)
-	}
-}
-
-func TestTargetSuiteContractStatsCountsAndSorts(t *testing.T) {
-	stats := make(map[target.TargetContractInterpretationStatus]*TargetSuiteContractStats)
-	recordTargetSuiteContract(stats, target.TargetContractStatusUnknown, false)
-	recordTargetSuiteContract(stats, target.TargetContractStatusConsistent, true)
-	recordTargetSuiteContract(stats, target.TargetContractStatusViolation, false)
-	recordTargetSuiteContract(stats, target.TargetContractStatusConsistent, false)
-	recordTargetSuiteContract(stats, "", true)
-
-	got := targetSuiteContractStats(stats)
-	if len(got) != 3 {
-		t.Fatalf("unexpected contract summary length: %#v", got)
-	}
-	if got[0].Status != target.TargetContractStatusViolation || got[0].TotalRuns != 1 || got[0].Confirmed != 0 || got[0].Unconfirmed != 1 {
-		t.Fatalf("unexpected contract violation summary: %#v", got[0])
-	}
-	if got[1].Status != target.TargetContractStatusConsistent || got[1].TotalRuns != 2 || got[1].Confirmed != 1 || got[1].Unconfirmed != 1 {
-		t.Fatalf("unexpected contract consistent summary: %#v", got[1])
-	}
-	if got[2].Status != target.TargetContractStatusUnknown || got[2].TotalRuns != 1 || got[2].Confirmed != 0 || got[2].Unconfirmed != 1 {
-		t.Fatalf("unexpected contract unknown summary: %#v", got[2])
 	}
 }

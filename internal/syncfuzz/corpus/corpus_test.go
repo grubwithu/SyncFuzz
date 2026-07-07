@@ -1,17 +1,18 @@
-package scheduler
+package corpus_test
 
 import (
 	"testing"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/scheduler"
 )
 
 func TestWriteListShowCorpus(t *testing.T) {
 	corpusDir := t.TempDir()
-	suite := &SuiteResult{
+	suite := &scheduler.SuiteResult{
 		SuiteID: "suite-test",
-		Discoveries: []SuiteDiscovery{
+		Discoveries: []scheduler.SuiteDiscovery{
 			{
 				Kind:               "new-signature",
 				Key:                "<x>",
@@ -39,9 +40,9 @@ func TestWriteListShowCorpus(t *testing.T) {
 		},
 	}
 
-	entries, err := WriteCorpus(corpusDir, suite)
+	entries, err := scheduler.WriteCorpus(corpusDir, suite)
 	if err != nil {
-		t.Fatalf("WriteCorpus failed: %v", err)
+		t.Fatalf("scheduler.WriteCorpus failed: %v", err)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected one entry, got %d", len(entries))

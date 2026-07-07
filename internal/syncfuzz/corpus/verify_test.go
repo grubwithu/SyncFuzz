@@ -1,4 +1,4 @@
-package scheduler
+package corpus_test
 
 import (
 	"context"
@@ -8,14 +8,15 @@ import (
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/scheduler"
 )
 
 func TestVerifyCorpusReportsReproductionAndSignatureDrift(t *testing.T) {
 	tmp := t.TempDir()
 	corpusDir := filepath.Join(tmp, "corpus")
-	suite := &SuiteResult{
+	suite := &scheduler.SuiteResult{
 		SuiteID: "suite-test",
-		Discoveries: []SuiteDiscovery{
+		Discoveries: []scheduler.SuiteDiscovery{
 			{
 				Kind:      "new-signature",
 				Key:       "<replay, after-external-commit, external-effect, duplicate-create, missing-receipt, forgotten-external-effect>",
@@ -50,8 +51,8 @@ func TestVerifyCorpusReportsReproductionAndSignatureDrift(t *testing.T) {
 			},
 		},
 	}
-	if _, err := WriteCorpus(corpusDir, suite); err != nil {
-		t.Fatalf("WriteCorpus failed: %v", err)
+	if _, err := scheduler.WriteCorpus(corpusDir, suite); err != nil {
+		t.Fatalf("scheduler.WriteCorpus failed: %v", err)
 	}
 
 	result, err := corpus.VerifyCorpus(context.Background(), corpus.VerifyOptions{

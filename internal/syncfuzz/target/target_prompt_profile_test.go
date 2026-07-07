@@ -1,4 +1,4 @@
-package scheduler
+package target_test
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/scheduler"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
@@ -35,13 +36,13 @@ func TestDefaultTargetPromptWithProfileWrapsBaselinePrompt(t *testing.T) {
 }
 
 func TestBuildTargetScheduleMatrixExpandsPromptProfiles(t *testing.T) {
-	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+	matrix, err := scheduler.BuildTargetScheduleMatrix(scheduler.TargetMatrixOptions{
 		TargetID:         "langgraph-shell-react",
 		Tasks:            []string{target.PersistentShellTargetTaskID},
 		PromptProfileIDs: []string{target.TargetPromptProfileBaselineID, target.TargetPromptProfileWorkflowID},
 	})
 	if err != nil {
-		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+		t.Fatalf("scheduler.BuildTargetScheduleMatrix failed: %v", err)
 	}
 	if matrix.TotalCandidates != 2 {
 		t.Fatalf("expected prompt profiles to expand candidate count: %#v", matrix)
