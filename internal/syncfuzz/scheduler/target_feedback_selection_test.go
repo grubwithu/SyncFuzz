@@ -97,6 +97,33 @@ func TestSelectTargetMatrixCandidatesAppendsDiverseUnseenCandidatesAfterFeedback
 	}
 }
 
+func TestSelectTargetMatrixCandidatesPrefersNewSeedsBeforeSameSeedVariants(t *testing.T) {
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates: []TargetScheduleCandidate{
+			testTargetScenarioCandidate("task-a", "seed-a", "primitive-a"),
+			testTargetScenarioCandidate("task-b", "seed-a", "primitive-b"),
+			testTargetScenarioCandidate("task-c", "seed-b", "primitive-a"),
+		},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	selected, err := selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{Limit: 2})
+	if err != nil {
+		t.Fatalf("selectTargetMatrixCandidates failed: %v", err)
+	}
+	if len(selected.Candidates) != 2 {
+		t.Fatalf("expected 2 selected candidates, got %d", len(selected.Candidates))
+	}
+	if selected.Candidates[0].TaskID != "task-a" {
+		t.Fatalf("expected first candidate to preserve base ordering, got %q", selected.Candidates[0].TaskID)
+	}
+	if selected.Candidates[1].TaskID != "task-c" {
+		t.Fatalf("expected second candidate to expand to a new seed, got %q", selected.Candidates[1].TaskID)
+	}
+}
+
 func testTargetScheduleCandidate(taskID string, profileID string) TargetScheduleCandidate {
 	return TargetScheduleCandidate{
 		CandidateID:            targetScheduleCandidateID("test-target", taskID, profileID),
@@ -110,4 +137,14 @@ func testTargetScheduleCandidate(taskID string, profileID string) TargetSchedule
 		StateSurface:           "workspace.file",
 		LifecycleEdge:          "checkpoint->fork",
 	}
+}
+
+func testTargetScenarioCandidate(taskID string, seedID string, primitiveID string) TargetScheduleCandidate {
+	item := testTargetScheduleCandidate(taskID, target.TargetPromptProfileBaselineID)
+	item.SeedID = seedID
+	item.PlantPrimitiveID = primitiveID
+	item.LifecycleOperationID = "checkpoint-fork"
+	item.ActivationKindID = "file-presence-check"
+	item.OracleKindID = "workspace-file-residue"
+	return item
 }

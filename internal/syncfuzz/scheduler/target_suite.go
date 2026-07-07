@@ -19,6 +19,7 @@ type TargetSuiteOptions struct {
 	TargetID          string
 	Tasks             []string
 	TaskGroups        []string
+	SeedIDs           []string
 	Objective         string
 	PromptProfileID   string
 	PromptProfileIDs  []string
@@ -43,9 +44,16 @@ type TargetSuiteOptions struct {
 
 type TargetSuiteRunResult struct {
 	CandidateID            string                               `json:"candidate_id,omitempty"`
+	ScenarioID             string                               `json:"scenario_id,omitempty"`
+	SeedID                 string                               `json:"seed_id,omitempty"`
 	TaskID                 string                               `json:"task_id"`
 	TargetID               string                               `json:"target_id,omitempty"`
 	PromptProfileID        string                               `json:"prompt_profile_id,omitempty"`
+	LifecycleOperationID   string                               `json:"lifecycle_operation_id,omitempty"`
+	PlantPrimitiveID       string                               `json:"plant_primitive_id,omitempty"`
+	ActivationKindID       string                               `json:"activation_kind_id,omitempty"`
+	OracleKindID           string                               `json:"oracle_kind_id,omitempty"`
+	Mutations              []target.TargetScenarioMutation      `json:"mutations,omitempty"`
 	Iteration              int                                  `json:"iteration"`
 	RunID                  string                               `json:"run_id,omitempty"`
 	Confirmed              bool                                 `json:"confirmed"`
@@ -108,6 +116,7 @@ type TargetSuiteResult struct {
 	Repeat               int                           `json:"repeat"`
 	Tasks                []string                      `json:"tasks"`
 	TaskGroups           []string                      `json:"task_groups,omitempty"`
+	SeedIDs              []string                      `json:"seed_ids,omitempty"`
 	PromptProfiles       []string                      `json:"prompt_profiles,omitempty"`
 	TimeoutMillis        int64                         `json:"timeout_ms"`
 	ObserveDelayMs       int64                         `json:"observe_delay_ms"`
@@ -180,6 +189,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	var (
 		tasks                  []string
 		taskGroups             []string
+		seedIDs                []string
 		matrix                 *TargetScheduleMatrix
 		originalCandidateCount int
 		err                    error
@@ -190,6 +200,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 			TargetID:         opts.TargetID,
 			Tasks:            opts.Tasks,
 			TaskGroups:       opts.TaskGroups,
+			SeedIDs:          opts.SeedIDs,
 			PromptProfileIDs: target.TargetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs),
 		})
 		if err != nil {
@@ -211,10 +222,11 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 			tasks = targetCandidateTaskIDs(matrix.Candidates)
 		}
 	} else {
-		tasks, taskGroups, err = target.ExpandTargetTasks(opts.Tasks, opts.TaskGroups)
+		tasks, taskGroups, seedIDs, err = target.ExpandTargetSelection(opts.Tasks, opts.TaskGroups, opts.SeedIDs)
 		if err != nil {
 			return nil, err
 		}
+		opts.SeedIDs = seedIDs
 	}
 	started := time.Now().UTC()
 	suiteID := fmt.Sprintf("target-suite-%d", started.UnixNano())
@@ -240,6 +252,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 		Repeat:             opts.Repeat,
 		Tasks:              append([]string{}, tasks...),
 		TaskGroups:         append([]string{}, taskGroups...),
+		SeedIDs:            append([]string{}, opts.SeedIDs...),
 		SchedulerMode:      schedulerMode,
 		TimeoutMillis:      opts.Timeout.Milliseconds(),
 		ObserveDelayMs:     opts.ObserveDelay.Milliseconds(),
@@ -248,6 +261,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	}
 	if matrix != nil {
 		result.PromptProfiles = append([]string{}, matrix.PromptProfiles...)
+		result.SeedIDs = append([]string{}, matrix.SeedIDs...)
 		result.TotalCandidates = matrix.TotalCandidates
 		result.OriginalCandidates = originalCandidateCount
 		result.CandidateLimit = opts.CandidateLimit
@@ -275,12 +289,12 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	for iteration := 1; iteration <= opts.Repeat; iteration++ {
 		if matrix != nil {
 			for _, candidate := range matrix.Candidates {
-				runTargetSuiteTask(ctx, opts, suiteDir, iteration, candidate.TaskID, candidate.PromptProfileID, candidate.CandidateID, summaries, attributionSummary, taskAttributions, complianceSummary, taskCompliances, contractSummary, taskContracts, result)
+				runTargetSuiteTask(ctx, opts, suiteDir, iteration, candidate, summaries, attributionSummary, taskAttributions, complianceSummary, taskCompliances, contractSummary, taskContracts, result)
 			}
 			continue
 		}
 		for _, taskID := range tasks {
-			runTargetSuiteTask(ctx, opts, suiteDir, iteration, taskID, opts.PromptProfileID, "", summaries, attributionSummary, taskAttributions, complianceSummary, taskCompliances, contractSummary, taskContracts, result)
+			runTargetSuiteTask(ctx, opts, suiteDir, iteration, targetScheduledTaskCandidate(opts.TargetID, taskID, opts.PromptProfileID, ""), summaries, attributionSummary, taskAttributions, complianceSummary, taskCompliances, contractSummary, taskContracts, result)
 		}
 	}
 
@@ -338,9 +352,7 @@ func runTargetSuiteTask(
 	opts TargetSuiteOptions,
 	suiteDir string,
 	iteration int,
-	taskID string,
-	promptProfileID string,
-	candidateID string,
+	candidate TargetScheduleCandidate,
 	summaries map[string]*TargetSuiteTaskSummary,
 	attributionSummary map[string]*TargetSuiteAttributionStats,
 	taskAttributions map[string]map[string]*TargetSuiteAttributionStats,
@@ -350,18 +362,26 @@ func runTargetSuiteTask(
 	taskContracts map[string]map[target.TargetContractInterpretationStatus]*TargetSuiteContractStats,
 	result *TargetSuiteResult,
 ) {
+	taskID := candidate.TaskID
 	runLateObserveDelay := opts.LateObserveDelay
 	if runLateObserveDelay == 0 {
 		runLateObserveDelay = target.DefaultTargetLateObserveDelay(taskID)
 	}
 	item := TargetSuiteRunResult{
-		CandidateID:        candidateID,
-		TaskID:             taskID,
-		TargetID:           opts.TargetID,
-		PromptProfileID:    target.NormalizeTargetPromptProfileID(promptProfileID),
-		Iteration:          iteration,
-		LateObserveDelayMs: runLateObserveDelay.Milliseconds(),
-		Signature:          target.TargetSignature(taskID),
+		CandidateID:          candidate.CandidateID,
+		ScenarioID:           candidate.ScenarioID,
+		SeedID:               candidate.SeedID,
+		TaskID:               taskID,
+		TargetID:             opts.TargetID,
+		PromptProfileID:      target.NormalizeTargetPromptProfileID(candidate.PromptProfileID),
+		LifecycleOperationID: candidate.LifecycleOperationID,
+		PlantPrimitiveID:     candidate.PlantPrimitiveID,
+		ActivationKindID:     candidate.ActivationKindID,
+		OracleKindID:         candidate.OracleKindID,
+		Mutations:            append([]target.TargetScenarioMutation{}, candidate.Mutations...),
+		Iteration:            iteration,
+		LateObserveDelayMs:   runLateObserveDelay.Milliseconds(),
+		Signature:            target.TargetSignature(taskID),
 	}
 	startedRun := time.Now()
 	runResult, err := target.RunTarget(ctx, target.TargetRunOptions{
@@ -369,7 +389,7 @@ func runTargetSuiteTask(
 		TargetID:         opts.TargetID,
 		TaskID:           taskID,
 		Objective:        opts.Objective,
-		PromptProfileID:  promptProfileID,
+		PromptProfileID:  candidate.PromptProfileID,
 		Prompt:           opts.Prompt,
 		PromptFile:       opts.PromptFile,
 		Command:          opts.Command,
@@ -420,6 +440,32 @@ func runTargetSuiteTask(
 	recordTargetSuiteContract(contractSummary, target.TargetContractInterpretationStatusValue(item.ContractInterpretation), item.Confirmed)
 	recordTargetSuiteContract(taskContracts[taskID], target.TargetContractInterpretationStatusValue(item.ContractInterpretation), item.Confirmed)
 	result.Results = append(result.Results, item)
+}
+
+func targetScheduledTaskCandidate(targetID string, taskID string, promptProfileID string, candidateID string) TargetScheduleCandidate {
+	item := TargetScheduleCandidate{
+		CandidateID:             candidateID,
+		TargetID:                targetID,
+		TaskID:                  taskID,
+		PromptProfileID:         target.NormalizeTargetPromptProfileID(promptProfileID),
+		DefaultExpectedFiles:    target.DefaultTargetExpectedFiles(taskID),
+		UsesLateObservation:     target.DefaultTargetLateObserveDelay(taskID) > 0,
+		DefaultLateObserveDelay: target.DefaultTargetLateObserveDelay(taskID).Milliseconds(),
+		Signature:               target.TargetSignature(taskID),
+	}
+	if taskInfo, ok := targetTaskInfoByID(taskID); ok {
+		item.ScenarioID = taskInfo.ScenarioID
+		item.SeedID = taskInfo.SeedID
+		item.Description = taskInfo.Description
+		item.StateSurface = taskInfo.StateSurface
+		item.LifecycleEdge = taskInfo.LifecycleEdge
+		item.LifecycleOperationID = taskInfo.LifecycleOperationID
+		item.PlantPrimitiveID = taskInfo.PlantPrimitiveID
+		item.ActivationKindID = taskInfo.ActivationKindID
+		item.OracleKindID = taskInfo.OracleKindID
+		item.Mutations = append([]target.TargetScenarioMutation{}, taskInfo.Mutations...)
+	}
+	return item
 }
 
 func finalizeTargetSuiteItemMetrics(item *TargetSuiteRunResult, started time.Time) {

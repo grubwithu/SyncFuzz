@@ -339,6 +339,11 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 	if scenario, ok := targetScenarioByID(opts.TaskID); ok {
 		info := scenario.Info
+		info.DefaultExpectedFiles = append([]string{}, info.DefaultExpectedFiles...)
+		info.LateExpectedFiles = append([]string{}, info.LateExpectedFiles...)
+		info.Components = append([]TargetScenarioComponent{}, info.Components...)
+		info.Mutations = append([]TargetScenarioMutation{}, info.Mutations...)
+		info.ExecutionPlan = targetScenarioExecutionPlanInfo(scenario.Lifecycle)
 		task.Scenario = &info
 	}
 	if err := core.WriteJSON(filepath.Join(run.RunDir, TargetTaskArtifact), task); err != nil {

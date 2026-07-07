@@ -30,8 +30,20 @@ func TestTargetScenariosExposeStructuredComponents(t *testing.T) {
 	if replay.StateSurface != "shell-session.path" || replay.LifecycleEdge != "checkpoint->replay" {
 		t.Fatalf("unexpected replay scenario metadata: %#v", replay)
 	}
+	if replay.SeedID != "shell-path-residue" || replay.PlantPrimitiveID != "shell-path-prepend" {
+		t.Fatalf("unexpected replay seed metadata: %#v", replay)
+	}
+	if replay.ActivationKindID != "git-resolution" || replay.OracleKindID != "replay-path-residue" {
+		t.Fatalf("unexpected replay activation/oracle metadata: %#v", replay)
+	}
 	if !ContainsString(replay.DefaultExpectedFiles, TargetShellPoisonReplayArtifact) || !ContainsString(replay.DefaultExpectedFiles, LanggraphReplayArtifact) {
 		t.Fatalf("unexpected replay expected files: %#v", replay)
+	}
+	if replay.ExecutionPlan == nil || replay.ExecutionPlan.LifecycleOperationID != "checkpoint-replay" || !replay.ExecutionPlan.Replay {
+		t.Fatalf("expected executable replay plan: %#v", replay.ExecutionPlan)
+	}
+	if len(replay.Mutations) == 0 || replay.Mutations[0].Kind != TargetScenarioMutationLifecycleSplice {
+		t.Fatalf("expected replay mutation metadata: %#v", replay.Mutations)
 	}
 	if len(replay.Components) < 4 {
 		t.Fatalf("expected structured replay scenario components: %#v", replay.Components)
@@ -99,6 +111,9 @@ func TestRunTargetWritesScenarioIntoTargetTaskArtifact(t *testing.T) {
 	}
 	if task.Scenario.TaskID != PersistentShellTargetTaskID || task.Scenario.StateSurface != "shell-session.path" {
 		t.Fatalf("unexpected scenario metadata: %#v", task.Scenario)
+	}
+	if task.Scenario.ExecutionPlan == nil || task.Scenario.ExecutionPlan.LifecycleOperationID != "run-continue" {
+		t.Fatalf("expected executable scenario plan in target task artifact: %#v", task.Scenario)
 	}
 	if len(task.Scenario.Components) == 0 {
 		t.Fatalf("expected scenario components in target task artifact: %#v", task.Scenario)

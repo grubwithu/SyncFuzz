@@ -149,16 +149,22 @@ func orderTargetExplorationCandidates(candidates []TargetScheduleCandidate) []Ta
 	})
 
 	selected := make([]TargetScheduleCandidate, 0, len(remaining))
+	seenSeeds := make(map[string]struct{}, len(remaining))
+	seenPrimitives := make(map[string]struct{}, len(remaining))
 	seenTasks := make(map[string]struct{}, len(remaining))
 	seenRules := make(map[string]struct{}, len(remaining))
 	seenSurfaces := make(map[string]struct{}, len(remaining))
 	seenEdges := make(map[string]struct{}, len(remaining))
+	seenLifecycleOps := make(map[string]struct{}, len(remaining))
+	seenActivations := make(map[string]struct{}, len(remaining))
+	seenOracles := make(map[string]struct{}, len(remaining))
+	seenMutations := make(map[string]struct{}, len(remaining))
 
 	for len(remaining) > 0 {
 		bestIdx := 0
-		bestScore := targetExplorationNoveltyScore(remaining[0], seenTasks, seenRules, seenSurfaces, seenEdges)
+		bestScore := targetExplorationNoveltyScore(remaining[0], seenSeeds, seenPrimitives, seenTasks, seenRules, seenSurfaces, seenEdges, seenLifecycleOps, seenActivations, seenOracles, seenMutations)
 		for i := 1; i < len(remaining); i++ {
-			score := targetExplorationNoveltyScore(remaining[i], seenTasks, seenRules, seenSurfaces, seenEdges)
+			score := targetExplorationNoveltyScore(remaining[i], seenSeeds, seenPrimitives, seenTasks, seenRules, seenSurfaces, seenEdges, seenLifecycleOps, seenActivations, seenOracles, seenMutations)
 			if score > bestScore || (score == bestScore && targetExplorationBaseLess(remaining[i], remaining[bestIdx])) {
 				bestIdx = i
 				bestScore = score
@@ -167,7 +173,7 @@ func orderTargetExplorationCandidates(candidates []TargetScheduleCandidate) []Ta
 
 		pick := remaining[bestIdx]
 		selected = append(selected, pick)
-		targetRecordExplorationCandidate(pick, seenTasks, seenRules, seenSurfaces, seenEdges)
+		targetRecordExplorationCandidate(pick, seenSeeds, seenPrimitives, seenTasks, seenRules, seenSurfaces, seenEdges, seenLifecycleOps, seenActivations, seenOracles, seenMutations)
 		remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)
 	}
 
@@ -176,27 +182,66 @@ func orderTargetExplorationCandidates(candidates []TargetScheduleCandidate) []Ta
 
 func targetExplorationNoveltyScore(
 	candidate TargetScheduleCandidate,
+	seenSeeds map[string]struct{},
+	seenPrimitives map[string]struct{},
 	seenTasks map[string]struct{},
 	seenRules map[string]struct{},
 	seenSurfaces map[string]struct{},
 	seenEdges map[string]struct{},
+	seenLifecycleOps map[string]struct{},
+	seenActivations map[string]struct{},
+	seenOracles map[string]struct{},
+	seenMutations map[string]struct{},
 ) int {
 	score := 0
+	if candidate.SeedID != "" {
+		if _, ok := seenSeeds[candidate.SeedID]; !ok {
+			score += 32
+		}
+	}
+	if candidate.PlantPrimitiveID != "" {
+		if _, ok := seenPrimitives[candidate.PlantPrimitiveID]; !ok {
+			score += 16
+		}
+	}
 	if _, ok := seenTasks[candidate.TaskID]; !ok {
-		score += 16
+		score += 8
 	}
 	if candidate.ContractRuleID != "" {
 		if _, ok := seenRules[candidate.ContractRuleID]; !ok {
-			score += 8
+			score += 4
 		}
 	}
 	if candidate.StateSurface != "" {
 		if _, ok := seenSurfaces[candidate.StateSurface]; !ok {
-			score += 4
+			score += 2
 		}
 	}
 	if candidate.LifecycleEdge != "" {
 		if _, ok := seenEdges[candidate.LifecycleEdge]; !ok {
+			score += 1
+		}
+	}
+	if candidate.LifecycleOperationID != "" {
+		if _, ok := seenLifecycleOps[candidate.LifecycleOperationID]; !ok {
+			score += 4
+		}
+	}
+	if candidate.ActivationKindID != "" {
+		if _, ok := seenActivations[candidate.ActivationKindID]; !ok {
+			score += 2
+		}
+	}
+	if candidate.OracleKindID != "" {
+		if _, ok := seenOracles[candidate.OracleKindID]; !ok {
+			score += 1
+		}
+	}
+	for _, mutation := range candidate.Mutations {
+		if mutation.MutationID == "" {
+			continue
+		}
+		if _, ok := seenMutations[mutation.MutationID]; !ok {
 			score += 2
 		}
 	}
@@ -205,11 +250,23 @@ func targetExplorationNoveltyScore(
 
 func targetRecordExplorationCandidate(
 	candidate TargetScheduleCandidate,
+	seenSeeds map[string]struct{},
+	seenPrimitives map[string]struct{},
 	seenTasks map[string]struct{},
 	seenRules map[string]struct{},
 	seenSurfaces map[string]struct{},
 	seenEdges map[string]struct{},
+	seenLifecycleOps map[string]struct{},
+	seenActivations map[string]struct{},
+	seenOracles map[string]struct{},
+	seenMutations map[string]struct{},
 ) {
+	if candidate.SeedID != "" {
+		seenSeeds[candidate.SeedID] = struct{}{}
+	}
+	if candidate.PlantPrimitiveID != "" {
+		seenPrimitives[candidate.PlantPrimitiveID] = struct{}{}
+	}
 	seenTasks[candidate.TaskID] = struct{}{}
 	if candidate.ContractRuleID != "" {
 		seenRules[candidate.ContractRuleID] = struct{}{}
@@ -219,6 +276,21 @@ func targetRecordExplorationCandidate(
 	}
 	if candidate.LifecycleEdge != "" {
 		seenEdges[candidate.LifecycleEdge] = struct{}{}
+	}
+	if candidate.LifecycleOperationID != "" {
+		seenLifecycleOps[candidate.LifecycleOperationID] = struct{}{}
+	}
+	if candidate.ActivationKindID != "" {
+		seenActivations[candidate.ActivationKindID] = struct{}{}
+	}
+	if candidate.OracleKindID != "" {
+		seenOracles[candidate.OracleKindID] = struct{}{}
+	}
+	for _, mutation := range candidate.Mutations {
+		if mutation.MutationID == "" {
+			continue
+		}
+		seenMutations[mutation.MutationID] = struct{}{}
 	}
 }
 
@@ -235,6 +307,15 @@ func targetExplorationBaseLess(left TargetScheduleCandidate, right TargetSchedul
 	}
 	if left.LifecycleEdge != right.LifecycleEdge {
 		return left.LifecycleEdge < right.LifecycleEdge
+	}
+	if left.SeedID != right.SeedID {
+		return left.SeedID < right.SeedID
+	}
+	if left.PlantPrimitiveID != right.PlantPrimitiveID {
+		return left.PlantPrimitiveID < right.PlantPrimitiveID
+	}
+	if left.LifecycleOperationID != right.LifecycleOperationID {
+		return left.LifecycleOperationID < right.LifecycleOperationID
 	}
 	if left.StateSurface != right.StateSurface {
 		return left.StateSurface < right.StateSurface

@@ -34,6 +34,31 @@ func TestBuildTargetScheduleMatrixExpandsGroupsAndContracts(t *testing.T) {
 	if replay.ContractRuleID != "shell-path-replay-boundary" || replay.ContractExpectation != target.TargetContractExpectationReset {
 		t.Fatalf("unexpected replay candidate contract metadata: %#v", replay)
 	}
+	if replay.SeedID != "shell-path-residue" || replay.PlantPrimitiveID != "shell-path-prepend" {
+		t.Fatalf("unexpected replay scenario seed metadata: %#v", replay)
+	}
+	if replay.LifecycleOperationID != "checkpoint-replay" || replay.ActivationKindID != "git-resolution" || replay.OracleKindID != "replay-path-residue" {
+		t.Fatalf("unexpected replay scenario execution metadata: %#v", replay)
+	}
+	if len(replay.Mutations) == 0 || replay.Mutations[0].Kind != target.TargetScenarioMutationLifecycleSplice {
+		t.Fatalf("expected replay candidate mutations: %#v", replay)
+	}
+}
+
+func TestBuildTargetScheduleMatrixExpandsSeeds(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		SeedIDs:  []string{"shell-path-residue"},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	if len(matrix.SeedIDs) != 1 || matrix.SeedIDs[0] != "shell-path-residue" {
+		t.Fatalf("unexpected seed ids: %#v", matrix)
+	}
+	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 3 {
+		t.Fatalf("unexpected seed-expanded matrix size: %#v", matrix)
+	}
 }
 
 func TestRunTargetSuiteMatrixWritesArtifacts(t *testing.T) {

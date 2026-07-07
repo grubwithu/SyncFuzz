@@ -243,6 +243,61 @@ func TestExpandTargetTasksRejectsUnknownGroup(t *testing.T) {
 	}
 }
 
+func TestTargetScenarioSeedsExposeShellPathFamily(t *testing.T) {
+	seeds := target.TargetScenarioSeeds()
+	var shellSeed target.TargetScenarioSeedInfo
+	found := false
+	for _, seed := range seeds {
+		if seed.SeedID == "shell-path-residue" {
+			shellSeed = seed
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected shell-path-residue seed in catalog: %#v", seeds)
+	}
+	if len(shellSeed.Tasks) != 3 {
+		t.Fatalf("expected three shell-path tasks, got %#v", shellSeed)
+	}
+	if !target.ContainsString(shellSeed.PlantPrimitives, "shell-path-prepend") {
+		t.Fatalf("expected shell primitive in seed: %#v", shellSeed)
+	}
+	if !target.ContainsString(shellSeed.LifecycleOperations, "run-continue") || !target.ContainsString(shellSeed.LifecycleOperations, "checkpoint-replay") || !target.ContainsString(shellSeed.LifecycleOperations, "checkpoint-fork") {
+		t.Fatalf("expected shell lifecycle variants in seed: %#v", shellSeed)
+	}
+}
+
+func TestExpandTargetSelectionIncludesSeedsAndDeduplicates(t *testing.T) {
+	tasks, groups, seeds, err := target.ExpandTargetSelection(
+		[]string{target.PersistentShellForkTargetTaskID},
+		[]string{"shell-lifecycle"},
+		[]string{"shell-path-residue", "shell-path-residue"},
+	)
+	if err != nil {
+		t.Fatalf("target.ExpandTargetSelection failed: %v", err)
+	}
+	if len(groups) != 1 || groups[0] != "shell-lifecycle" {
+		t.Fatalf("unexpected normalized groups: %#v", groups)
+	}
+	if len(seeds) != 1 || seeds[0] != "shell-path-residue" {
+		t.Fatalf("unexpected normalized seeds: %#v", seeds)
+	}
+	expected := []string{
+		target.PersistentShellTargetTaskID,
+		target.PersistentShellReplayTargetTaskID,
+		target.PersistentShellForkTargetTaskID,
+	}
+	if len(tasks) != len(expected) {
+		t.Fatalf("unexpected expanded task count: got %d want %d (%#v)", len(tasks), len(expected), tasks)
+	}
+	for i := range expected {
+		if tasks[i] != expected[i] {
+			t.Fatalf("unexpected expanded tasks: got %#v want %#v", tasks, expected)
+		}
+	}
+}
+
 func TestTargetSuiteAttributionStatsCountsAndSorts(t *testing.T) {
 	stats := make(map[string]*TargetSuiteAttributionStats)
 	recordTargetSuiteAttribution(stats, target.TargetOracleAttributionRuntimeResidue, true)

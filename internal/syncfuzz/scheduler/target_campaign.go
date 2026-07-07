@@ -17,6 +17,7 @@ type TargetCampaignOptions struct {
 	TargetID         string
 	Tasks            []string
 	TaskGroups       []string
+	SeedIDs          []string
 	Objective        string
 	PromptProfileID  string
 	PromptProfileIDs []string
@@ -71,6 +72,7 @@ type TargetCampaignResult struct {
 	SeedFeedbackFrom   string                      `json:"seed_feedback_from,omitempty"`
 	Tasks              []string                    `json:"tasks,omitempty"`
 	TaskGroups         []string                    `json:"task_groups,omitempty"`
+	SeedIDs            []string                    `json:"seed_ids,omitempty"`
 	PromptProfiles     []string                    `json:"prompt_profiles,omitempty"`
 	TotalSuites        int                         `json:"total_suites"`
 	TotalRuns          int                         `json:"total_runs"`
@@ -136,6 +138,7 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 		SeedFeedbackFrom: opts.FeedbackFrom,
 		Tasks:            append([]string{}, opts.Tasks...),
 		TaskGroups:       append([]string{}, opts.TaskGroups...),
+		SeedIDs:          append([]string{}, opts.SeedIDs...),
 		PromptProfiles:   append([]string{}, target.TargetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs)...),
 		RoundResults:     []TargetCampaignRoundResult{},
 	}
@@ -148,6 +151,7 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 			TargetID:          opts.TargetID,
 			Tasks:             opts.Tasks,
 			TaskGroups:        opts.TaskGroups,
+			SeedIDs:           opts.SeedIDs,
 			Objective:         opts.Objective,
 			PromptProfileID:   opts.PromptProfileID,
 			PromptProfileIDs:  opts.PromptProfileIDs,
@@ -174,6 +178,9 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 		}
 		if len(result.PromptProfiles) == 0 && len(suite.PromptProfiles) > 0 {
 			result.PromptProfiles = append([]string{}, suite.PromptProfiles...)
+		}
+		if len(result.SeedIDs) == 0 && len(suite.SeedIDs) > 0 {
+			result.SeedIDs = append([]string{}, suite.SeedIDs...)
 		}
 
 		roundResult := targetCampaignRoundResult(round, suite)

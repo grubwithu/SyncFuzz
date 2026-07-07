@@ -80,13 +80,14 @@ Usage:
   syncfuzz campaign [--rounds 2] [--candidate-limit 3] [--cases action-replay] [--timing baseline,tight,wide] [--feedback-from matrix-result.json] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz target list
   syncfuzz target tasks
+  syncfuzz target seeds
   syncfuzz target scenarios
   syncfuzz target groups
   syncfuzz target prompt-profiles
-  syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
+  syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
-  syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles baseline,workflow,audit] [--matrix] [--feedback-from target-matrix-result.json] [--candidate-limit 3] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
-  syncfuzz target campaign [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--group phase5a-baseline] [--prompt-profiles baseline,workflow,audit] [--rounds 2] [--candidate-limit 3] [--repeat 1] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles baseline,workflow,audit] [--matrix] [--feedback-from target-matrix-result.json] [--candidate-limit 3] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target campaign [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--group phase5a-baseline] [--prompt-profiles baseline,workflow,audit] [--rounds 2] [--candidate-limit 3] [--repeat 1] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz corpus list [--corpus corpus] [--limit 20]
   syncfuzz corpus analyze [--corpus corpus] [--limit 0] [--verification runs/verify-<id>/verification-result.json]
   syncfuzz corpus show --id <entry_id> [--corpus corpus]
@@ -473,6 +474,8 @@ func runTarget(args []string) {
 		targetList()
 	case "tasks":
 		targetTasks()
+	case "seeds":
+		targetSeeds()
 	case "scenarios":
 		targetScenarios()
 	case "groups":
@@ -506,10 +509,12 @@ func targetList() {
 }
 
 func targetTasks() {
-	fmt.Printf("%-28s %-5s %-28s %s\n", "task", "late", "default_expected", "description")
+	fmt.Printf("%-28s %-26s %-24s %-5s %-20s %s\n", "task", "seed", "primitive", "late", "default_expected", "description")
 	for _, task := range target.TargetTasks() {
-		fmt.Printf("%-28s %-5t %-28s %s\n",
+		fmt.Printf("%-28s %-26s %-24s %-5t %-20s %s\n",
 			task.TaskID,
+			task.SeedID,
+			task.PlantPrimitiveID,
 			task.UsesLateObservation,
 			strings.Join(task.DefaultExpectedFiles, ","),
 			task.Description,
@@ -517,18 +522,37 @@ func targetTasks() {
 	}
 }
 
+func targetSeeds() {
+	fmt.Printf("%-28s %-26s %-22s %-24s %s\n", "seed", "primitives", "lifecycle_ops", "activation_kinds", "tasks")
+	for _, seed := range target.TargetScenarioSeeds() {
+		fmt.Printf("%-28s %-26s %-22s %-24s %s\n",
+			seed.SeedID,
+			strings.Join(seed.PlantPrimitives, ","),
+			strings.Join(seed.LifecycleOperations, ","),
+			strings.Join(seed.ActivationKinds, ","),
+			strings.Join(seed.Tasks, ","),
+		)
+	}
+}
+
 func targetScenarios() {
-	fmt.Printf("%-28s %-28s %-24s %s\n", "scenario", "state_surface", "lifecycle_edge", "components")
+	fmt.Printf("%-28s %-24s %-22s %-20s %-24s %s\n", "scenario", "seed", "primitive", "lifecycle_op", "activation", "mutations")
 	for _, scenario := range target.TargetScenarios() {
-		parts := make([]string, 0, len(scenario.Components))
-		for _, component := range scenario.Components {
-			parts = append(parts, fmt.Sprintf("%s:%s", component.Role, component.Summary))
+		mutations := make([]string, 0, len(scenario.Mutations))
+		for _, mutation := range scenario.Mutations {
+			mutations = append(mutations, mutation.MutationID)
 		}
-		fmt.Printf("%-28s %-28s %-24s %s\n",
+		lifecycleOp := ""
+		if scenario.ExecutionPlan != nil {
+			lifecycleOp = scenario.ExecutionPlan.LifecycleOperationID
+		}
+		fmt.Printf("%-28s %-24s %-22s %-20s %-24s %s\n",
 			scenario.ScenarioID,
-			scenario.StateSurface,
-			scenario.LifecycleEdge,
-			strings.Join(parts, " | "),
+			scenario.SeedID,
+			scenario.PlantPrimitiveID,
+			lifecycleOp,
+			scenario.ActivationKindID,
+			strings.Join(mutations, ","),
 		)
 	}
 }
@@ -556,6 +580,8 @@ func targetMatrix(args []string) {
 	targetID := fs.String("target", "command", "human-readable target runtime id")
 	taskID := fs.String("task", "orphan-process", "single target task id")
 	taskList := fs.String("tasks", "", "comma-separated target task ids; overrides --task when set")
+	seedID := fs.String("seed", "", "single built-in target scenario seed to expand into matrix candidates")
+	seedList := fs.String("seeds", "", "comma-separated built-in target scenario seeds to expand before explicit tasks")
 	taskGroup := fs.String("group", "", "single built-in target task group to expand into matrix candidates")
 	taskGroups := fs.String("groups", "", "comma-separated built-in target task groups to expand before explicit tasks")
 	promptProfile := fs.String("prompt-profile", "", "single built-in target prompt profile")
@@ -564,7 +590,7 @@ func targetMatrix(args []string) {
 		os.Exit(2)
 	}
 
-	tasks, groups := resolveTargetTaskSelection(*taskID, *taskList, *taskGroup, *taskGroups, true)
+	tasks, groups, seeds := resolveTargetTaskSelection(*taskID, *taskList, *seedID, *seedList, *taskGroup, *taskGroups, true)
 	profileIDs := splitCSV(*promptProfiles)
 	if len(profileIDs) == 0 && *promptProfile != "" {
 		profileIDs = []string{*promptProfile}
@@ -573,6 +599,7 @@ func targetMatrix(args []string) {
 		TargetID:         *targetID,
 		Tasks:            tasks,
 		TaskGroups:       groups,
+		SeedIDs:          seeds,
 		PromptProfileIDs: profileIDs,
 	})
 	if err != nil {
@@ -586,18 +613,22 @@ func targetMatrix(args []string) {
 	if len(result.TaskGroups) > 0 {
 		fmt.Printf("task_groups: %s\n", strings.Join(result.TaskGroups, ","))
 	}
+	if len(result.SeedIDs) > 0 {
+		fmt.Printf("seed_ids: %s\n", strings.Join(result.SeedIDs, ","))
+	}
 	if len(result.PromptProfiles) > 0 {
 		fmt.Printf("prompt_profiles: %s\n", strings.Join(result.PromptProfiles, ","))
 	}
 	fmt.Printf("total_candidates: %d\n", result.TotalCandidates)
-	fmt.Printf("%-52s %-28s %-10s %-5s %-24s %s\n", "candidate_id", "task", "prompt", "late", "contract_rule", "description")
+	fmt.Printf("%-52s %-24s %-22s %-20s %-10s %-5s %s\n", "candidate_id", "seed", "primitive", "lifecycle_op", "prompt", "late", "description")
 	for _, candidate := range result.Candidates {
-		fmt.Printf("%-52s %-28s %-10s %-5t %-24s %s\n",
+		fmt.Printf("%-52s %-24s %-22s %-20s %-10s %-5t %s\n",
 			candidate.CandidateID,
-			candidate.TaskID,
+			candidate.SeedID,
+			candidate.PlantPrimitiveID,
+			candidate.LifecycleOperationID,
 			candidate.PromptProfileID,
 			candidate.UsesLateObservation,
-			candidate.ContractRuleID,
 			candidate.Description,
 		)
 	}
@@ -713,6 +744,8 @@ func targetSuite(args []string) {
 	targetID := fs.String("target", "command", "human-readable target runtime id")
 	taskID := fs.String("task", "orphan-process", "single target task id")
 	taskList := fs.String("tasks", "", "comma-separated target task ids; overrides --task when set")
+	seedID := fs.String("seed", "", "single built-in target scenario seed to expand into suite tasks")
+	seedList := fs.String("seeds", "", "comma-separated built-in target scenario seeds to expand before explicit tasks")
 	taskGroup := fs.String("group", "", "single built-in target task group to expand into suite tasks")
 	taskGroups := fs.String("groups", "", "comma-separated built-in target task groups to expand before explicit tasks")
 	objective := fs.String("objective", "", "optional shared objective override")
@@ -738,7 +771,7 @@ func targetSuite(args []string) {
 		os.Exit(2)
 	}
 
-	tasks, groups := resolveTargetTaskSelection(*taskID, *taskList, *taskGroup, *taskGroups, *matrixMode)
+	tasks, groups, seeds := resolveTargetTaskSelection(*taskID, *taskList, *seedID, *seedList, *taskGroup, *taskGroups, *matrixMode)
 	profileIDs := splitCSV(*promptProfiles)
 	if len(profileIDs) == 0 && *promptProfile != "" {
 		profileIDs = []string{*promptProfile}
@@ -749,6 +782,7 @@ func targetSuite(args []string) {
 		TargetID:         *targetID,
 		Tasks:            tasks,
 		TaskGroups:       groups,
+		SeedIDs:          seeds,
 		Objective:        *objective,
 		PromptProfileID:  *promptProfile,
 		PromptProfileIDs: profileIDs,
@@ -783,6 +817,9 @@ func targetSuite(args []string) {
 	fmt.Printf("tasks: %s\n", strings.Join(result.Tasks, ","))
 	if len(result.TaskGroups) > 0 {
 		fmt.Printf("task_groups: %s\n", strings.Join(result.TaskGroups, ","))
+	}
+	if len(result.SeedIDs) > 0 {
+		fmt.Printf("seed_ids: %s\n", strings.Join(result.SeedIDs, ","))
 	}
 	if len(result.PromptProfiles) > 0 {
 		fmt.Printf("prompt_profiles: %s\n", strings.Join(result.PromptProfiles, ","))
@@ -850,6 +887,8 @@ func targetCampaign(args []string) {
 	targetID := fs.String("target", "command", "human-readable target runtime id")
 	taskID := fs.String("task", "orphan-process", "single target task id")
 	taskList := fs.String("tasks", "", "comma-separated target task ids; overrides --task when set")
+	seedID := fs.String("seed", "", "single built-in target scenario seed to expand into campaign candidates")
+	seedList := fs.String("seeds", "", "comma-separated built-in target scenario seeds to expand before explicit tasks")
 	taskGroup := fs.String("group", "", "single built-in target task group to expand into campaign candidates")
 	taskGroups := fs.String("groups", "", "comma-separated built-in target task groups to expand before explicit tasks")
 	objective := fs.String("objective", "", "optional shared objective override")
@@ -875,7 +914,7 @@ func targetCampaign(args []string) {
 		os.Exit(2)
 	}
 
-	tasks, groups := resolveTargetTaskSelection(*taskID, *taskList, *taskGroup, *taskGroups, true)
+	tasks, groups, seeds := resolveTargetTaskSelection(*taskID, *taskList, *seedID, *seedList, *taskGroup, *taskGroups, true)
 	profileIDs := splitCSV(*promptProfiles)
 	if len(profileIDs) == 0 && *promptProfile != "" {
 		profileIDs = []string{*promptProfile}
@@ -885,6 +924,7 @@ func targetCampaign(args []string) {
 		TargetID:         *targetID,
 		Tasks:            tasks,
 		TaskGroups:       groups,
+		SeedIDs:          seeds,
 		Objective:        *objective,
 		PromptProfileID:  *promptProfile,
 		PromptProfileIDs: profileIDs,
@@ -919,6 +959,9 @@ func targetCampaign(args []string) {
 	if len(result.PromptProfiles) > 0 {
 		fmt.Printf("prompt_profiles: %s\n", strings.Join(result.PromptProfiles, ","))
 	}
+	if len(result.SeedIDs) > 0 {
+		fmt.Printf("seed_ids: %s\n", strings.Join(result.SeedIDs, ","))
+	}
 	fmt.Printf("candidate_limit: %d\n", result.CandidateLimit)
 	fmt.Printf("total_suites: %d\n", result.TotalSuites)
 	fmt.Printf("total_runs: %d\n", result.TotalRuns)
@@ -942,13 +985,17 @@ func targetCampaign(args []string) {
 	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
 }
 
-func resolveTargetTaskSelection(taskID string, taskList string, taskGroup string, taskGroups string, matrixMode bool) ([]string, []string) {
+func resolveTargetTaskSelection(taskID string, taskList string, seedID string, seedList string, taskGroup string, taskGroups string, matrixMode bool) ([]string, []string, []string) {
 	groups := splitCSV(taskGroups)
 	if taskGroup != "" {
 		groups = append([]string{taskGroup}, groups...)
 	}
+	seeds := splitCSV(seedList)
+	if seedID != "" {
+		seeds = append([]string{seedID}, seeds...)
+	}
 	tasks := splitCSV(taskList)
-	if len(tasks) == 0 && len(groups) == 0 {
+	if len(tasks) == 0 && len(groups) == 0 && len(seeds) == 0 {
 		if matrixMode {
 			if taskID != "orphan-process" {
 				tasks = []string{taskID}
@@ -959,7 +1006,7 @@ func resolveTargetTaskSelection(taskID string, taskList string, taskGroup string
 	} else if len(tasks) == 0 && taskID != "orphan-process" {
 		tasks = []string{taskID}
 	}
-	return tasks, groups
+	return tasks, groups, seeds
 }
 
 func runCorpus(args []string) {

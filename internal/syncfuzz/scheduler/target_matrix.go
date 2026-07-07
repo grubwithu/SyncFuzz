@@ -13,12 +13,15 @@ type TargetMatrixOptions struct {
 	TargetID         string
 	Tasks            []string
 	TaskGroups       []string
+	SeedIDs          []string
 	PromptProfileIDs []string
 }
 
 type TargetScheduleCandidate struct {
 	CandidateID              string                              `json:"candidate_id"`
 	TargetID                 string                              `json:"target_id"`
+	ScenarioID               string                              `json:"scenario_id,omitempty"`
+	SeedID                   string                              `json:"seed_id,omitempty"`
 	TaskID                   string                              `json:"task_id"`
 	PromptProfileID          string                              `json:"prompt_profile_id,omitempty"`
 	PromptProfileDescription string                              `json:"prompt_profile_description,omitempty"`
@@ -33,6 +36,11 @@ type TargetScheduleCandidate struct {
 	ContractSourceStrength   target.TargetContractSourceStrength `json:"contract_source_strength,omitempty"`
 	StateSurface             string                              `json:"state_surface,omitempty"`
 	LifecycleEdge            string                              `json:"lifecycle_edge,omitempty"`
+	LifecycleOperationID     string                              `json:"lifecycle_operation_id,omitempty"`
+	PlantPrimitiveID         string                              `json:"plant_primitive_id,omitempty"`
+	ActivationKindID         string                              `json:"activation_kind_id,omitempty"`
+	OracleKindID             string                              `json:"oracle_kind_id,omitempty"`
+	Mutations                []target.TargetScenarioMutation     `json:"mutations,omitempty"`
 }
 
 type TargetScheduleMatrix struct {
@@ -40,6 +48,7 @@ type TargetScheduleMatrix struct {
 	TargetID        string                    `json:"target_id"`
 	Tasks           []string                  `json:"tasks"`
 	TaskGroups      []string                  `json:"task_groups,omitempty"`
+	SeedIDs         []string                  `json:"seed_ids,omitempty"`
 	PromptProfiles  []string                  `json:"prompt_profiles,omitempty"`
 	TotalCandidates int                       `json:"total_candidates"`
 	Candidates      []TargetScheduleCandidate `json:"candidates"`
@@ -54,12 +63,13 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 	var (
 		tasks      []string
 		taskGroups []string
+		seedIDs    []string
 		err        error
 	)
-	if len(opts.Tasks) == 0 && len(opts.TaskGroups) == 0 {
+	if len(opts.Tasks) == 0 && len(opts.TaskGroups) == 0 && len(opts.SeedIDs) == 0 {
 		tasks = allTargetTaskIDs()
 	} else {
-		tasks, taskGroups, err = target.ExpandTargetTasks(opts.Tasks, opts.TaskGroups)
+		tasks, taskGroups, seedIDs, err = target.ExpandTargetSelection(opts.Tasks, opts.TaskGroups, opts.SeedIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -87,6 +97,8 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 				Signature:                target.TargetSignature(taskID),
 			}
 			if ok {
+				candidate.ScenarioID = taskInfo.ScenarioID
+				candidate.SeedID = taskInfo.SeedID
 				candidate.Description = taskInfo.Description
 				if len(taskInfo.DefaultExpectedFiles) > 0 {
 					candidate.DefaultExpectedFiles = append([]string{}, taskInfo.DefaultExpectedFiles...)
@@ -94,6 +106,11 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 				candidate.UsesLateObservation = taskInfo.UsesLateObservation
 				candidate.StateSurface = taskInfo.StateSurface
 				candidate.LifecycleEdge = taskInfo.LifecycleEdge
+				candidate.LifecycleOperationID = taskInfo.LifecycleOperationID
+				candidate.PlantPrimitiveID = taskInfo.PlantPrimitiveID
+				candidate.ActivationKindID = taskInfo.ActivationKindID
+				candidate.OracleKindID = taskInfo.OracleKindID
+				candidate.Mutations = append([]target.TargetScenarioMutation{}, taskInfo.Mutations...)
 			} else {
 				candidate.Description = "custom target task"
 			}
@@ -119,6 +136,7 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 		TargetID:        targetID,
 		Tasks:           append([]string{}, tasks...),
 		TaskGroups:      append([]string{}, taskGroups...),
+		SeedIDs:         append([]string{}, seedIDs...),
 		PromptProfiles:  targetPromptProfileIDs(promptProfiles),
 		TotalCandidates: len(candidates),
 		Candidates:      candidates,

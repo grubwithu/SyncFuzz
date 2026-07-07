@@ -41,10 +41,12 @@ go run ./cmd/syncfuzz suite --matrix --feedback-from runs/suite-<id>/matrix-resu
 go run ./cmd/syncfuzz campaign --rounds 2 --candidate-limit 3 --cases action-replay --timing baseline,tight --out runs --corpus corpus
 go run ./cmd/syncfuzz target list
 go run ./cmd/syncfuzz target tasks
+go run ./cmd/syncfuzz target seeds
 go run ./cmd/syncfuzz target scenarios
 go run ./cmd/syncfuzz target groups
 go run ./cmd/syncfuzz target prompt-profiles
 go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --group phase5a-baseline --prompt-profiles all
+go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --seed shell-path-residue --prompt-profiles all
 go run ./cmd/syncfuzz target run --command-file examples/target-commands/orphan-process.sh --expect-files late-effect --observe-delay 500ms --out runs
 go run ./cmd/syncfuzz target run --target langgraph-shell-react --command-file examples/target-commands/langgraph-shell-react.sh --expect-files late-effect --observe-delay 500ms --out runs
 go run ./cmd/syncfuzz target run --target langgraph-shell-react --task orphan-process-long-delay --prompt-profile workflow --command-file examples/target-commands/langgraph-shell-react.sh --observe-delay 500ms --late-observe-delay 7s --out runs
@@ -86,6 +88,7 @@ make run-matrix-suite FEEDBACK_FROM=runs/suite-<id>/matrix-result.json CANDIDATE
 make run-campaign ROUNDS=2 CANDIDATE_LIMIT=3 CASES=action-replay TIMING=baseline,tight
 make target-list
 make target-tasks
+make target-seeds
 make target-scenarios
 make target-groups
 make target-prompt-profiles
@@ -143,7 +146,7 @@ For local workspace-backed runs, the process snapshots now carry enough open-FD 
 
 Phase 5 target runs add a parallel artifact set for real agent/runtime observation:
 
-- `target-task.json`: adapter id, target id, prompt, command, timeout, and expected files
+- `target-task.json`: adapter id, target id, prompt, command, timeout, expected files, and built-in scenario metadata including seed id, primitive, mutations, and executable lifecycle plan
 - `target-prompt.txt`: prompt material passed through `SYNCFUZZ_PROMPT_FILE`
 - `target-output.txt`: combined stdout/stderr from the real target command
 - `target-result.json`: command exit status, timeout status, target oracle verdict plus causal attribution, separate task-compliance verdict, optional contract interpretation, process lineage summary, workspace, and artifact path
@@ -230,13 +233,13 @@ For replay and fork lifecycle tasks, `target_oracle` now also records an `attrib
 
 LangGraph shell target runs require observed shell tool use. If the model only replies in text without a `tool` message, the wrapper exits non-zero and records `validation_error` in `langgraph-run-summary.json`.
 
-`syncfuzz target tasks` lists the current built-in real-target tasks, while `syncfuzz target scenarios` shows the current built-in Scenario IR view: state surface, lifecycle edge, and the high-level `setup / plant / lifecycle / activation / oracle` components that each built-in task currently maps to. `syncfuzz target suite` batches repeated real-target runs into one `target-suite-<id>/target-suite-result.json` summary. Each suite item now preserves `target_oracle`, `task_compliance`, and, when available, `contract_interpretation`, so repeated campaigns can separate raw residue evidence, task drift, and lifecycle-contract disagreement. Confirmed target runs are also written into `corpus/`, so `corpus list`, `replay`, and `corpus verify` can exercise the same real target again. For now, target corpus replay reads the original `target-task.json` from each recorded run artifact, so keep the corresponding `runs/` directory when you want to replay or verify those entries later.
+`syncfuzz target tasks` lists the current built-in real-target tasks, `syncfuzz target seeds` groups them by Scenario IR seed family, and `syncfuzz target scenarios` shows the first executable Scenario IR view: seed id, plant primitive, lifecycle operation, activation kind, and mutation operators for each built-in task. The same metadata is written into `target-task.json`, so replayed real-target artifacts preserve more than just prompt text. `syncfuzz target suite` batches repeated real-target runs into one `target-suite-<id>/target-suite-result.json` summary. Each suite item now preserves `target_oracle`, `task_compliance`, and, when available, `contract_interpretation`, so repeated campaigns can separate raw residue evidence, task drift, and lifecycle-contract disagreement. Confirmed target runs are also written into `corpus/`, so `corpus list`, `replay`, and `corpus verify` can exercise the same real target again. For now, target corpus replay reads the original `target-task.json` from each recorded run artifact, so keep the corresponding `runs/` directory when you want to replay or verify those entries later.
 
 `syncfuzz target groups` lists built-in task bundles such as `workspace-residue`, `shell-lifecycle`, and `phase5a-baseline`. `workspace-residue` now covers file presence, directory presence, deletion state, symlink binding, rename state, file mode, appended content, hardlink state, named-pipe residue, open-FD residue, deleted-open-FD residue, inherited-FD branch leakage, and Unix-listener residue. `syncfuzz target suite --group ...` or `--groups ...` expands those bundles before any explicit `--task` or `--tasks`, which makes it easier to run repeated residue campaigns without hand-copying long task lists. The suite summary now also writes `attribution_summaries`, `compliance_summaries`, and `contract_summaries`, so repeated runs can be tallied directly by residue outcome, prompt/task drift, and contract interpretation.
 
 `syncfuzz target prompt-profiles` lists the current deterministic wording variants for built-in real-target tasks. Today the built-in set is intentionally small: `baseline`, `workflow`, and `audit`. This is not full prompt fuzzing; it is a stable `task x prompt-profile` axis that lets SyncFuzz compare whether the same semantic target task behaves differently under more operational or audit-like phrasing.
 
-`syncfuzz target matrix` and `syncfuzz target campaign` now bring the same feedback-shaped workflow to real targets. The target matrix enumerates `target/task/prompt-profile` candidates, carries contract metadata when a built-in profile exists, and lets `target suite --matrix` or `target campaign` rank candidates with `--feedback-from <target-matrix-result.json>` plus `--candidate-limit N`. Real-target matrix suites write `target-schedule-matrix.json` and `target-matrix-result.json`, while campaigns write `target-campaign-result.json` and skip already executed candidates until the current target candidate space is exhausted.
+`syncfuzz target matrix` and `syncfuzz target campaign` now bring the same feedback-shaped workflow to real targets. The target matrix has started moving from plain `target/task/prompt-profile` rows toward `scenario seed + mutator` candidates: each candidate now carries scenario id, seed id, plant primitive, lifecycle operation, activation kind, oracle kind, and mutation operators alongside the existing contract metadata. `--seed` and `--seeds` let matrix, suite, and campaign runs expand built-in seed families directly instead of naming every task one by one. The feedback scheduler also uses those fields to prefer previously unseen seeds, primitives, lifecycle operations, and mutators before it spends budget on same-seed variants. Real-target matrix suites write `target-schedule-matrix.json` and `target-matrix-result.json`, while campaigns write `target-campaign-result.json` and skip already executed candidates until the current target candidate space is exhausted.
 
 Before running it against a hosted model, put provider settings in `.env`, then run the readiness check. For OpenAI-compatible endpoints, set both `OPENAI_API_KEY` and `OPENAI_BASE_URL`:
 

@@ -10,8 +10,15 @@ type TargetCandidateSummary struct {
 	Rank                    int                                         `json:"rank"`
 	CandidateID             string                                      `json:"candidate_id"`
 	TargetID                string                                      `json:"target_id"`
+	ScenarioID              string                                      `json:"scenario_id,omitempty"`
+	SeedID                  string                                      `json:"seed_id,omitempty"`
 	TaskID                  string                                      `json:"task_id"`
 	PromptProfileID         string                                      `json:"prompt_profile_id,omitempty"`
+	LifecycleOperationID    string                                      `json:"lifecycle_operation_id,omitempty"`
+	PlantPrimitiveID        string                                      `json:"plant_primitive_id,omitempty"`
+	ActivationKindID        string                                      `json:"activation_kind_id,omitempty"`
+	OracleKindID            string                                      `json:"oracle_kind_id,omitempty"`
+	Mutations               []target.TargetScenarioMutation             `json:"mutations,omitempty"`
 	Runs                    int                                         `json:"runs"`
 	Confirmed               int                                         `json:"confirmed"`
 	Unconfirmed             int                                         `json:"unconfirmed"`
@@ -61,10 +68,17 @@ func summarizeTargetCandidates(results []TargetSuiteRunResult) []TargetCandidate
 		if accumulator == nil {
 			accumulator = &targetCandidateAccumulator{
 				summary: TargetCandidateSummary{
-					CandidateID:     result.CandidateID,
-					TargetID:        result.TargetID,
-					TaskID:          result.TaskID,
-					PromptProfileID: result.PromptProfileID,
+					CandidateID:          result.CandidateID,
+					TargetID:             result.TargetID,
+					ScenarioID:           result.ScenarioID,
+					SeedID:               result.SeedID,
+					TaskID:               result.TaskID,
+					PromptProfileID:      result.PromptProfileID,
+					LifecycleOperationID: result.LifecycleOperationID,
+					PlantPrimitiveID:     result.PlantPrimitiveID,
+					ActivationKindID:     result.ActivationKindID,
+					OracleKindID:         result.OracleKindID,
+					Mutations:            append([]target.TargetScenarioMutation{}, result.Mutations...),
 				},
 				attributions:       make(map[string]struct{}),
 				oracleStatuses:     make(map[target.TargetOracleStatus]struct{}),
