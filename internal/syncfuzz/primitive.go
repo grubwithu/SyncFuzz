@@ -149,8 +149,8 @@ func MutationPrimitives() []MutationPrimitive {
 			StateClasses: []string{"fd"},
 			Phases:       []string{"P4", "P6"},
 			CaseNames:    []string{"partial-filesystem-rollback"},
-			Implemented:  false,
-			Description:  "Planned primitive for file descriptor state that survives rollback.",
+			Implemented:  true,
+			Description:  "Keep a deleted workspace inode reachable through an open file descriptor after rollback.",
 		},
 		{
 			ID:           "unix-socket",

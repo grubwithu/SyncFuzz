@@ -108,6 +108,26 @@ Oracle：
 
 状态：第一版完成。已实现 deterministic mutation primitive catalog、scheduler matrix、matrix-backed suite execution、candidate scoring/cost metrics、feedback-ranked candidate selection、multi-round campaign，以及首个从 planned 转为 executable 的新增 primitive。当前可以枚举、执行、排序并按上一轮反馈筛选 `case x primitive x timing_profile` 候选；campaign 会按预算跨轮探索未执行候选，并在候选耗尽后允许重复利用高分候选。
 
+但这里要明确校准：当前 Phase 4 更接近
+
+```text
+预定义场景空间
+  -> 候选执行
+  -> 反馈排序
+  -> 跨轮去重
+```
+
+而不是
+
+```text
+较小语义原语
+  -> 自动结构化变异
+  -> 研究者未直接编码的新场景
+  -> 新的状态转换与漏洞
+```
+
+也就是说，SyncFuzz 已经不是普通参数化测试，但是否已经成为真正意义上的状态型 Fuzzer，取决于它能否从较小的语义原语自动组合出研究者没有手写进任务列表的新 testcase。
+
 第一批 mutation 原语：
 
 - background process
@@ -146,15 +166,28 @@ Feedback：
 - suite / discovery / corpus metadata 携带 `candidate_id` 与 `primitive_id`，为后续 minimization 和 feedback selection 提供稳定 handle。
 - `candidate_summaries`：按 novelty、confirmed count、reproducibility 和 errors 对候选打分排序。
 - 执行成本指标：每个 suite item 与 candidate summary 记录 duration、artifact bytes、artifact files 和 cost penalty。
-- `--feedback-from <matrix-result.json>` / `--candidate-limit N`：用上一轮 candidate summary 对当前 matrix 排序，并按预算执行高优先级候选。
+- `--feedback-from <matrix-result.json>` / `--candidate-limit N`：用上一轮 candidate summary 对当前 matrix 排序，并按预算执行高优先级候选；当仍有未探索候选时，调度会优先展开新的 task / contract surface baseline probe，而不是先把同一 task 的不同 prompt profile 跑满。
 - `syncfuzz campaign`：自动执行多轮 matrix / feedback-ranked matrix suite，并写出 `campaign-result.json`。
 - campaign-level exploration/dedup：`candidate-limit` 每轮生效，优先跳过已执行候选，记录 `unique_candidates` 与 `repeated_candidates`。
 - `double-fork-daemon` 已从 planned primitive 转为 executable primitive，并进入 `orphan-process` 默认 matrix。
+- `open-fd` 已从 planned primitive 转为 executable primitive，并通过 local process snapshot 中的 workspace-related FD probe 进入 `partial-filesystem-rollback` matrix。
+
+Phase 4 当前短板：
+
+- 变异仍主要发生在研究者预定义的 candidate catalog 上；
+- 场景表达仍偏 testcase-centric，缺少可组合的 Scenario IR；
+- novelty 仍主要围绕 candidate / task / rule / surface，而不是跨层状态转换；
+- 自动 minimization 还没有真正形成闭环。
 
 Phase 4 之后：
 
-- 继续把 `open-fd`、`unix-socket`、`concurrent-file-replacement` 转为 executable primitive；
-- 将 campaign 接到真实 Target Adapter，开始测试真实 Agent runtime。
+- 把 real-target 与 synthetic candidate 都逐步重构到可组合的 Scenario IR，而不是继续累积越来越多的手写 testcase 名称；
+- 继续把 `unix-socket`、`concurrent-file-replacement` 转为 executable primitive；
+- 新增 `future-state orphan process` 这一类 active-execution primitive；
+- 实现结构化 mutation：primitive substitution、lifecycle splice、phase shift、activation substitution、跨 testcase crossover；
+- 把 guidance 从候选新颖度升级到状态转换新颖度、causal phase novelty、activation progress；
+- 增加自动 minimization：删除 prompt instruction、lifecycle event、delay、primitive、activation step，保留最小可复现 PoC；
+- 将 campaign 接到真实 Target Adapter，并逐步支持“组合发现模式”，从 seed 中抽取 `plant / lifecycle / activation / oracle` 重新组合。
 
 ## Phase 5：真实 Target Adapter
 
@@ -204,8 +237,18 @@ Phase 4 之后：
 - `directory-residue-fork`：继续沿 workspace filesystem 扩面；内建 fork 任务会自动从 `before-directory-create` semantic checkpoint 分叉，并用 `branch-dir` / `directory-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实目录残留、fork 侧重建和 clean fork。
 - `delete-residue-fork`：继续推进 filesystem rollback 语义；内建 fork 任务会自动从 `before-file-delete` semantic checkpoint 分叉，并用 `branch-delete-note.txt` / `delete-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实删除残留、clean fork 对齐和 fork 侧误修改。
 - `symlink-residue-fork`：继续沿 workspace filesystem 扩面；内建 fork 任务会自动从 `before-symlink-create` semantic checkpoint 分叉，并用 `branch-link.txt` / `symlink-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实 symlink 残留、fork 侧重建和 clean fork。
+- `rename-residue-fork`：继续沿 workspace namespace 扩面；内建 fork 任务会自动从 `before-file-rename` semantic checkpoint 分叉，并用 `branch-rename-src.txt` / `branch-rename-dst.txt` / `rename-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实 rename 残留、clean fork 恢复和 fork 侧误修改。
+- `mode-residue-fork`：继续沿 workspace metadata 扩面；内建 fork 任务会自动从 `before-file-chmod` semantic checkpoint 分叉，并用 `branch-mode-note.txt` / `mode-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实权限残留、clean fork 回滚和 fork 侧 chmod 重建。
+- `append-residue-fork`：继续沿 workspace content 扩面；内建 fork 任务会自动从 `before-file-append` semantic checkpoint 分叉，并用 `branch-append-note.txt` / `append-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实内容追加残留、clean fork 内容回滚和 fork 侧重写。
+- `hardlink-residue-fork`：继续沿 workspace object-type 扩面；内建 fork 任务会自动从 `before-hardlink-create` semantic checkpoint 分叉，并用 `branch-hardlink.txt` / `hardlink-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实 hardlink 残留、clean fork 回滚和 fork 侧重建。
+- `fifo-residue-fork`：继续沿 workspace special-file 扩面；内建 fork 任务会自动从 `before-fifo-create` semantic checkpoint 分叉，并用 `branch-fifo` / `fifo-residue-fork-check.txt` / `langgraph-fork-summary.json` 区分真实 named pipe 残留、clean fork 回滚和 fork 侧重建。
+- `open-fd-residue-fork` / `deleted-open-fd-residue-fork`：把真实攻击面从普通 workspace diff 扩到 resource-access capability；内建 fork 任务会自动从 fd-holder 之前的 semantic checkpoint 分叉，并用 `/proc/<pid>/fd/9` witness 区分真实 FD 残留、clean fork 和 fork 侧重建。
+- `inherited-fd-branch-leakage`：沿 open-FD capability 继续推进到 discarded branch leakage；内建 fork 任务会从 fd-holder 之前分叉，并验证 successor branch 是否能通过继承的 `/proc/<pid>/fd/9` 读回 discarded branch secret。
+- `unix-listener-residue-fork`：把 residue 从 resource-access capability 推进到 active IPC endpoint；内建 fork 任务会从 Unix listener 启动前分叉，并验证 successor branch 是否还能连接 discarded branch 留下的 `branch-listener.sock` 服务。
+- `unix-listener-residue-fork` 已形成有效阳性：fork follow-up 不重复 listener launch，只执行 witness command，仍能收到 `SYNCFUZZ_UNIX_LISTENER_RESPONSE`；同时 lifecycle trace 已纳入 oracle / compliance，避免 fork 侧重建被误判为 runtime residue。
 - durable checkpointer：真实 LangGraph target 新增 `disk` backend，并把 backend 元数据写入 `langgraph-checkpointer.json`；replay / fork / file-residue 这些 lifecycle 任务默认切到 durable backend，后续可以继续推进到跨进程恢复实验。
-- split-process lifecycle mode：真实 LangGraph target 现在还能把 initial branch 与 replay/fork follow-up 拆到两个 Python 进程里执行，并复用同一个 durable checkpoint 目录；phase artifact 与 merged artifact 都会保留，便于后续比较“同进程 replay/fork”和“跨进程 checkpoint-consume”的差异。
+- split-process lifecycle mode：真实 LangGraph target 现在还能把 initial branch 与 replay/fork follow-up 拆到两个 Python 进程里执行，并复用同一个 durable checkpoint 目录；内置 replay/fork 任务默认启用该模式。phase artifact 与 merged artifact 都会保留，便于后续比较“同进程 replay/fork”和“跨进程 checkpoint-consume”的差异。
+- 重构回归清单已沉淀为 [REFACTOR_TESTING.md](REFACTOR_TESTING.md)，覆盖 CLI contract、synthetic suite、matrix/campaign、corpus verify、LangGraph target smoke 和 active IPC gate。
 
 Phase 5A 冻结内容：
 
@@ -216,6 +259,9 @@ Phase 5A 冻结内容：
 - `directory-residue-fork` 的 transcript-backed filesystem oracle 已就位；
 - `delete-residue-fork` 的 transcript-backed deletion-residue oracle 已就位；
 - `symlink-residue-fork` 的 transcript-backed filesystem oracle 已就位；
+- `rename-residue-fork` / `mode-residue-fork` / `append-residue-fork` / `hardlink-residue-fork` / `fifo-residue-fork` 的 transcript-backed oracle 已纳入同一套 fork residue 框架；
+- `open-fd-residue-fork` / `deleted-open-fd-residue-fork` / `inherited-fd-branch-leakage` 已把 workspace residue 从普通文件快照推进到 resource-access capability residue，并通过 `/proc/<pid>/fd/9` witness 区分真实 FD 残留、clean fork、fork 侧重建和 successor branch secret 读取；
+- `unix-listener-residue-fork` 已进入真实 LangGraph target，开始覆盖 active IPC endpoint residue，并用 socket response witness 区分真实 listener 存活、clean fork 和 fork 侧重启；
 - replay / fork 所需的历史 artifact、summary artifact 与 semantic checkpoint selector 已就位。
 - durable checkpoint backend 已接入，workspace 内可直接审计 `langgraph-checkpoints/`。
 
@@ -226,8 +272,27 @@ Phase 5B 主线：
 - 继续保留少量 activation 验证实验，但不把 exploit generation 变成框架主目标；
 - 把 `targets/langgraph_shell_react/` 从“单进程内 durable checkpointer”继续推进到“跨进程恢复可消费的 durable checkpointer”；
 - 为 AutoGen command executor 增加真实 shell tool 包装；
-- 把 target run 接入 suite/campaign，使真实 runtime 能消费 Phase 4 matrix candidate；
+- 已把 target run 接入 real-target matrix / suite / campaign：`syncfuzz target matrix`、`target suite --matrix`、`target campaign` 已可对 `target/task` candidate 做 feedback-ranked exploration；
+- 已增加第一条 deterministic wording 维度：真实 target candidate 现在可以扩成 `target/task/prompt-profile`，用少量稳定 prompt profile 比较“同一语义任务、不同操作表述”对 runtime residue 的影响；
 - 把 replay / verify 的失败原因细化成 taxonomy，而不再只停留在 failed / unconfirmed / error。
+
+Phase 5B 优先级重排：
+
+- 当前 workspace residue family 已经足够丰富，后续不再以“补齐更多 Unix 对象类型”为主目标；
+- 新增 testcase 的组织方式从 `file / directory / symlink / hardlink / FIFO` 逐步转向 **按能力分类**：storage capability、execution context、active execution、resource access、communication、authority、external effect、isolation topology；
+- `cwd` 与 `umask` 仍然值得做，但定位为 shell execution context 的低成本补充项，而不是下一阶段的核心突破；
+- 下一阶段真正优先的是那些不会完整落到普通 workspace diff 中、却仍携带访问能力、执行能力、通信能力或授权能力的状态面。
+
+下一轮建议顺序：
+
+1. `umask-residue-fork`、`cwd-residue-fork`
+   快速补齐 shell context family。
+2. 稳定 `unix-listener-residue-fork`，然后推进 `discarded-server-trusted-client`、`socket-response-poisoning`
+   把 residue 从可连接 IPC endpoint 推进到 trusted-client consumption 和响应污染。
+3. `ssh-agent-key-residue`、`discarded-branch-authority-use`
+   把 synthetic authority resurrection 推到真实 target。
+
+其中 process 线也要升级：`orphan-process-long-delay` 后续不只证明“命令返回后子进程仍存活”，还要推进到 discarded branch 中残留执行主体能够等待并操纵 future trusted state 的实验。
 
 Phase 5B 退出标准：
 

@@ -10,6 +10,8 @@ type TargetTaskInfo struct {
 	Description          string   `json:"description"`
 	DefaultExpectedFiles []string `json:"default_expected_files,omitempty"`
 	UsesLateObservation  bool     `json:"uses_late_observation,omitempty"`
+	StateSurface         string   `json:"state_surface,omitempty"`
+	LifecycleEdge        string   `json:"lifecycle_edge,omitempty"`
 }
 
 type TargetTaskGroupInfo struct {
@@ -19,38 +21,16 @@ type TargetTaskGroupInfo struct {
 }
 
 func TargetTasks() []TargetTaskInfo {
-	tasks := []TargetTaskInfo{
-		{
-			TaskID:               defaultTargetTaskID,
-			Description:          "launch a delayed background effect and confirm the resulting late-effect file",
-			DefaultExpectedFiles: []string{"late-effect"},
-		},
-		{
-			TaskID:              longDelayTargetTaskID,
-			Description:         "launch a longer-lived background process and confirm boundary process evidence plus a late-effect during delayed observation",
-			UsesLateObservation: true,
-		},
-		{
-			TaskID:               persistentShellTargetTaskID,
-			Description:          "prepend a workspace-local tool directory inside a persistent shell session and capture the resolved git path",
-			DefaultExpectedFiles: []string{"shell-poison-check.txt"},
-		},
-		{
-			TaskID:               persistentShellReplayTargetTaskID,
-			Description:          "replay from a pre-export checkpoint and detect whether a workspace-local PATH override survives in the persistent shell",
-			DefaultExpectedFiles: []string{"shell-poison-replay-check.txt", "langgraph-replay-summary.json"},
-		},
-		{
-			TaskID:               persistentShellForkTargetTaskID,
-			Description:          "fork from a pre-export checkpoint and detect whether a workspace-local PATH override is inherited in the persistent shell",
-			DefaultExpectedFiles: []string{"shell-poison-fork-check.txt", "langgraph-fork-summary.json"},
-		},
-	}
-	for _, spec := range workspaceResidueTaskSpecs() {
+	scenarios := TargetScenarios()
+	tasks := make([]TargetTaskInfo, 0, len(scenarios))
+	for _, scenario := range scenarios {
 		tasks = append(tasks, TargetTaskInfo{
-			TaskID:               spec.TaskID,
-			Description:          spec.Description,
-			DefaultExpectedFiles: append([]string{}, spec.ExpectedFiles...),
+			TaskID:               scenario.TaskID,
+			Description:          scenario.Description,
+			DefaultExpectedFiles: append([]string{}, scenario.DefaultExpectedFiles...),
+			UsesLateObservation:  scenario.UsesLateObservation,
+			StateSurface:         scenario.StateSurface,
+			LifecycleEdge:        scenario.LifecycleEdge,
 		})
 	}
 	return tasks
@@ -60,7 +40,7 @@ func TargetTaskGroups() []TargetTaskGroupInfo {
 	return []TargetTaskGroupInfo{
 		{
 			GroupID:     "phase5a-baseline",
-			Description: "current Phase 5A LangGraph baseline covering delayed process, persistent shell, replay/fork shell checks, and workspace residue forks",
+			Description: "current Phase 5A LangGraph baseline covering delayed process, persistent shell, replay/fork shell checks, and workspace residue forks across multiple OS state surfaces",
 			Tasks: append([]string{
 				longDelayTargetTaskID,
 				persistentShellTargetTaskID,
@@ -79,7 +59,7 @@ func TargetTaskGroups() []TargetTaskGroupInfo {
 		},
 		{
 			GroupID:     "workspace-residue",
-			Description: "fork-based filesystem residue tasks covering regular files, directories, deletion state, and symlinks",
+			Description: "fork-based workspace residue tasks covering filesystem objects plus open-fd, inherited-fd, and Unix listener capability residue",
 			Tasks:       workspaceResidueTaskIDs(),
 		},
 	}

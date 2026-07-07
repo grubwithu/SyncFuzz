@@ -57,6 +57,25 @@ go run ./cmd/syncfuzz target run \
   --out runs
 ```
 
+You can inspect the current deterministic built-in wording variants with:
+
+```bash
+go run ./cmd/syncfuzz target prompt-profiles
+```
+
+Then select one explicitly for a built-in task:
+
+```bash
+go run ./cmd/syncfuzz target run \
+  --target langgraph-shell-react \
+  --task orphan-process-long-delay \
+  --prompt-profile workflow \
+  --command-file examples/target-commands/langgraph-shell-react.sh \
+  --observe-delay 500ms \
+  --late-observe-delay 7s \
+  --out runs
+```
+
 Repository-owned prompt files are available for the first two task shapes:
 
 - `targets/langgraph_shell_react/prompts/orphan-process.txt`
@@ -68,6 +87,16 @@ For stronger orphan-process probing, prefer the long-delay task. It does not req
 ```bash
 make target-langgraph-shell-react \
   TARGET_TASK=orphan-process-long-delay
+```
+
+For a broader real-target exploration pass, combine task groups with prompt profiles:
+
+```bash
+make target-langgraph-shell-react-matrix-suite \
+  TARGET_GROUP=phase5a-baseline \
+  TARGET_PROMPT_PROFILES=all \
+  REPEAT=1 \
+  CANDIDATE_LIMIT=3
 ```
 
 After a successful run, `target-result.json` should include:
@@ -108,6 +137,35 @@ make target-langgraph-shell-react \
 
 make target-langgraph-shell-react \
   TARGET_TASK=symlink-residue-fork
+
+make target-langgraph-shell-react \
+  TARGET_TASK=rename-residue-fork
+
+make target-langgraph-shell-react \
+  TARGET_TASK=mode-residue-fork
+
+make target-langgraph-shell-react \
+  TARGET_TASK=append-residue-fork
+
+make target-langgraph-shell-react \
+  TARGET_TASK=hardlink-residue-fork
+
+make target-langgraph-shell-react \
+  TARGET_TASK=fifo-residue-fork
+
+make target-langgraph-shell-react \
+  TARGET_TASK=open-fd-residue-fork
+
+make target-langgraph-shell-react \
+  TARGET_TASK=deleted-open-fd-residue-fork
+
+make target-langgraph-shell-react \
+  TARGET_TASK=inherited-fd-branch-leakage
+```
+
+```bash
+make target-langgraph-shell-react \
+  TARGET_TASK=unix-listener-residue-fork
 ```
 
 The run writes extra workspace artifacts:
@@ -121,9 +179,19 @@ The run writes extra workspace artifacts:
 
 These summarize thread history, checkpoint ids, checkpoint backend selection, shell/session identity, replay/fork boundaries, and the final messages returned by the agent.
 
+The run artifact directory now also includes `target-contract-profile.json` when `--target langgraph-shell-react` is used. That profile describes the current SyncFuzz contract reading for this integrated target.
+
 In `target-result.json`, the embedded `target_oracle` now exposes both a backward-compatible boolean `confirmed` and a more explicit `status` field. `status=negative` means the run produced evidence for a clean or non-vulnerable outcome, while `status=inconclusive` means the run produced some evidence but not enough to support a confident residue attribution.
 
 The same result file now also includes `task_compliance`. That field is separate from the residue oracle: it says whether the agent actually followed the intended built-in task shape. A run can therefore be `target_oracle.status=confirmed` but still `task_compliance.status=violated`, which is exactly the split SyncFuzz now uses to avoid over-trusting prompt-drifted executions. Today that coverage includes the long-delay orphan-process task, persistent-shell baseline/replay/fork, and the built-in workspace residue fork tasks.
+
+`target-result.json` now also includes `contract_interpretation` when the built-in LangGraph contract profile applies. That field tells you whether the observed result matched the current lifecycle contract selected by SyncFuzz for this integrated target:
+
+- `contract-consistent`
+- `contract-violation`
+- `contract-unknown`
+
+This layer is intentionally more conservative than the raw oracle. For example, same-run persistent shell reuse is currently treated as expected behavior, while replay/fork residue tasks are interpreted against the wrapper-selected checkpoint boundary rather than against a maintainer-stated vendor guarantee.
 
 For `persistent-shell-poisoning`, SyncFuzz uses `langgraph-history.json` as structured oracle evidence when it is available. A bare shim-marker string in `shell-poison-check.txt` is not enough by itself; the transcript also needs to show a later shell call, without re-exporting PATH, still inheriting the earlier PATH override and executing the workspace-local `git` shim.
 
@@ -138,6 +206,24 @@ For `directory-residue-fork`, SyncFuzz automatically forks from `before-director
 For `delete-residue-fork`, SyncFuzz automatically forks from `before-file-delete`. The fork oracle requires `delete-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether `branch-delete-note.txt` wrongly stayed absent across the rollback boundary or whether the fork stayed aligned with the checkpointed workspace.
 
 For `symlink-residue-fork`, SyncFuzz automatically forks from `before-symlink-create`. The fork oracle requires `symlink-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether `branch-link.txt` survived as genuine workspace symlink residue or was rebuilt during the fork follow-up.
+
+For `rename-residue-fork`, SyncFuzz automatically forks from `before-file-rename`. The fork oracle requires `rename-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether the post-rename destination `branch-rename-dst.txt` survived as genuine workspace residue or whether the fork restored the original `branch-rename-src.txt`.
+
+For `mode-residue-fork`, SyncFuzz automatically forks from `before-file-chmod`. The fork oracle requires `mode-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether the later `chmod 000` survived as genuine file-mode residue or whether the fork restored the earlier `0644` mode.
+
+For `append-residue-fork`, SyncFuzz automatically forks from `before-file-append`. The fork oracle requires `append-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether the appended extra marker survived as genuine content residue or whether the fork restored the pre-append file contents.
+
+For `hardlink-residue-fork`, SyncFuzz automatically forks from `before-hardlink-create`. The fork oracle requires `hardlink-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether `branch-hardlink.txt` survived as genuine hardlink residue or whether the fork restored the pre-hardlink workspace state.
+
+For `fifo-residue-fork`, SyncFuzz automatically forks from `before-fifo-create`. The fork oracle requires `fifo-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether `branch-fifo` survived as genuine named-pipe residue or whether the fork restored the pre-fifo workspace state.
+
+For `open-fd-residue-fork`, SyncFuzz automatically forks from `before-open-fd-hold`. The fork oracle requires `open-fd-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether the original workspace file is still reachable through the inherited `/proc/<pid>/fd/9` capability or whether the fork stayed clean.
+
+For `deleted-open-fd-residue-fork`, SyncFuzz automatically forks from `before-deleted-open-fd-hold`. The fork oracle requires `deleted-open-fd-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether a deleted workspace file is still reachable through the inherited `/proc/<pid>/fd/9` capability or whether the fork stayed clean.
+
+For `inherited-fd-branch-leakage`, SyncFuzz automatically forks from `before-inherited-fd-leak-holder`. The fork oracle requires `inherited-fd-branch-leakage-check.txt` plus `langgraph-fork-summary.json` to show whether the successor branch can read the discarded branch secret through `/proc/<pid>/fd/9` without relaunching the holder.
+
+For `unix-listener-residue-fork`, SyncFuzz automatically forks from `before-unix-listener-launch`. The fork oracle requires `unix-listener-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether the successor branch can still connect to a discarded branch Unix socket listener without relaunching it.
 
 Replay and fork lifecycle tasks now default to the durable `disk` checkpoint backend. That backend persists checkpoint state under `langgraph-checkpoints/` inside the SyncFuzz workspace and describes the resulting files in `langgraph-checkpointer.json`.
 
@@ -176,7 +262,7 @@ go run ./cmd/syncfuzz target run \
 
 The shell wrapper in [examples/target-commands/langgraph-shell-react.sh](/home/grub/workspace/agent_sec/SyncFuzz/examples/target-commands/langgraph-shell-react.sh) forwards these environment variables to `run_target.py`.
 
-When you use the built-in SyncFuzz tasks `persistent-shell-poisoning-replay`, `persistent-shell-poisoning-fork`, `file-residue-fork`, `directory-residue-fork`, `delete-residue-fork`, or `symlink-residue-fork`, SyncFuzz sets these replay/fork environment variables automatically and switches the checkpointer backend to `disk`. Add `LANGGRAPH_PROCESS_MODE=split-process` when you want the replay/fork step to consume those checkpoints from a fresh target process. The manual environment form remains useful for ad hoc experiments.
+When you use the built-in SyncFuzz tasks `persistent-shell-poisoning-replay`, `persistent-shell-poisoning-fork`, `file-residue-fork`, `directory-residue-fork`, `delete-residue-fork`, `symlink-residue-fork`, `rename-residue-fork`, `mode-residue-fork`, `append-residue-fork`, `hardlink-residue-fork`, `fifo-residue-fork`, `open-fd-residue-fork`, `deleted-open-fd-residue-fork`, `inherited-fd-branch-leakage`, or `unix-listener-residue-fork`, SyncFuzz sets these replay/fork environment variables automatically, switches the checkpointer backend to `disk`, and enables `LANGGRAPH_PROCESS_MODE=split-process` so the replay/fork step consumes checkpoints from a fresh target process. The manual environment form remains useful for ad hoc experiments.
 
 ## Notes
 

@@ -27,6 +27,15 @@ SHELL_REQUIRED_TASKS = {
     "directory-residue-fork",
     "delete-residue-fork",
     "symlink-residue-fork",
+    "rename-residue-fork",
+    "mode-residue-fork",
+    "append-residue-fork",
+    "hardlink-residue-fork",
+    "fifo-residue-fork",
+    "open-fd-residue-fork",
+    "deleted-open-fd-residue-fork",
+    "inherited-fd-branch-leakage",
+    "unix-listener-residue-fork",
 }
 
 
@@ -750,6 +759,13 @@ def build_phase_command(
     return command
 
 
+def build_phase_environment(*, replay: bool, fork_user_message: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["SYNCFUZZ_LANGGRAPH_REPLAY"] = "true" if replay else "false"
+    env["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = fork_user_message
+    return env
+
+
 def run_split_process(args: argparse.Namespace) -> int:
     workspace = resolve_workspace(args)
     model = resolve_model(args)
@@ -781,7 +797,11 @@ def run_split_process(args: argparse.Namespace) -> int:
         replay=False,
         fork_user_message="",
     )
-    initial_result = subprocess.run(initial_command, check=False)
+    initial_result = subprocess.run(
+        initial_command,
+        check=False,
+        env=build_phase_environment(replay=False, fork_user_message=""),
+    )
     if initial_result.returncode != 0:
         return int(initial_result.returncode)
 
@@ -801,7 +821,14 @@ def run_split_process(args: argparse.Namespace) -> int:
         replay=args.replay,
         fork_user_message=args.fork_user_message,
     )
-    resume_result = subprocess.run(resume_command, check=False)
+    resume_result = subprocess.run(
+        resume_command,
+        check=False,
+        env=build_phase_environment(
+            replay=args.replay,
+            fork_user_message=args.fork_user_message,
+        ),
+    )
     if resume_result.returncode != 0:
         return int(resume_result.returncode)
 
@@ -1222,6 +1249,24 @@ def resolve_checkpoint_selector(history: list[Any], selector: str) -> int:
         return checkpoint_before_file_delete(history)
     if selector == "before-symlink-create":
         return checkpoint_before_symlink_create(history)
+    if selector == "before-file-rename":
+        return checkpoint_before_file_rename(history)
+    if selector == "before-file-chmod":
+        return checkpoint_before_file_chmod(history)
+    if selector == "before-file-append":
+        return checkpoint_before_file_append(history)
+    if selector == "before-hardlink-create":
+        return checkpoint_before_hardlink_create(history)
+    if selector == "before-fifo-create":
+        return checkpoint_before_fifo_create(history)
+    if selector == "before-open-fd-hold":
+        return checkpoint_before_open_fd_hold(history)
+    if selector == "before-deleted-open-fd-hold":
+        return checkpoint_before_deleted_open_fd_hold(history)
+    if selector == "before-inherited-fd-leak-holder":
+        return checkpoint_before_inherited_fd_leak_holder(history)
+    if selector == "before-unix-listener-launch":
+        return checkpoint_before_unix_listener_launch(history)
     raise SystemExit(f"unsupported checkpoint selector: {selector}")
 
 
@@ -1294,6 +1339,131 @@ def checkpoint_before_symlink_create(history: list[Any]) -> int:
     return -1
 
 
+def checkpoint_before_file_rename(history: list[Any]) -> int:
+    saw_file_rename_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_file_rename = state_has_file_rename(history[index])
+        if not saw_file_rename_in_newer_state and has_file_rename:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_file_rename_in_newer_state = saw_file_rename_in_newer_state or has_file_rename
+    return -1
+
+
+def checkpoint_before_file_chmod(history: list[Any]) -> int:
+    saw_file_chmod_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_file_chmod = state_has_file_chmod(history[index])
+        if not saw_file_chmod_in_newer_state and has_file_chmod:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_file_chmod_in_newer_state = saw_file_chmod_in_newer_state or has_file_chmod
+    return -1
+
+
+def checkpoint_before_file_append(history: list[Any]) -> int:
+    saw_file_append_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_file_append = state_has_file_append(history[index])
+        if not saw_file_append_in_newer_state and has_file_append:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_file_append_in_newer_state = saw_file_append_in_newer_state or has_file_append
+    return -1
+
+
+def checkpoint_before_hardlink_create(history: list[Any]) -> int:
+    saw_hardlink_create_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_hardlink_create = state_has_hardlink_create(history[index])
+        if not saw_hardlink_create_in_newer_state and has_hardlink_create:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_hardlink_create_in_newer_state = (
+            saw_hardlink_create_in_newer_state or has_hardlink_create
+        )
+    return -1
+
+
+def checkpoint_before_fifo_create(history: list[Any]) -> int:
+    saw_fifo_create_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_fifo_create = state_has_fifo_create(history[index])
+        if not saw_fifo_create_in_newer_state and has_fifo_create:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_fifo_create_in_newer_state = saw_fifo_create_in_newer_state or has_fifo_create
+    return -1
+
+
+def checkpoint_before_open_fd_hold(history: list[Any]) -> int:
+    saw_open_fd_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_open_fd = state_has_open_fd_hold(history[index])
+        if not saw_open_fd_in_newer_state and has_open_fd:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_open_fd_in_newer_state = saw_open_fd_in_newer_state or has_open_fd
+    return -1
+
+
+def checkpoint_before_deleted_open_fd_hold(history: list[Any]) -> int:
+    saw_deleted_open_fd_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_deleted_open_fd = state_has_deleted_open_fd_hold(history[index])
+        if not saw_deleted_open_fd_in_newer_state and has_deleted_open_fd:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_deleted_open_fd_in_newer_state = (
+            saw_deleted_open_fd_in_newer_state or has_deleted_open_fd
+        )
+    return -1
+
+
+def checkpoint_before_inherited_fd_leak_holder(history: list[Any]) -> int:
+    saw_inherited_fd_leak_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_inherited_fd_leak = state_has_inherited_fd_leak_holder(history[index])
+        if not saw_inherited_fd_leak_in_newer_state and has_inherited_fd_leak:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_inherited_fd_leak_in_newer_state = (
+            saw_inherited_fd_leak_in_newer_state or has_inherited_fd_leak
+        )
+    return -1
+
+
+def checkpoint_before_unix_listener_launch(history: list[Any]) -> int:
+    saw_unix_listener_launch_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_unix_listener_launch = state_has_unix_listener_launch(history[index])
+        if not saw_unix_listener_launch_in_newer_state and has_unix_listener_launch:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_unix_listener_launch_in_newer_state = (
+            saw_unix_listener_launch_in_newer_state or has_unix_listener_launch
+        )
+    return -1
+
+
 def state_has_path_export(state: Any) -> bool:
     values = getattr(state, "values", {}) or {}
     messages = values.get("messages", []) or []
@@ -1350,6 +1520,115 @@ def state_has_symlink_create(state: Any) -> bool:
     return False
 
 
+def state_has_file_rename(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_renames_workspace_file(
+                normalized, "branch-rename-src.txt", "branch-rename-dst.txt"
+            ):
+                return True
+    return False
+
+
+def state_has_file_chmod(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_changes_workspace_file_mode(
+                normalized, "branch-mode-note.txt", "000"
+            ):
+                return True
+    return False
+
+
+def state_has_file_append(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_appends_workspace_file(
+                normalized, "branch-append-note.txt"
+            ):
+                return True
+    return False
+
+
+def state_has_hardlink_create(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_creates_workspace_hardlink(normalized, "branch-hardlink.txt"):
+                return True
+    return False
+
+
+def state_has_fifo_create(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_creates_workspace_fifo(normalized, "branch-fifo"):
+                return True
+    return False
+
+
+def state_has_open_fd_hold(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_opens_workspace_fd(normalized, "branch-fd-note.txt"):
+                return True
+    return False
+
+
+def state_has_deleted_open_fd_hold(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_opens_deleted_workspace_fd(
+                normalized, "branch-deleted-fd-note.txt"
+            ):
+                return True
+    return False
+
+
+def state_has_inherited_fd_leak_holder(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_opens_deleted_workspace_fd(
+                normalized, "branch-inherited-fd-secret.txt"
+            ):
+                return True
+    return False
+
+
+def state_has_unix_listener_launch(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_launches_unix_listener(normalized):
+                return True
+    return False
+
+
 def normalize_shell_command(command: str) -> str:
     return " ".join(command.strip().lower().replace("\\", "/").split())
 
@@ -1375,6 +1654,9 @@ def command_deletes_workspace_file(command: str, filename: str) -> bool:
         command.endswith(" " + filename)
         or ("/" + filename) in command
         or (" " + filename + " ") in command
+        or (" " + filename + ";") in command
+        or (" " + filename + " &&") in command
+        or (" " + filename + " ||") in command
     )
 
 
@@ -1397,6 +1679,82 @@ def command_creates_workspace_symlink(command: str, filename: str) -> bool:
         command.endswith(" " + filename)
         or ("/" + filename) in command
         or (" " + filename + " ") in command
+    )
+
+
+def command_renames_workspace_file(command: str, old_name: str, new_name: str) -> bool:
+    old_name = old_name.lower()
+    new_name = new_name.lower()
+    if "mv " not in command and "rename " not in command:
+        return False
+    return (
+        (command.endswith(" " + new_name) or (" " + new_name + " ") in command or ("/" + new_name) in command)
+        and ((" " + old_name + " ") in command or ("/" + old_name + " ") in command or command.startswith("mv " + old_name + " "))
+    )
+
+
+def command_changes_workspace_file_mode(command: str, filename: str, mode: str) -> bool:
+    filename = filename.lower()
+    mode = mode.lower().strip()
+    if "chmod " not in command:
+        return False
+    return (
+        ("chmod " + mode + " ") in command or ("chmod 0" + mode + " ") in command
+    ) and (
+        command.endswith(" " + filename)
+        or ("/" + filename) in command
+        or (" " + filename + " ") in command
+    )
+
+
+def command_appends_workspace_file(command: str, filename: str) -> bool:
+    filename = filename.lower()
+    return (">>" in command and filename in command) or (
+        "tee -a " in command and filename in command
+    )
+
+
+def command_creates_workspace_hardlink(command: str, filename: str) -> bool:
+    filename = filename.lower()
+    if "ln " not in command or "ln -s" in command:
+        return False
+    return (
+        command.endswith(" " + filename)
+        or ("/" + filename) in command
+        or (" " + filename + " ") in command
+    )
+
+
+def command_creates_workspace_fifo(command: str, filename: str) -> bool:
+    filename = filename.lower()
+    if "mkfifo " not in command:
+        return False
+    return (
+        command.endswith(" " + filename)
+        or ("/" + filename) in command
+        or (" " + filename + " ") in command
+    )
+
+
+def command_opens_workspace_fd(command: str, filename: str) -> bool:
+    filename = filename.lower()
+    return f"exec 9<{filename}" in command or (
+        "exec 9<" in command and ("/" + filename) in command
+    )
+
+
+def command_opens_deleted_workspace_fd(command: str, filename: str) -> bool:
+    return command_opens_workspace_fd(command, filename) and command_deletes_workspace_file(
+        command, filename
+    )
+
+
+def command_launches_unix_listener(command: str) -> bool:
+    return (
+        "branch-listener.sock" in command
+        and ("socket.af_unix" in command or "af_unix" in command)
+        and (".bind(" in command or "bind(" in command)
+        and (".listen(" in command or "listen(" in command)
     )
 
 

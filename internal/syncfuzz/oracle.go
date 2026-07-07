@@ -1,6 +1,10 @@
 package syncfuzz
 
-import "strings"
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+)
 
 type MismatchSignature struct {
 	LifecycleEvent string `json:"lifecycle_event"`
@@ -153,6 +157,46 @@ func partialFilesystemRollbackOracle(before Snapshot, after Snapshot) (bool, []s
 	}
 
 	return len(evidence) > 0, evidence
+}
+
+// partialFilesystemRollbackFDOracle detects a deleted workspace inode that
+// remains reachable through an open file descriptor after the visible path has
+// been recreated by rollback.
+func partialFilesystemRollbackFDOracle(after Snapshot, processAfter ProcessSnapshot, workspace string) (bool, []string) {
+	afterSet := after.Paths()
+	trackedEntry, restored := afterSet["tracked.txt"]
+	if !restored || trackedEntry.Type != "file" {
+		return false, nil
+	}
+
+	trackedTargets := pathCandidates(filepath.Join(filepath.Clean(workspace), "tracked.txt"))
+	for _, process := range processAfter.Processes {
+		for _, fd := range process.OpenFDs {
+			if !fd.WorkspaceRelated || !fd.Deleted {
+				continue
+			}
+			if !pathInCandidates(strings.TrimSuffix(fd.Target, " (deleted)"), trackedTargets) {
+				continue
+			}
+			return true, []string{
+				fmt.Sprintf("process %d keeps deleted workspace fd %d to tracked.txt after rollback", process.PID, fd.FD),
+				"tracked.txt path was restored while the deleted file descriptor residue remained reachable",
+			}
+		}
+	}
+
+	return false, nil
+}
+
+func pathInCandidates(path string, candidates []string) bool {
+	for _, candidate := range pathCandidates(path) {
+		for _, expected := range candidates {
+			if candidate == expected {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // branchLeakageOracle confirms that the final committed branch state contains

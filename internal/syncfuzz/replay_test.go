@@ -52,4 +52,76 @@ func TestReplayCorpusEntryReproducesSignature(t *testing.T) {
 	if result.RunArtifactDir == "" {
 		t.Fatalf("expected run artifact directory")
 	}
+	if result.OutcomeCategory != replayOutcomeReproduced {
+		t.Fatalf("expected reproduced outcome category, got %#v", result)
+	}
+}
+
+func TestClassifyTargetReplayOutcomeExecutionNotReached(t *testing.T) {
+	details := classifyTargetReplayOutcome(&TargetRunResult{
+		Completed: false,
+	}, false)
+	if details.Category != replayOutcomeExecutionNotReached {
+		t.Fatalf("expected execution-not-reached, got %#v", details)
+	}
+}
+
+func TestClassifyTargetReplayOutcomeTaskNoncompliant(t *testing.T) {
+	details := classifyTargetReplayOutcome(&TargetRunResult{
+		Completed: true,
+		TaskCompliance: TargetTaskComplianceResult{
+			Status: targetTaskComplianceStatusViolated,
+		},
+	}, false)
+	if details.Category != replayOutcomeTaskNoncompliant {
+		t.Fatalf("expected task-noncompliant, got %#v", details)
+	}
+}
+
+func TestClassifyTargetReplayOutcomeLifecycleNotTriggered(t *testing.T) {
+	details := classifyTargetReplayOutcome(&TargetRunResult{
+		Completed: true,
+		TaskCompliance: TargetTaskComplianceResult{
+			Status: targetTaskComplianceStatusCompliant,
+		},
+		TargetOracle: TargetOracleResult{
+			Status:  targetOracleStatusInconclusive,
+			Missing: []string{"langgraph fork summary artifact was present and decodable"},
+		},
+	}, false)
+	if details.Category != replayOutcomeLifecycleNotTriggered {
+		t.Fatalf("expected lifecycle-not-triggered, got %#v", details)
+	}
+}
+
+func TestClassifyTargetReplayOutcomeStateNotPlanted(t *testing.T) {
+	details := classifyTargetReplayOutcome(&TargetRunResult{
+		Completed: true,
+		TaskCompliance: TargetTaskComplianceResult{
+			Status: targetTaskComplianceStatusCompliant,
+		},
+		TargetOracle: TargetOracleResult{
+			Status:  targetOracleStatusInconclusive,
+			Missing: []string{"langgraph history captured the initial branch-note.txt creation"},
+		},
+	}, false)
+	if details.Category != replayOutcomeStateNotPlanted {
+		t.Fatalf("expected state-not-planted, got %#v", details)
+	}
+}
+
+func TestClassifyTargetReplayOutcomeCleanNegative(t *testing.T) {
+	details := classifyTargetReplayOutcome(&TargetRunResult{
+		Completed: true,
+		TaskCompliance: TargetTaskComplianceResult{
+			Status: targetTaskComplianceStatusCompliant,
+		},
+		TargetOracle: TargetOracleResult{
+			Status:      targetOracleStatusNegative,
+			Attribution: targetOracleAttributionCleanFork,
+		},
+	}, false)
+	if details.Category != replayOutcomeCleanNegative {
+		t.Fatalf("expected clean-negative, got %#v", details)
+	}
 }

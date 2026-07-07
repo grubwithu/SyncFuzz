@@ -84,7 +84,7 @@ func TestDefaultTargetLateObserveDelayMapsLongDelayTask(t *testing.T) {
 
 func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 	tasks := TargetTasks()
-	if len(tasks) < 9 {
+	if len(tasks) < 17 {
 		t.Fatalf("expected built-in target tasks: %#v", tasks)
 	}
 	foundPersistent := false
@@ -93,6 +93,15 @@ func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 	foundDirectoryFork := false
 	foundDeleteFork := false
 	foundSymlinkFork := false
+	foundRenameFork := false
+	foundModeFork := false
+	foundAppendFork := false
+	foundHardlinkFork := false
+	foundFIFOFork := false
+	foundOpenFDFork := false
+	foundDeletedOpenFDFork := false
+	foundInheritedFDLeak := false
+	foundUnixListenerFork := false
 	for _, task := range tasks {
 		if task.TaskID == persistentShellTargetTaskID {
 			foundPersistent = true
@@ -130,8 +139,62 @@ func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 				t.Fatalf("unexpected symlink fork task metadata: %#v", task)
 			}
 		}
+		if task.TaskID == renameResidueForkTargetTaskID {
+			foundRenameFork = true
+			if !containsString(task.DefaultExpectedFiles, targetRenameResidueForkArtifact) || !containsString(task.DefaultExpectedFiles, langgraphForkArtifact) {
+				t.Fatalf("unexpected rename fork task metadata: %#v", task)
+			}
+		}
+		if task.TaskID == modeResidueForkTargetTaskID {
+			foundModeFork = true
+			if !containsString(task.DefaultExpectedFiles, targetModeResidueForkArtifact) || !containsString(task.DefaultExpectedFiles, langgraphForkArtifact) {
+				t.Fatalf("unexpected mode fork task metadata: %#v", task)
+			}
+		}
+		if task.TaskID == appendResidueForkTargetTaskID {
+			foundAppendFork = true
+			if !containsString(task.DefaultExpectedFiles, targetAppendResidueForkArtifact) || !containsString(task.DefaultExpectedFiles, langgraphForkArtifact) {
+				t.Fatalf("unexpected append fork task metadata: %#v", task)
+			}
+		}
+		if task.TaskID == hardlinkResidueForkTargetTaskID {
+			foundHardlinkFork = true
+			if !containsString(task.DefaultExpectedFiles, targetHardlinkResidueForkArtifact) || !containsString(task.DefaultExpectedFiles, langgraphForkArtifact) {
+				t.Fatalf("unexpected hardlink fork task metadata: %#v", task)
+			}
+		}
+		if task.TaskID == fifoResidueForkTargetTaskID {
+			foundFIFOFork = true
+			if !containsString(task.DefaultExpectedFiles, targetFIFOResidueForkArtifact) || !containsString(task.DefaultExpectedFiles, langgraphForkArtifact) {
+				t.Fatalf("unexpected fifo fork task metadata: %#v", task)
+			}
+		}
+		if task.TaskID == openFDResidueForkTargetTaskID {
+			foundOpenFDFork = true
+			if !containsString(task.DefaultExpectedFiles, targetOpenFDResidueForkArtifact) || !containsString(task.DefaultExpectedFiles, langgraphForkArtifact) {
+				t.Fatalf("unexpected open-fd fork task metadata: %#v", task)
+			}
+		}
+		if task.TaskID == deletedOpenFDForkTargetTaskID {
+			foundDeletedOpenFDFork = true
+			if !containsString(task.DefaultExpectedFiles, targetDeletedOpenFDForkArtifact) || !containsString(task.DefaultExpectedFiles, langgraphForkArtifact) {
+				t.Fatalf("unexpected deleted-open-fd fork task metadata: %#v", task)
+			}
+		}
+		if task.TaskID == inheritedFDLeakTargetTaskID {
+			foundInheritedFDLeak = true
+			if !containsString(task.DefaultExpectedFiles, targetInheritedFDLeakForkArtifact) || !containsString(task.DefaultExpectedFiles, langgraphForkArtifact) {
+				t.Fatalf("unexpected inherited-fd branch leakage task metadata: %#v", task)
+			}
+		}
+		if task.TaskID == unixListenerResidueForkTargetTaskID {
+			foundUnixListenerFork = true
+			if !containsString(task.DefaultExpectedFiles, targetUnixListenerForkArtifact) || !containsString(task.DefaultExpectedFiles, langgraphForkArtifact) {
+				t.Fatalf("unexpected unix listener fork task metadata: %#v", task)
+			}
+		}
 	}
-	if !foundPersistent || !foundReplay || !foundFork || !foundDirectoryFork || !foundDeleteFork || !foundSymlinkFork {
+	if !foundPersistent || !foundReplay || !foundFork || !foundDirectoryFork || !foundDeleteFork || !foundSymlinkFork || !foundRenameFork || !foundModeFork || !foundAppendFork || !foundHardlinkFork || !foundFIFOFork || !foundOpenFDFork || !foundDeletedOpenFDFork || !foundInheritedFDLeak || !foundUnixListenerFork {
 		t.Fatalf("expected persistent shell replay/fork tasks plus workspace residue fork tasks in catalog: %#v", tasks)
 	}
 }
@@ -152,6 +215,15 @@ func TestExpandTargetTasksIncludesGroupsAndDeduplicates(t *testing.T) {
 		directoryResidueForkTargetTaskID,
 		deleteResidueForkTargetTaskID,
 		symlinkResidueForkTargetTaskID,
+		renameResidueForkTargetTaskID,
+		modeResidueForkTargetTaskID,
+		appendResidueForkTargetTaskID,
+		hardlinkResidueForkTargetTaskID,
+		fifoResidueForkTargetTaskID,
+		openFDResidueForkTargetTaskID,
+		deletedOpenFDForkTargetTaskID,
+		inheritedFDLeakTargetTaskID,
+		unixListenerResidueForkTargetTaskID,
 	}
 	if len(tasks) != len(expected) {
 		t.Fatalf("unexpected expanded task count: got %d want %d (%#v)", len(tasks), len(expected), tasks)

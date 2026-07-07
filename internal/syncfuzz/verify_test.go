@@ -77,6 +77,21 @@ func TestVerifyCorpusReportsReproductionAndSignatureDrift(t *testing.T) {
 	if result.ReproducibilityRate != 0.5 {
 		t.Fatalf("expected 0.5 reproducibility rate, got %f", result.ReproducibilityRate)
 	}
+	if len(result.OutcomeSummaries) != 2 {
+		t.Fatalf("expected 2 outcome summaries, got %#v", result.OutcomeSummaries)
+	}
+	if result.OutcomeSummaries[0].Category != replayOutcomeReproduced || result.OutcomeSummaries[0].TotalEntries != 1 {
+		t.Fatalf("unexpected reproduced outcome summary: %#v", result.OutcomeSummaries[0])
+	}
+	if result.OutcomeSummaries[1].Category != replayOutcomeSignatureDrift || result.OutcomeSummaries[1].TotalEntries != 1 {
+		t.Fatalf("unexpected signature drift outcome summary: %#v", result.OutcomeSummaries[1])
+	}
+	if len(result.SubjectSummaries) != 1 {
+		t.Fatalf("expected 1 subject summary, got %#v", result.SubjectSummaries)
+	}
+	if result.SubjectSummaries[0].CaseName != "action-replay" || result.SubjectSummaries[0].TotalEntries != 2 {
+		t.Fatalf("unexpected subject summary: %#v", result.SubjectSummaries[0])
+	}
 	if _, err := os.Stat(filepath.Join(result.ArtifactDir, "verification-result.json")); err != nil {
 		t.Fatalf("expected verification-result.json: %v", err)
 	}

@@ -24,14 +24,23 @@ type ProcessSnapshot struct {
 }
 
 type ProcessEntry struct {
-	PID              int      `json:"pid"`
-	PPID             int      `json:"ppid"`
-	Name             string   `json:"name"`
-	State            string   `json:"state"`
-	CWD              string   `json:"cwd,omitempty"`
-	Cmdline          []string `json:"cmdline,omitempty"`
-	RawCmdline       string   `json:"raw_cmdline,omitempty"`
-	WorkspaceRelated bool     `json:"workspace_related"`
+	PID              int              `json:"pid"`
+	PPID             int              `json:"ppid"`
+	Name             string           `json:"name"`
+	State            string           `json:"state"`
+	CWD              string           `json:"cwd,omitempty"`
+	Cmdline          []string         `json:"cmdline,omitempty"`
+	RawCmdline       string           `json:"raw_cmdline,omitempty"`
+	OpenFDs          []ProcessFDEntry `json:"open_fds,omitempty"`
+	WorkspaceRelated bool             `json:"workspace_related"`
+}
+
+type ProcessFDEntry struct {
+	FD               int    `json:"fd"`
+	Target           string `json:"target"`
+	Kind             string `json:"kind,omitempty"`
+	Deleted          bool   `json:"deleted,omitempty"`
+	WorkspaceRelated bool   `json:"workspace_related"`
 }
 
 type ProcessLineageReport struct {
@@ -223,6 +232,7 @@ func readProcEntry(procRoot string, pid int, workspace string) (ProcessEntry, er
 	if rawCmdline == "" {
 		rawCmdline = name
 	}
+	openFDs, hasWorkspaceFD := readProcFDs(procDir, workspace)
 	return ProcessEntry{
 		PID:              pid,
 		PPID:             ppid,
@@ -231,7 +241,8 @@ func readProcEntry(procRoot string, pid int, workspace string) (ProcessEntry, er
 		CWD:              cwd,
 		Cmdline:          cmdline,
 		RawCmdline:       rawCmdline,
-		WorkspaceRelated: isWorkspaceRelated(cwd, workspace),
+		OpenFDs:          openFDs,
+		WorkspaceRelated: isWorkspaceRelated(cwd, workspace) || hasWorkspaceFD,
 	}, nil
 }
 
@@ -282,6 +293,43 @@ func readProcCmdline(path string) (string, []string) {
 	return strings.Join(cmdline, " "), cmdline
 }
 
+func readProcFDs(procDir string, workspace string) ([]ProcessFDEntry, bool) {
+	fdDir := filepath.Join(procDir, "fd")
+	entries, err := os.ReadDir(fdDir)
+	if err != nil {
+		return nil, false
+	}
+
+	var out []ProcessFDEntry
+	hasWorkspaceFD := false
+	for _, entry := range entries {
+		fd, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		target, err := os.Readlink(filepath.Join(fdDir, entry.Name()))
+		if err != nil || strings.TrimSpace(target) == "" {
+			continue
+		}
+		workspaceRelated := isWorkspaceRelatedPathTarget(target, workspace)
+		if !workspaceRelated {
+			continue
+		}
+		hasWorkspaceFD = true
+		out = append(out, ProcessFDEntry{
+			FD:               fd,
+			Target:           target,
+			Kind:             processFDKind(target),
+			Deleted:          strings.HasSuffix(strings.TrimSpace(target), " (deleted)"),
+			WorkspaceRelated: workspaceRelated,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].FD < out[j].FD
+	})
+	return out, hasWorkspaceFD
+}
+
 func isWorkspaceRelated(cwd string, workspace string) bool {
 	if cwd == "" || workspace == "" {
 		return false
@@ -289,6 +337,24 @@ func isWorkspaceRelated(cwd string, workspace string) bool {
 	for _, cwdCandidate := range pathCandidates(cwd) {
 		for _, workspaceCandidate := range pathCandidates(workspace) {
 			if isSameOrChildPath(cwdCandidate, workspaceCandidate) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isWorkspaceRelatedPathTarget(target string, workspace string) bool {
+	if target == "" || workspace == "" {
+		return false
+	}
+	trimmed := strings.TrimSuffix(strings.TrimSpace(target), " (deleted)")
+	if trimmed == "" {
+		return false
+	}
+	for _, targetCandidate := range pathCandidates(trimmed) {
+		for _, workspaceCandidate := range pathCandidates(workspace) {
+			if isSameOrChildPath(targetCandidate, workspaceCandidate) {
 				return true
 			}
 		}
@@ -315,6 +381,22 @@ func isSameOrChildPath(path string, root string) bool {
 	cleanPath := filepath.Clean(path)
 	cleanRoot := filepath.Clean(root)
 	return cleanPath == cleanRoot || strings.HasPrefix(cleanPath, cleanRoot+string(os.PathSeparator))
+}
+
+func processFDKind(target string) string {
+	target = strings.TrimSpace(target)
+	switch {
+	case strings.HasPrefix(target, "socket:["):
+		return "socket"
+	case strings.HasPrefix(target, "pipe:["):
+		return "pipe"
+	case strings.HasPrefix(target, "anon_inode:"):
+		return "anon_inode"
+	case strings.HasSuffix(target, " (deleted)"):
+		return "deleted-path"
+	default:
+		return "path"
+	}
 }
 
 func containerProcessScript() string {

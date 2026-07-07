@@ -591,6 +591,9 @@ func TestTargetTaskEnvOverridesConfigureReplayAndForkLifecycle(t *testing.T) {
 	if replayEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
 		t.Fatalf("expected replay task to enable durable checkpoints: %#v", replayEnv)
 	}
+	if replayEnv["SYNCFUZZ_LANGGRAPH_PROCESS_MODE"] != "split-process" {
+		t.Fatalf("expected replay task to use split-process mode: %#v", replayEnv)
+	}
 	if replayEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-path-export" {
 		t.Fatalf("expected replay task to select before-path-export checkpoint: %#v", replayEnv)
 	}
@@ -604,6 +607,9 @@ func TestTargetTaskEnvOverridesConfigureReplayAndForkLifecycle(t *testing.T) {
 	}
 	if forkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
 		t.Fatalf("expected fork task to enable durable checkpoints: %#v", forkEnv)
+	}
+	if forkEnv["SYNCFUZZ_LANGGRAPH_PROCESS_MODE"] != "split-process" {
+		t.Fatalf("expected fork task to use split-process mode: %#v", forkEnv)
 	}
 	if forkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-path-export" {
 		t.Fatalf("expected fork task to select before-path-export checkpoint: %#v", forkEnv)
@@ -619,6 +625,9 @@ func TestTargetTaskEnvOverridesConfigureReplayAndForkLifecycle(t *testing.T) {
 	if fileForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
 		t.Fatalf("expected file residue fork task to enable durable checkpoints: %#v", fileForkEnv)
 	}
+	if fileForkEnv["SYNCFUZZ_LANGGRAPH_PROCESS_MODE"] != "split-process" {
+		t.Fatalf("expected file residue fork task to use split-process mode: %#v", fileForkEnv)
+	}
 	if fileForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-file-drop" {
 		t.Fatalf("expected file residue fork task to select before-file-drop checkpoint: %#v", fileForkEnv)
 	}
@@ -632,6 +641,9 @@ func TestTargetTaskEnvOverridesConfigureReplayAndForkLifecycle(t *testing.T) {
 	}
 	if directoryForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
 		t.Fatalf("expected directory residue fork task to enable durable checkpoints: %#v", directoryForkEnv)
+	}
+	if directoryForkEnv["SYNCFUZZ_LANGGRAPH_PROCESS_MODE"] != "split-process" {
+		t.Fatalf("expected directory residue fork task to use split-process mode: %#v", directoryForkEnv)
 	}
 	if directoryForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-directory-create" {
 		t.Fatalf("expected directory residue fork task to select before-directory-create checkpoint: %#v", directoryForkEnv)
@@ -647,6 +659,9 @@ func TestTargetTaskEnvOverridesConfigureReplayAndForkLifecycle(t *testing.T) {
 	if deleteForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
 		t.Fatalf("expected delete residue fork task to enable durable checkpoints: %#v", deleteForkEnv)
 	}
+	if deleteForkEnv["SYNCFUZZ_LANGGRAPH_PROCESS_MODE"] != "split-process" {
+		t.Fatalf("expected delete residue fork task to use split-process mode: %#v", deleteForkEnv)
+	}
 	if deleteForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-file-delete" {
 		t.Fatalf("expected delete residue fork task to select before-file-delete checkpoint: %#v", deleteForkEnv)
 	}
@@ -660,6 +675,9 @@ func TestTargetTaskEnvOverridesConfigureReplayAndForkLifecycle(t *testing.T) {
 	}
 	if symlinkForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
 		t.Fatalf("expected symlink residue fork task to enable durable checkpoints: %#v", symlinkForkEnv)
+	}
+	if symlinkForkEnv["SYNCFUZZ_LANGGRAPH_PROCESS_MODE"] != "split-process" {
+		t.Fatalf("expected symlink residue fork task to use split-process mode: %#v", symlinkForkEnv)
 	}
 	if symlinkForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-symlink-create" {
 		t.Fatalf("expected symlink residue fork task to select before-symlink-create checkpoint: %#v", symlinkForkEnv)
@@ -727,6 +745,19 @@ func TestLanggraphDirectoryResidueForkVerificationMessageObservesDirectoryOnly(t
 	}
 	if strings.Contains(message, "mkdir ") {
 		t.Fatalf("expected directory residue fork follow-up to avoid mkdir: %q", message)
+	}
+}
+
+func TestDefaultPersistentShellReplayPromptStopsAfterWitnessStep(t *testing.T) {
+	prompt := defaultTargetPrompt(persistentShellReplayTargetTaskID)
+	if !strings.Contains(prompt, "run exactly:") {
+		t.Fatalf("expected replay prompt to prescribe the final witness command: %q", prompt)
+	}
+	if !strings.Contains(prompt, "After printing shell-poison-replay-check.txt, stop immediately") {
+		t.Fatalf("expected replay prompt to forbid extra shell commands after the witness step: %q", prompt)
+	}
+	if !strings.Contains(prompt, "return exactly one short sentence") {
+		t.Fatalf("expected replay prompt to constrain the final response shape: %q", prompt)
 	}
 }
 

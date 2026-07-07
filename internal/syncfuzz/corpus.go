@@ -11,31 +11,38 @@ import (
 )
 
 type CorpusEntry struct {
-	ExecutionKind      string            `json:"execution_kind,omitempty"`
-	EntryID            string            `json:"entry_id"`
-	SuiteID            string            `json:"suite_id"`
-	RunID              string            `json:"run_id"`
-	PairID             string            `json:"pair_id,omitempty"`
-	ControlRunID       string            `json:"control_run_id,omitempty"`
-	FaultRunID         string            `json:"fault_run_id,omitempty"`
-	CandidateID        string            `json:"candidate_id,omitempty"`
-	CaseName           string            `json:"case_name"`
-	FaultPlanID        string            `json:"fault_plan_id,omitempty"`
-	PrimitiveID        string            `json:"primitive_id,omitempty"`
-	TimingProfileID    string            `json:"timing_profile_id,omitempty"`
-	Iteration          int               `json:"iteration"`
-	Kind               string            `json:"kind"`
-	Key                string            `json:"key"`
-	Score              int               `json:"score"`
-	Signature          MismatchSignature `json:"signature"`
-	Differential       bool              `json:"differential,omitempty"`
-	SecurityRelevant   bool              `json:"security_relevant,omitempty"`
-	DifferentialReport string            `json:"differential_report,omitempty"`
-	AdapterID          string            `json:"adapter_id,omitempty"`
-	TargetID           string            `json:"target_id,omitempty"`
-	TaskID             string            `json:"task_id,omitempty"`
-	ArtifactDir        string            `json:"artifact_dir"`
-	RecordedAt         string            `json:"recorded_at"`
+	ExecutionKind        string                             `json:"execution_kind,omitempty"`
+	EntryID              string                             `json:"entry_id"`
+	SuiteID              string                             `json:"suite_id"`
+	RunID                string                             `json:"run_id"`
+	PairID               string                             `json:"pair_id,omitempty"`
+	ControlRunID         string                             `json:"control_run_id,omitempty"`
+	FaultRunID           string                             `json:"fault_run_id,omitempty"`
+	CandidateID          string                             `json:"candidate_id,omitempty"`
+	CaseName             string                             `json:"case_name"`
+	FaultPlanID          string                             `json:"fault_plan_id,omitempty"`
+	PrimitiveID          string                             `json:"primitive_id,omitempty"`
+	TimingProfileID      string                             `json:"timing_profile_id,omitempty"`
+	Iteration            int                                `json:"iteration"`
+	Kind                 string                             `json:"kind"`
+	Key                  string                             `json:"key"`
+	Score                int                                `json:"score"`
+	Signature            MismatchSignature                  `json:"signature"`
+	Differential         bool                               `json:"differential,omitempty"`
+	SecurityRelevant     bool                               `json:"security_relevant,omitempty"`
+	DifferentialReport   string                             `json:"differential_report,omitempty"`
+	AdapterID            string                             `json:"adapter_id,omitempty"`
+	TargetID             string                             `json:"target_id,omitempty"`
+	TaskID               string                             `json:"task_id,omitempty"`
+	PromptProfileID      string                             `json:"prompt_profile_id,omitempty"`
+	TargetOracleStatus   TargetOracleStatus                 `json:"target_oracle_status,omitempty"`
+	TargetAttribution    string                             `json:"target_attribution,omitempty"`
+	TaskComplianceStatus TargetTaskComplianceStatus         `json:"task_compliance_status,omitempty"`
+	ContractStatus       TargetContractInterpretationStatus `json:"contract_status,omitempty"`
+	ContractProfileID    string                             `json:"contract_profile_id,omitempty"`
+	ContractRuleID       string                             `json:"contract_rule_id,omitempty"`
+	ArtifactDir          string                             `json:"artifact_dir"`
+	RecordedAt           string                             `json:"recorded_at"`
 }
 
 // WriteCorpus registers interesting discoveries without copying the full run
@@ -126,21 +133,29 @@ func WriteTargetCorpus(corpusDir string, suite *TargetSuiteResult) ([]CorpusEntr
 			continue
 		}
 		entry := CorpusEntry{
-			ExecutionKind: corpusExecutionTarget,
-			EntryID:       targetCorpusEntryID(suite.TargetID, item.TaskID, item.RunID),
-			SuiteID:       suite.SuiteID,
-			RunID:         item.RunID,
-			CaseName:      "",
-			Iteration:     item.Iteration,
-			Kind:          "target-confirmed",
-			Key:           item.Signature.String(),
-			Score:         corpusScore("target-confirmed"),
-			Signature:     item.Signature,
-			AdapterID:     suite.AdapterID,
-			TargetID:      suite.TargetID,
-			TaskID:        item.TaskID,
-			ArtifactDir:   item.ArtifactDir,
-			RecordedAt:    recordedAt,
+			ExecutionKind:        corpusExecutionTarget,
+			EntryID:              targetCorpusEntryID(suite.TargetID, item.TaskID, item.RunID),
+			SuiteID:              suite.SuiteID,
+			RunID:                item.RunID,
+			CandidateID:          item.CandidateID,
+			CaseName:             "",
+			Iteration:            item.Iteration,
+			Kind:                 "target-confirmed",
+			Key:                  item.Signature.String(),
+			Score:                corpusScore("target-confirmed"),
+			Signature:            item.Signature,
+			AdapterID:            suite.AdapterID,
+			TargetID:             suite.TargetID,
+			TaskID:               item.TaskID,
+			PromptProfileID:      item.PromptProfileID,
+			TargetOracleStatus:   item.TargetOracle.Status,
+			TargetAttribution:    item.TargetOracle.Attribution,
+			TaskComplianceStatus: item.TaskCompliance.Status,
+			ContractStatus:       targetContractInterpretationStatusValue(item.ContractInterpretation),
+			ContractProfileID:    targetContractInterpretationProfileIDValue(item.ContractInterpretation),
+			ContractRuleID:       targetContractInterpretationRuleIDValue(item.ContractInterpretation),
+			ArtifactDir:          item.ArtifactDir,
+			RecordedAt:           recordedAt,
 		}
 		entries = append(entries, entry)
 

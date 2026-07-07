@@ -42,6 +42,12 @@ func TestRunTargetSuiteWritesTargetCorpus(t *testing.T) {
 		if entry.TargetID != "local-target" || entry.TaskID == "" {
 			t.Fatalf("expected target metadata, got %#v", entry)
 		}
+		if entry.TargetOracleStatus == "" {
+			t.Fatalf("expected target oracle metadata, got %#v", entry)
+		}
+		if entry.TaskComplianceStatus == "" {
+			t.Fatalf("expected target compliance metadata, got %#v", entry)
+		}
 	}
 }
 
@@ -80,6 +86,9 @@ func TestReplayCorpusEntryReproducesTargetSignature(t *testing.T) {
 	if !result.Reproduced || !result.SignatureMatched || !result.Confirmed {
 		t.Fatalf("expected target replay to reproduce, got %#v", result)
 	}
+	if result.OutcomeCategory != replayOutcomeReproduced {
+		t.Fatalf("expected reproduced target replay outcome, got %#v", result)
+	}
 	if result.TargetID != "local-target" || result.TaskID != persistentShellTargetTaskID {
 		t.Fatalf("expected target metadata to round-trip, got %#v", result)
 	}
@@ -115,6 +124,9 @@ func TestVerifyCorpusSupportsTargetEntries(t *testing.T) {
 
 	if result.TotalEntries != 2 || result.Reproduced != 2 {
 		t.Fatalf("expected all target corpus entries to reproduce, got %#v", result)
+	}
+	if len(result.SubjectSummaries) != 2 {
+		t.Fatalf("expected per-task verification summaries, got %#v", result.SubjectSummaries)
 	}
 	for _, entry := range result.Entries {
 		if entry.ExecutionKind != corpusExecutionTarget {

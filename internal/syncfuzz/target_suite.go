@@ -10,42 +10,52 @@ import (
 )
 
 type TargetSuiteOptions struct {
-	AdapterID        string
-	TargetID         string
-	Tasks            []string
-	TaskGroups       []string
-	Objective        string
-	Prompt           string
-	PromptFile       string
-	Command          string
-	CommandFile      string
-	OutDir           string
-	CorpusDir        string
-	Repeat           int
-	Timeout          time.Duration
-	ObserveDelay     time.Duration
-	LateObserveDelay time.Duration
-	EnvKind          string
-	ContainerImage   string
-	ExpectedFiles    []string
+	AdapterID         string
+	TargetID          string
+	Tasks             []string
+	TaskGroups        []string
+	Objective         string
+	PromptProfileID   string
+	PromptProfileIDs  []string
+	Prompt            string
+	PromptFile        string
+	Command           string
+	CommandFile       string
+	OutDir            string
+	CorpusDir         string
+	Repeat            int
+	Timeout           time.Duration
+	ObserveDelay      time.Duration
+	LateObserveDelay  time.Duration
+	EnvKind           string
+	ContainerImage    string
+	ExpectedFiles     []string
+	Matrix            bool
+	FeedbackFrom      string
+	CandidateLimit    int
+	ExcludeCandidates []string
 }
 
 type TargetSuiteRunResult struct {
-	TaskID             string                     `json:"task_id"`
-	Iteration          int                        `json:"iteration"`
-	RunID              string                     `json:"run_id,omitempty"`
-	Confirmed          bool                       `json:"confirmed"`
-	Completed          bool                       `json:"completed"`
-	LateObserveDelayMs int64                      `json:"late_observe_delay_ms,omitempty"`
-	TargetOracle       TargetOracleResult         `json:"target_oracle"`
-	TaskCompliance     TargetTaskComplianceResult `json:"task_compliance"`
-	Signature          MismatchSignature          `json:"signature"`
-	ArtifactDir        string                     `json:"artifact_dir,omitempty"`
-	DurationMillis     int64                      `json:"duration_ms,omitempty"`
-	ArtifactBytes      int64                      `json:"artifact_bytes,omitempty"`
-	ArtifactFiles      int                        `json:"artifact_files,omitempty"`
-	MetricError        string                     `json:"metric_error,omitempty"`
-	Error              string                     `json:"error,omitempty"`
+	CandidateID            string                        `json:"candidate_id,omitempty"`
+	TaskID                 string                        `json:"task_id"`
+	TargetID               string                        `json:"target_id,omitempty"`
+	PromptProfileID        string                        `json:"prompt_profile_id,omitempty"`
+	Iteration              int                           `json:"iteration"`
+	RunID                  string                        `json:"run_id,omitempty"`
+	Confirmed              bool                          `json:"confirmed"`
+	Completed              bool                          `json:"completed"`
+	LateObserveDelayMs     int64                         `json:"late_observe_delay_ms,omitempty"`
+	TargetOracle           TargetOracleResult            `json:"target_oracle"`
+	TaskCompliance         TargetTaskComplianceResult    `json:"task_compliance"`
+	ContractInterpretation *TargetContractInterpretation `json:"contract_interpretation,omitempty"`
+	Signature              MismatchSignature             `json:"signature"`
+	ArtifactDir            string                        `json:"artifact_dir,omitempty"`
+	DurationMillis         int64                         `json:"duration_ms,omitempty"`
+	ArtifactBytes          int64                         `json:"artifact_bytes,omitempty"`
+	ArtifactFiles          int                           `json:"artifact_files,omitempty"`
+	MetricError            string                        `json:"metric_error,omitempty"`
+	Error                  string                        `json:"error,omitempty"`
 }
 
 type TargetSuiteTaskSummary struct {
@@ -56,6 +66,7 @@ type TargetSuiteTaskSummary struct {
 	Errors               int                           `json:"errors"`
 	AttributionSummaries []TargetSuiteAttributionStats `json:"attribution_summaries,omitempty"`
 	ComplianceSummaries  []TargetSuiteComplianceStats  `json:"compliance_summaries,omitempty"`
+	ContractSummaries    []TargetSuiteContractStats    `json:"contract_summaries,omitempty"`
 }
 
 type TargetSuiteAttributionStats struct {
@@ -72,6 +83,13 @@ type TargetSuiteComplianceStats struct {
 	Unconfirmed int                        `json:"unconfirmed"`
 }
 
+type TargetSuiteContractStats struct {
+	Status      TargetContractInterpretationStatus `json:"status"`
+	TotalRuns   int                                `json:"total_runs"`
+	Confirmed   int                                `json:"confirmed"`
+	Unconfirmed int                                `json:"unconfirmed"`
+}
+
 type TargetSuiteResult struct {
 	SchemaVersion        string                        `json:"schema_version"`
 	SuiteID              string                        `json:"suite_id"`
@@ -85,6 +103,7 @@ type TargetSuiteResult struct {
 	Repeat               int                           `json:"repeat"`
 	Tasks                []string                      `json:"tasks"`
 	TaskGroups           []string                      `json:"task_groups,omitempty"`
+	PromptProfiles       []string                      `json:"prompt_profiles,omitempty"`
 	TimeoutMillis        int64                         `json:"timeout_ms"`
 	ObserveDelayMs       int64                         `json:"observe_delay_ms"`
 	LateObserveDelayMs   int64                         `json:"late_observe_delay_ms,omitempty"`
@@ -94,12 +113,44 @@ type TargetSuiteResult struct {
 	Errors               int                           `json:"errors"`
 	AttributionSummaries []TargetSuiteAttributionStats `json:"attribution_summaries,omitempty"`
 	ComplianceSummaries  []TargetSuiteComplianceStats  `json:"compliance_summaries,omitempty"`
+	ContractSummaries    []TargetSuiteContractStats    `json:"contract_summaries,omitempty"`
 	TaskSummaries        []TargetSuiteTaskSummary      `json:"task_summaries"`
+	SchedulerMode        string                        `json:"scheduler_mode,omitempty"`
+	TotalCandidates      int                           `json:"total_candidates,omitempty"`
+	OriginalCandidates   int                           `json:"original_candidates,omitempty"`
+	CandidateLimit       int                           `json:"candidate_limit,omitempty"`
+	FeedbackFrom         string                        `json:"feedback_from,omitempty"`
+	ScheduleMatrix       string                        `json:"schedule_matrix,omitempty"`
+	MatrixResult         string                        `json:"matrix_result,omitempty"`
+	CandidateSummaries   []TargetCandidateSummary      `json:"candidate_summaries,omitempty"`
 	Results              []TargetSuiteRunResult        `json:"results"`
 	CorpusEntries        []CorpusEntry                 `json:"corpus_entries,omitempty"`
 }
 
 const targetSuiteResultArtifact = "target-suite-result.json"
+const (
+	targetScheduleMatrixArtifact = "target-schedule-matrix.json"
+	targetMatrixResultArtifact   = "target-matrix-result.json"
+)
+
+type TargetMatrixResult struct {
+	SchemaVersion      string                   `json:"schema_version"`
+	SuiteID            string                   `json:"suite_id"`
+	GeneratedAt        string                   `json:"generated_at"`
+	ScheduleMatrix     string                   `json:"schedule_matrix"`
+	PromptProfiles     []string                 `json:"prompt_profiles,omitempty"`
+	TotalCandidates    int                      `json:"total_candidates"`
+	OriginalCandidates int                      `json:"original_candidates,omitempty"`
+	CandidateLimit     int                      `json:"candidate_limit,omitempty"`
+	FeedbackFrom       string                   `json:"feedback_from,omitempty"`
+	Repeat             int                      `json:"repeat"`
+	TotalRuns          int                      `json:"total_runs"`
+	Confirmed          int                      `json:"confirmed"`
+	Unconfirmed        int                      `json:"unconfirmed"`
+	Errors             int                      `json:"errors"`
+	CandidateSummaries []TargetCandidateSummary `json:"candidate_summaries"`
+	Results            []TargetSuiteRunResult   `json:"results"`
+}
 
 func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteResult, error) {
 	if opts.AdapterID == "" {
@@ -120,16 +171,56 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	if err := validateEnvironmentKind(opts.EnvKind); err != nil {
 		return nil, err
 	}
-
-	tasks, taskGroups, err := expandTargetTasks(opts.Tasks, opts.TaskGroups)
-	if err != nil {
-		return nil, err
+	schedulerMode := suiteSchedulerCaseList
+	var (
+		tasks                  []string
+		taskGroups             []string
+		matrix                 *TargetScheduleMatrix
+		originalCandidateCount int
+		err                    error
+	)
+	if opts.Matrix {
+		schedulerMode = suiteSchedulerMatrix
+		matrix, err = BuildTargetScheduleMatrix(TargetMatrixOptions{
+			TargetID:         opts.TargetID,
+			Tasks:            opts.Tasks,
+			TaskGroups:       opts.TaskGroups,
+			PromptProfileIDs: targetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs),
+		})
+		if err != nil {
+			return nil, err
+		}
+		originalCandidateCount = matrix.TotalCandidates
+		tasks = append([]string{}, matrix.Tasks...)
+		taskGroups = append([]string{}, matrix.TaskGroups...)
+		if opts.FeedbackFrom != "" || opts.CandidateLimit > 0 || len(opts.ExcludeCandidates) > 0 {
+			schedulerMode = suiteSchedulerFeedback
+			matrix, err = selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{
+				FeedbackFrom:        opts.FeedbackFrom,
+				Limit:               opts.CandidateLimit,
+				ExcludeCandidateIDs: opts.ExcludeCandidates,
+			})
+			if err != nil {
+				return nil, err
+			}
+			tasks = targetCandidateTaskIDs(matrix.Candidates)
+		}
+	} else {
+		tasks, taskGroups, err = expandTargetTasks(opts.Tasks, opts.TaskGroups)
+		if err != nil {
+			return nil, err
+		}
 	}
 	started := time.Now().UTC()
 	suiteID := fmt.Sprintf("target-suite-%d", started.UnixNano())
 	suiteDir := filepath.Join(opts.OutDir, suiteID)
 	if err := os.MkdirAll(suiteDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create target suite directory: %w", err)
+	}
+	if matrix != nil {
+		if err := writeJSON(filepath.Join(suiteDir, targetScheduleMatrixArtifact), matrix); err != nil {
+			return nil, err
+		}
 	}
 
 	result := &TargetSuiteResult{
@@ -144,10 +235,22 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 		Repeat:             opts.Repeat,
 		Tasks:              append([]string{}, tasks...),
 		TaskGroups:         append([]string{}, taskGroups...),
+		SchedulerMode:      schedulerMode,
 		TimeoutMillis:      opts.Timeout.Milliseconds(),
 		ObserveDelayMs:     opts.ObserveDelay.Milliseconds(),
 		LateObserveDelayMs: opts.LateObserveDelay.Milliseconds(),
 		Results:            []TargetSuiteRunResult{},
+	}
+	if matrix != nil {
+		result.PromptProfiles = append([]string{}, matrix.PromptProfiles...)
+		result.TotalCandidates = matrix.TotalCandidates
+		result.OriginalCandidates = originalCandidateCount
+		result.CandidateLimit = opts.CandidateLimit
+		result.FeedbackFrom = opts.FeedbackFrom
+		result.ScheduleMatrix = filepath.Join(suiteDir, targetScheduleMatrixArtifact)
+		result.MatrixResult = filepath.Join(suiteDir, targetMatrixResultArtifact)
+	} else if selection := targetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs); len(selection) > 0 {
+		result.PromptProfiles = append([]string{}, selection...)
 	}
 
 	summaries := make(map[string]*TargetSuiteTaskSummary, len(tasks))
@@ -155,76 +258,24 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	taskAttributions := make(map[string]map[string]*TargetSuiteAttributionStats, len(tasks))
 	complianceSummary := make(map[TargetTaskComplianceStatus]*TargetSuiteComplianceStats)
 	taskCompliances := make(map[string]map[TargetTaskComplianceStatus]*TargetSuiteComplianceStats, len(tasks))
+	contractSummary := make(map[TargetContractInterpretationStatus]*TargetSuiteContractStats)
+	taskContracts := make(map[string]map[TargetContractInterpretationStatus]*TargetSuiteContractStats, len(tasks))
 	for _, taskID := range tasks {
 		summaries[taskID] = &TargetSuiteTaskSummary{TaskID: taskID}
 		taskAttributions[taskID] = make(map[string]*TargetSuiteAttributionStats)
 		taskCompliances[taskID] = make(map[TargetTaskComplianceStatus]*TargetSuiteComplianceStats)
+		taskContracts[taskID] = make(map[TargetContractInterpretationStatus]*TargetSuiteContractStats)
 	}
 
 	for iteration := 1; iteration <= opts.Repeat; iteration++ {
+		if matrix != nil {
+			for _, candidate := range matrix.Candidates {
+				runTargetSuiteTask(ctx, opts, suiteDir, iteration, candidate.TaskID, candidate.PromptProfileID, candidate.CandidateID, summaries, attributionSummary, taskAttributions, complianceSummary, taskCompliances, contractSummary, taskContracts, result)
+			}
+			continue
+		}
 		for _, taskID := range tasks {
-			runLateObserveDelay := opts.LateObserveDelay
-			if runLateObserveDelay == 0 {
-				runLateObserveDelay = defaultTargetLateObserveDelay(taskID)
-			}
-			item := TargetSuiteRunResult{
-				TaskID:             taskID,
-				Iteration:          iteration,
-				LateObserveDelayMs: runLateObserveDelay.Milliseconds(),
-				Signature:          targetSignature(taskID),
-			}
-			startedRun := time.Now()
-			runResult, err := RunTarget(ctx, TargetRunOptions{
-				AdapterID:        opts.AdapterID,
-				TargetID:         opts.TargetID,
-				TaskID:           taskID,
-				Objective:        opts.Objective,
-				Prompt:           opts.Prompt,
-				PromptFile:       opts.PromptFile,
-				Command:          opts.Command,
-				CommandFile:      opts.CommandFile,
-				OutDir:           suiteDir,
-				Timeout:          opts.Timeout,
-				ObserveDelay:     opts.ObserveDelay,
-				LateObserveDelay: runLateObserveDelay,
-				EnvKind:          opts.EnvKind,
-				ContainerImage:   opts.ContainerImage,
-				ExpectedFiles:    opts.ExpectedFiles,
-			})
-			if err != nil {
-				item.Error = err.Error()
-				item.DurationMillis = time.Since(startedRun).Milliseconds()
-				result.Errors++
-				summaries[taskID].TotalRuns++
-				summaries[taskID].Errors++
-				result.Results = append(result.Results, item)
-				continue
-			}
-
-			item.RunID = runResult.RunID
-			item.Confirmed = runResult.ExpectationsMet
-			item.Completed = runResult.Completed
-			item.LateObserveDelayMs = runResult.LateObserveDelayMs
-			item.TargetOracle = runResult.TargetOracle
-			item.TaskCompliance = runResult.TaskCompliance
-			item.Signature = runResult.Signature
-			item.ArtifactDir = runResult.ArtifactDir
-			finalizeTargetSuiteItemMetrics(&item, startedRun)
-
-			result.TotalRuns++
-			summaries[taskID].TotalRuns++
-			if item.Confirmed {
-				result.Confirmed++
-				summaries[taskID].Confirmed++
-			} else {
-				result.Unconfirmed++
-				summaries[taskID].Unconfirmed++
-			}
-			recordTargetSuiteAttribution(attributionSummary, item.TargetOracle.Attribution, item.Confirmed)
-			recordTargetSuiteAttribution(taskAttributions[taskID], item.TargetOracle.Attribution, item.Confirmed)
-			recordTargetSuiteCompliance(complianceSummary, item.TaskCompliance.Status, item.Confirmed)
-			recordTargetSuiteCompliance(taskCompliances[taskID], item.TaskCompliance.Status, item.Confirmed)
-			result.Results = append(result.Results, item)
+			runTargetSuiteTask(ctx, opts, suiteDir, iteration, taskID, opts.PromptProfileID, "", summaries, attributionSummary, taskAttributions, complianceSummary, taskCompliances, contractSummary, taskContracts, result)
 		}
 	}
 
@@ -233,11 +284,16 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	for _, taskID := range tasks {
 		summaries[taskID].AttributionSummaries = targetSuiteAttributionStats(taskAttributions[taskID])
 		summaries[taskID].ComplianceSummaries = targetSuiteComplianceStats(taskCompliances[taskID])
+		summaries[taskID].ContractSummaries = targetSuiteContractStats(taskContracts[taskID])
 		result.TaskSummaries = append(result.TaskSummaries, *summaries[taskID])
 	}
 	result.AttributionSummaries = targetSuiteAttributionStats(attributionSummary)
 	result.ComplianceSummaries = targetSuiteComplianceStats(complianceSummary)
+	result.ContractSummaries = targetSuiteContractStats(contractSummary)
 	result.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if matrix != nil {
+		result.CandidateSummaries = summarizeTargetCandidates(result.Results)
+	}
 	corpusEntries, err := WriteTargetCorpus(opts.CorpusDir, result)
 	if err != nil {
 		return nil, err
@@ -246,7 +302,119 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	if err := writeJSON(filepath.Join(suiteDir, targetSuiteResultArtifact), result); err != nil {
 		return nil, err
 	}
+	if matrix != nil {
+		matrixResult := TargetMatrixResult{
+			SchemaVersion:      "syncfuzz.target-matrix-result.v1",
+			SuiteID:            result.SuiteID,
+			GeneratedAt:        time.Now().UTC().Format(time.RFC3339Nano),
+			ScheduleMatrix:     result.ScheduleMatrix,
+			PromptProfiles:     append([]string{}, result.PromptProfiles...),
+			TotalCandidates:    result.TotalCandidates,
+			OriginalCandidates: result.OriginalCandidates,
+			CandidateLimit:     result.CandidateLimit,
+			FeedbackFrom:       result.FeedbackFrom,
+			Repeat:             result.Repeat,
+			TotalRuns:          result.TotalRuns,
+			Confirmed:          result.Confirmed,
+			Unconfirmed:        result.Unconfirmed,
+			Errors:             result.Errors,
+			CandidateSummaries: result.CandidateSummaries,
+			Results:            result.Results,
+		}
+		if err := writeJSON(filepath.Join(suiteDir, targetMatrixResultArtifact), matrixResult); err != nil {
+			return nil, err
+		}
+	}
 	return result, nil
+}
+
+func runTargetSuiteTask(
+	ctx context.Context,
+	opts TargetSuiteOptions,
+	suiteDir string,
+	iteration int,
+	taskID string,
+	promptProfileID string,
+	candidateID string,
+	summaries map[string]*TargetSuiteTaskSummary,
+	attributionSummary map[string]*TargetSuiteAttributionStats,
+	taskAttributions map[string]map[string]*TargetSuiteAttributionStats,
+	complianceSummary map[TargetTaskComplianceStatus]*TargetSuiteComplianceStats,
+	taskCompliances map[string]map[TargetTaskComplianceStatus]*TargetSuiteComplianceStats,
+	contractSummary map[TargetContractInterpretationStatus]*TargetSuiteContractStats,
+	taskContracts map[string]map[TargetContractInterpretationStatus]*TargetSuiteContractStats,
+	result *TargetSuiteResult,
+) {
+	runLateObserveDelay := opts.LateObserveDelay
+	if runLateObserveDelay == 0 {
+		runLateObserveDelay = defaultTargetLateObserveDelay(taskID)
+	}
+	item := TargetSuiteRunResult{
+		CandidateID:        candidateID,
+		TaskID:             taskID,
+		TargetID:           opts.TargetID,
+		PromptProfileID:    normalizeTargetPromptProfileID(promptProfileID),
+		Iteration:          iteration,
+		LateObserveDelayMs: runLateObserveDelay.Milliseconds(),
+		Signature:          targetSignature(taskID),
+	}
+	startedRun := time.Now()
+	runResult, err := RunTarget(ctx, TargetRunOptions{
+		AdapterID:        opts.AdapterID,
+		TargetID:         opts.TargetID,
+		TaskID:           taskID,
+		Objective:        opts.Objective,
+		PromptProfileID:  promptProfileID,
+		Prompt:           opts.Prompt,
+		PromptFile:       opts.PromptFile,
+		Command:          opts.Command,
+		CommandFile:      opts.CommandFile,
+		OutDir:           suiteDir,
+		Timeout:          opts.Timeout,
+		ObserveDelay:     opts.ObserveDelay,
+		LateObserveDelay: runLateObserveDelay,
+		EnvKind:          opts.EnvKind,
+		ContainerImage:   opts.ContainerImage,
+		ExpectedFiles:    opts.ExpectedFiles,
+	})
+	if err != nil {
+		item.Error = err.Error()
+		item.DurationMillis = time.Since(startedRun).Milliseconds()
+		result.Errors++
+		summaries[taskID].TotalRuns++
+		summaries[taskID].Errors++
+		result.Results = append(result.Results, item)
+		return
+	}
+
+	item.RunID = runResult.RunID
+	item.TargetID = runResult.TargetID
+	item.PromptProfileID = runResult.PromptProfileID
+	item.Confirmed = runResult.ExpectationsMet
+	item.Completed = runResult.Completed
+	item.LateObserveDelayMs = runResult.LateObserveDelayMs
+	item.TargetOracle = runResult.TargetOracle
+	item.TaskCompliance = runResult.TaskCompliance
+	item.ContractInterpretation = runResult.ContractInterpretation
+	item.Signature = runResult.Signature
+	item.ArtifactDir = runResult.ArtifactDir
+	finalizeTargetSuiteItemMetrics(&item, startedRun)
+
+	summaries[taskID].TotalRuns++
+	if item.Confirmed {
+		result.Confirmed++
+		summaries[taskID].Confirmed++
+	} else {
+		result.Unconfirmed++
+		summaries[taskID].Unconfirmed++
+	}
+	recordTargetSuiteAttribution(attributionSummary, item.TargetOracle.Attribution, item.Confirmed)
+	recordTargetSuiteAttribution(taskAttributions[taskID], item.TargetOracle.Attribution, item.Confirmed)
+	recordTargetSuiteCompliance(complianceSummary, item.TaskCompliance.Status, item.Confirmed)
+	recordTargetSuiteCompliance(taskCompliances[taskID], item.TaskCompliance.Status, item.Confirmed)
+	recordTargetSuiteContract(contractSummary, targetContractInterpretationStatusValue(item.ContractInterpretation), item.Confirmed)
+	recordTargetSuiteContract(taskContracts[taskID], targetContractInterpretationStatusValue(item.ContractInterpretation), item.Confirmed)
+	result.Results = append(result.Results, item)
 }
 
 func finalizeTargetSuiteItemMetrics(item *TargetSuiteRunResult, started time.Time) {
@@ -297,6 +465,23 @@ func recordTargetSuiteCompliance(stats map[TargetTaskComplianceStatus]*TargetSui
 	item.Unconfirmed++
 }
 
+func recordTargetSuiteContract(stats map[TargetContractInterpretationStatus]*TargetSuiteContractStats, status TargetContractInterpretationStatus, confirmed bool) {
+	if status == "" {
+		return
+	}
+	item, ok := stats[status]
+	if !ok {
+		item = &TargetSuiteContractStats{Status: status}
+		stats[status] = item
+	}
+	item.TotalRuns++
+	if confirmed {
+		item.Confirmed++
+		return
+	}
+	item.Unconfirmed++
+}
+
 func targetSuiteAttributionStats(stats map[string]*TargetSuiteAttributionStats) []TargetSuiteAttributionStats {
 	if len(stats) == 0 {
 		return nil
@@ -336,6 +521,29 @@ func targetSuiteComplianceStats(stats map[TargetTaskComplianceStatus]*TargetSuit
 	return summary
 }
 
+func targetSuiteContractStats(stats map[TargetContractInterpretationStatus]*TargetSuiteContractStats) []TargetSuiteContractStats {
+	if len(stats) == 0 {
+		return nil
+	}
+	statuses := make([]TargetContractInterpretationStatus, 0, len(stats))
+	for status := range stats {
+		statuses = append(statuses, status)
+	}
+	sort.Slice(statuses, func(i, j int) bool {
+		li := targetContractInterpretationStatusOrder(statuses[i])
+		lj := targetContractInterpretationStatusOrder(statuses[j])
+		if li != lj {
+			return li < lj
+		}
+		return statuses[i] < statuses[j]
+	})
+	summary := make([]TargetSuiteContractStats, 0, len(statuses))
+	for _, status := range statuses {
+		summary = append(summary, *stats[status])
+	}
+	return summary
+}
+
 func targetTaskComplianceStatusOrder(status TargetTaskComplianceStatus) int {
 	switch status {
 	case targetTaskComplianceStatusCompliant:
@@ -348,5 +556,18 @@ func targetTaskComplianceStatusOrder(status TargetTaskComplianceStatus) int {
 		return 3
 	default:
 		return 4
+	}
+}
+
+func targetContractInterpretationStatusOrder(status TargetContractInterpretationStatus) int {
+	switch status {
+	case targetContractStatusViolation:
+		return 0
+	case targetContractStatusConsistent:
+		return 1
+	case targetContractStatusUnknown:
+		return 2
+	default:
+		return 3
 	}
 }

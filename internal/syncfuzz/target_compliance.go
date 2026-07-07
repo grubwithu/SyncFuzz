@@ -1,7 +1,10 @@
 package syncfuzz
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -226,6 +229,24 @@ func evaluateWorkspaceResidueForkTargetTaskCompliance(workspace string, spec wor
 		evaluateDeleteResidueForkTaskCompliance(&result, historyCalls, forkCalls)
 	case symlinkResidueForkTargetTaskID:
 		evaluateSymlinkResidueForkTaskCompliance(&result, historyCalls, forkCalls)
+	case renameResidueForkTargetTaskID:
+		evaluateRenameResidueForkTaskCompliance(&result, historyCalls, forkCalls)
+	case modeResidueForkTargetTaskID:
+		evaluateModeResidueForkTaskCompliance(&result, historyCalls, forkCalls)
+	case appendResidueForkTargetTaskID:
+		evaluateAppendResidueForkTaskCompliance(&result, historyCalls, forkCalls)
+	case hardlinkResidueForkTargetTaskID:
+		evaluateHardlinkResidueForkTaskCompliance(&result, historyCalls, forkCalls)
+	case fifoResidueForkTargetTaskID:
+		evaluateFIFOResidueForkTaskCompliance(&result, historyCalls, forkCalls)
+	case openFDResidueForkTargetTaskID:
+		evaluateOpenFDResidueForkTaskCompliance(&result, historyCalls, forkCalls)
+	case deletedOpenFDForkTargetTaskID:
+		evaluateDeletedOpenFDResidueForkTaskCompliance(&result, historyCalls, forkCalls)
+	case inheritedFDLeakTargetTaskID:
+		evaluateInheritedFDLeakTaskCompliance(&result, historyCalls, forkCalls)
+	case unixListenerResidueForkTargetTaskID:
+		evaluateUnixListenerResidueForkTaskCompliance(&result, historyCalls, forkCalls)
 	}
 
 	return finalizeTargetTaskCompliance(result)
@@ -726,6 +747,627 @@ func evaluateSymlinkResidueForkTaskCompliance(result *TargetTaskComplianceResult
 	}
 }
 
+func evaluateRenameResidueForkTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	createCount := 0
+	renameCount := 0
+	verifyCount := 0
+	historyWitnessWrites := 0
+	summaryWitnessWrites := 0
+	summaryMutations := 0
+	historySourceDeletes := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetRenameResidueSourceArtifact) {
+			createCount++
+		}
+		if commandRenamesWorkspaceFile(command, targetRenameResidueSourceArtifact, targetRenameResidueDestArtifact) {
+			renameCount++
+		}
+		if looksLikeRenameResidueVerification(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, targetRenameResidueForkArtifact) {
+			historyWitnessWrites++
+		}
+		if commandDeletesWorkspaceFile(command, targetRenameResidueSourceArtifact) {
+			historySourceDeletes++
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetRenameResidueForkArtifact) {
+			summaryWitnessWrites++
+		}
+		if commandWritesWorkspaceFile(command, targetRenameResidueSourceArtifact) ||
+			commandWritesWorkspaceFile(command, targetRenameResidueDestArtifact) ||
+			commandDeletesWorkspaceFile(command, targetRenameResidueSourceArtifact) ||
+			commandDeletesWorkspaceFile(command, targetRenameResidueDestArtifact) ||
+			commandRenamesWorkspaceFile(command, targetRenameResidueSourceArtifact, targetRenameResidueDestArtifact) ||
+			commandRenamesWorkspaceFile(command, targetRenameResidueDestArtifact, targetRenameResidueSourceArtifact) {
+			summaryMutations++
+		}
+	}
+
+	requireExactCount(result, createCount, 1, "initial branch created branch-rename-src.txt exactly once")
+	requireExactCount(result, renameCount, 1, "initial branch renamed branch-rename-src.txt to branch-rename-dst.txt exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified that branch-rename-dst.txt existed after the rename")
+	requireExactCount(result, summaryWitnessWrites, 1, "fork follow-up wrote rename-residue-fork-check.txt exactly once")
+	if historyWitnessWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided creating rename-residue-fork-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later rename residue witness")
+	}
+	if historySourceDeletes > renameCount {
+		appendTargetTaskViolation(result, "initial branch avoided deleting branch-rename-src.txt outside the requested rename")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch only removed branch-rename-src.txt through the requested rename")
+	}
+	if summaryMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up avoided recreating, deleting, or renaming branch-rename-src.txt and branch-rename-dst.txt")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up only observed which rename-side file already existed")
+	}
+}
+
+func evaluateModeResidueForkTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	createCount := 0
+	verifyInitialCount := 0
+	chmodCount := 0
+	verifyTightenedCount := 0
+	historyWitnessWrites := 0
+	summaryWitnessWrites := 0
+	summaryMutations := 0
+	historyDeletes := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetModeResidueNoteArtifact) {
+			createCount++
+		}
+		if looksLikeModeResidueVerification(command) && strings.Contains(output, "644") {
+			verifyInitialCount++
+		}
+		if commandChangesWorkspaceFileMode(command, targetModeResidueNoteArtifact, "000") {
+			chmodCount++
+		}
+		if looksLikeModeResidueVerification(command) && strings.Contains(output, "000") {
+			verifyTightenedCount++
+		}
+		if commandWritesWorkspaceFile(command, targetModeResidueForkArtifact) {
+			historyWitnessWrites++
+		}
+		if commandDeletesWorkspaceFile(command, targetModeResidueNoteArtifact) {
+			historyDeletes++
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetModeResidueForkArtifact) {
+			summaryWitnessWrites++
+		}
+		if commandWritesWorkspaceFile(command, targetModeResidueNoteArtifact) ||
+			commandDeletesWorkspaceFile(command, targetModeResidueNoteArtifact) ||
+			commandChangesWorkspaceFileMode(command, targetModeResidueNoteArtifact, "000") ||
+			commandChangesWorkspaceFileMode(command, targetModeResidueNoteArtifact, "644") {
+			summaryMutations++
+		}
+	}
+
+	requireExactCount(result, createCount, 1, "initial branch created branch-mode-note.txt exactly once")
+	requireAtLeastOne(result, verifyInitialCount, "initial branch verified that branch-mode-note.txt started at mode 0644")
+	requireExactCount(result, chmodCount, 1, "initial branch changed branch-mode-note.txt to mode 000 exactly once")
+	requireAtLeastOne(result, verifyTightenedCount, "initial branch verified that branch-mode-note.txt ended at mode 000")
+	requireExactCount(result, summaryWitnessWrites, 1, "fork follow-up wrote mode-residue-fork-check.txt exactly once")
+	if historyWitnessWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided creating mode-residue-fork-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later mode residue witness")
+	}
+	if historyDeletes > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided deleting branch-mode-note.txt after creating it")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch kept branch-mode-note.txt in place after creation")
+	}
+	if summaryMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up avoided rewriting, deleting, or chmod-ing branch-mode-note.txt")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up only observed the existing mode of branch-mode-note.txt")
+	}
+}
+
+func evaluateAppendResidueForkTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	createCount := 0
+	appendCount := 0
+	verifyCount := 0
+	historyWitnessWrites := 0
+	summaryWitnessWrites := 0
+	summaryMutations := 0
+	historyDeletes := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetAppendResidueNoteArtifact) && !commandAppendsWorkspaceFile(command, targetAppendResidueNoteArtifact) {
+			createCount++
+		}
+		if commandAppendsWorkspaceFile(command, targetAppendResidueNoteArtifact) {
+			appendCount++
+		}
+		if looksLikeAppendResidueVerification(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, targetAppendResidueForkArtifact) {
+			historyWitnessWrites++
+		}
+		if commandDeletesWorkspaceFile(command, targetAppendResidueNoteArtifact) {
+			historyDeletes++
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetAppendResidueForkArtifact) {
+			summaryWitnessWrites++
+		}
+		if commandWritesWorkspaceFile(command, targetAppendResidueNoteArtifact) ||
+			commandDeletesWorkspaceFile(command, targetAppendResidueNoteArtifact) ||
+			commandAppendsWorkspaceFile(command, targetAppendResidueNoteArtifact) {
+			summaryMutations++
+		}
+	}
+
+	requireExactCount(result, createCount, 1, "initial branch created branch-append-note.txt exactly once")
+	requireExactCount(result, appendCount, 1, "initial branch appended the extra marker to branch-append-note.txt exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified that branch-append-note.txt contained both markers")
+	requireExactCount(result, summaryWitnessWrites, 1, "fork follow-up wrote append-residue-fork-check.txt exactly once")
+	if historyWitnessWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided creating append-residue-fork-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later append residue witness")
+	}
+	if historyDeletes > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided deleting branch-append-note.txt after appending to it")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch kept branch-append-note.txt in place after appending to it")
+	}
+	if summaryMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up avoided truncating, deleting, or appending to branch-append-note.txt")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up only observed the existing contents of branch-append-note.txt")
+	}
+}
+
+func evaluateHardlinkResidueForkTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	createCount := 0
+	verifyCount := 0
+	historyWitnessWrites := 0
+	summaryWitnessWrites := 0
+	summaryMutations := 0
+	historyDeletes := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandCreatesWorkspaceHardlink(command, targetHardlinkResidueLinkArtifact) {
+			createCount++
+		}
+		if looksLikeHardlinkResidueVerification(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, targetHardlinkResidueForkArtifact) {
+			historyWitnessWrites++
+		}
+		if commandDeletesWorkspaceFile(command, targetHardlinkResidueLinkArtifact) {
+			historyDeletes++
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetHardlinkResidueForkArtifact) {
+			summaryWitnessWrites++
+		}
+		if commandCreatesWorkspaceHardlink(command, targetHardlinkResidueLinkArtifact) ||
+			commandDeletesWorkspaceFile(command, targetHardlinkResidueLinkArtifact) {
+			summaryMutations++
+		}
+	}
+
+	requireExactCount(result, createCount, 1, "initial branch created branch-hardlink.txt exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified that branch-hardlink.txt existed as a hardlink")
+	requireExactCount(result, summaryWitnessWrites, 1, "fork follow-up wrote hardlink-residue-fork-check.txt exactly once")
+	if historyWitnessWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided creating hardlink-residue-fork-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later hardlink residue witness")
+	}
+	if historyDeletes > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided deleting branch-hardlink.txt after creating it")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch kept branch-hardlink.txt in place after creation")
+	}
+	if summaryMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up avoided recreating or deleting branch-hardlink.txt")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up observed branch-hardlink.txt without recreating it")
+	}
+}
+
+func evaluateFIFOResidueForkTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	createCount := 0
+	verifyCount := 0
+	historyWitnessWrites := 0
+	summaryWitnessWrites := 0
+	summaryMutations := 0
+	historyDeletes := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandCreatesWorkspaceFIFO(command, targetFIFOResiduePipeArtifact) {
+			createCount++
+		}
+		if looksLikeFIFOResidueVerification(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, targetFIFOResidueForkArtifact) {
+			historyWitnessWrites++
+		}
+		if commandDeletesWorkspaceFile(command, targetFIFOResiduePipeArtifact) {
+			historyDeletes++
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetFIFOResidueForkArtifact) {
+			summaryWitnessWrites++
+		}
+		if commandCreatesWorkspaceFIFO(command, targetFIFOResiduePipeArtifact) ||
+			commandDeletesWorkspaceFile(command, targetFIFOResiduePipeArtifact) {
+			summaryMutations++
+		}
+	}
+
+	requireExactCount(result, createCount, 1, "initial branch created branch-fifo exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified that branch-fifo existed as a named pipe")
+	requireExactCount(result, summaryWitnessWrites, 1, "fork follow-up wrote fifo-residue-fork-check.txt exactly once")
+	if historyWitnessWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided creating fifo-residue-fork-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later fifo residue witness")
+	}
+	if historyDeletes > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided deleting branch-fifo after creating it")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch kept branch-fifo in place after creation")
+	}
+	if summaryMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up avoided recreating or deleting branch-fifo")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up observed branch-fifo without recreating it")
+	}
+}
+
+func evaluateOpenFDResidueForkTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	createCount := 0
+	openCount := 0
+	verifyCount := 0
+	historyWitnessWrites := 0
+	summaryWitnessWrites := 0
+	summaryMutations := 0
+	historyDeletes := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetOpenFDResidueNoteArtifact) {
+			createCount++
+		}
+		if commandOpensWorkspaceFD(command, targetOpenFDResidueNoteArtifact) {
+			openCount++
+		}
+		if looksLikeOpenFDResidueVerification(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, targetOpenFDResidueForkArtifact) {
+			historyWitnessWrites++
+		}
+		if commandDeletesWorkspaceFile(command, targetOpenFDResidueNoteArtifact) {
+			historyDeletes++
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetOpenFDResidueForkArtifact) {
+			summaryWitnessWrites++
+		}
+		if commandOpensWorkspaceFD(command, targetOpenFDResidueNoteArtifact) ||
+			commandWritesWorkspaceFile(command, targetOpenFDResiduePIDArtifact) ||
+			commandDeletesWorkspaceFile(command, targetOpenFDResidueNoteArtifact) {
+			summaryMutations++
+		}
+	}
+
+	requireExactCount(result, createCount, 1, "initial branch created branch-fd-note.txt exactly once")
+	requireExactCount(result, openCount, 1, "initial branch launched the branch-fd-note.txt fd holder exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified that branch-fd-note.txt was still reachable through fd 9")
+	requireExactCount(result, summaryWitnessWrites, 1, "fork follow-up wrote open-fd-residue-fork-check.txt exactly once")
+	if historyWitnessWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided creating open-fd-residue-fork-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later open-fd residue witness")
+	}
+	if historyDeletes > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided deleting branch-fd-note.txt after creating it")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch kept branch-fd-note.txt in place after opening it")
+	}
+	if summaryMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up avoided relaunching or modifying the branch-fd-note.txt holder")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up only observed the existing branch-fd-note.txt holder")
+	}
+}
+
+func evaluateDeletedOpenFDResidueForkTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	createCount := 0
+	openCount := 0
+	verifyCount := 0
+	historyWitnessWrites := 0
+	summaryWitnessWrites := 0
+	summaryMutations := 0
+	historyDeletes := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetDeletedOpenFDNoteArtifact) {
+			createCount++
+		}
+		if commandOpensDeletedWorkspaceFD(command, targetDeletedOpenFDNoteArtifact) {
+			openCount++
+		}
+		if looksLikeDeletedOpenFDResidueVerification(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, targetDeletedOpenFDForkArtifact) {
+			historyWitnessWrites++
+		}
+		if commandDeletesWorkspaceFile(command, targetDeletedOpenFDNoteArtifact) {
+			historyDeletes++
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetDeletedOpenFDForkArtifact) {
+			summaryWitnessWrites++
+		}
+		if commandOpensDeletedWorkspaceFD(command, targetDeletedOpenFDNoteArtifact) ||
+			commandOpensWorkspaceFD(command, targetDeletedOpenFDNoteArtifact) ||
+			commandWritesWorkspaceFile(command, targetDeletedOpenFDPIDArtifact) ||
+			commandDeletesWorkspaceFile(command, targetDeletedOpenFDNoteArtifact) {
+			summaryMutations++
+		}
+	}
+
+	requireExactCount(result, createCount, 1, "initial branch created branch-deleted-fd-note.txt exactly once")
+	requireExactCount(result, openCount, 1, "initial branch launched the deleted branch-deleted-fd-note.txt holder exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified that branch-deleted-fd-note.txt was still reachable through a deleted fd 9")
+	requireExactCount(result, summaryWitnessWrites, 1, "fork follow-up wrote deleted-open-fd-residue-fork-check.txt exactly once")
+	if historyWitnessWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided creating deleted-open-fd-residue-fork-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later deleted-open-fd residue witness")
+	}
+	if historyDeletes == 0 {
+		appendTargetTaskViolation(result, "initial branch deleted branch-deleted-fd-note.txt exactly once through the fd-holder launch")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch deleted branch-deleted-fd-note.txt while keeping the inode open")
+	}
+	if summaryMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up avoided relaunching or modifying the deleted branch-deleted-fd-note.txt holder")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up only observed the existing deleted branch-deleted-fd-note.txt holder")
+	}
+}
+
+func evaluateInheritedFDLeakTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	createCount := 0
+	openCount := 0
+	verifyCount := 0
+	historyWitnessWrites := 0
+	summaryWitnessWrites := 0
+	summaryMutations := 0
+	historyDeletes := 0
+	forbiddenInitialInspections := map[string]bool{}
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		for _, token := range []string{"ps", "ls", "grep", "pstree", "jobs", "stat", "find"} {
+			if commandContainsWord(command, token) {
+				forbiddenInitialInspections[token] = true
+			}
+		}
+		if commandWritesWorkspaceFile(command, targetInheritedFDLeakSecretArtifact) {
+			createCount++
+		}
+		if commandOpensDeletedWorkspaceFD(command, targetInheritedFDLeakSecretArtifact) {
+			openCount++
+		}
+		if looksLikeInheritedFDLeakVerification(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, targetInheritedFDLeakForkArtifact) {
+			historyWitnessWrites++
+		}
+		if commandDeletesWorkspaceFile(command, targetInheritedFDLeakSecretArtifact) {
+			historyDeletes++
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetInheritedFDLeakForkArtifact) || inheritedFDLeakFollowupProducedWitness(call) {
+			summaryWitnessWrites++
+		}
+		if commandOpensDeletedWorkspaceFD(command, targetInheritedFDLeakSecretArtifact) ||
+			commandOpensWorkspaceFD(command, targetInheritedFDLeakSecretArtifact) ||
+			commandWritesWorkspaceFile(command, targetInheritedFDLeakSecretArtifact) ||
+			commandWritesWorkspaceFile(command, targetInheritedFDLeakPIDArtifact) ||
+			commandDeletesWorkspaceFile(command, targetInheritedFDLeakSecretArtifact) {
+			summaryMutations++
+		}
+	}
+
+	requireExactCount(result, createCount, 1, "initial branch created branch-inherited-fd-secret.txt exactly once")
+	requireExactCount(result, openCount, 1, "initial branch launched the inherited-fd holder exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified that branch-inherited-fd-secret.txt was still reachable through a deleted fd 9")
+	requireExactCount(result, summaryWitnessWrites, 1, "fork follow-up wrote inherited-fd-branch-leakage-check.txt exactly once")
+	for _, token := range []string{"ps", "ls", "grep", "pstree", "jobs", "stat", "find"} {
+		if forbiddenInitialInspections[token] {
+			appendTargetTaskViolation(result, "initial branch avoided extra process/file inspection command: "+token)
+		}
+	}
+	if historyWitnessWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided creating inherited-fd-branch-leakage-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later inherited-fd leakage witness")
+	}
+	if historyDeletes == 0 {
+		appendTargetTaskViolation(result, "initial branch deleted branch-inherited-fd-secret.txt exactly once through the fd-holder launch")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch deleted branch-inherited-fd-secret.txt while keeping the inode open")
+	}
+	if summaryMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up avoided relaunching or recreating the inherited-fd branch secret")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up only observed the existing inherited-fd branch secret")
+	}
+}
+
+func inheritedFDLeakFollowupProducedWitness(call langgraphShellCall) bool {
+	command := normalizeShellCommand(call.Command)
+	if !strings.Contains(command, "inherited-fd-branch-leakage-check") {
+		return false
+	}
+	output := strings.TrimSpace(call.Output)
+	return outputShowsInheritedFDLeakageMarker(output) || outputShowsMissingInheritedFDLeakage(output)
+}
+
+func evaluateUnixListenerResidueForkTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	launchCount := 0
+	verifyCount := 0
+	historyWitnessWrites := 0
+	summaryWitnessWrites := 0
+	summaryMutations := 0
+	historyDeletes := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandLaunchesUnixListener(command) {
+			launchCount++
+		}
+		if looksLikeUnixListenerResidueVerification(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, targetUnixListenerForkArtifact) {
+			historyWitnessWrites++
+		}
+		if commandDeletesWorkspaceFile(command, targetUnixListenerSocketArtifact) {
+			historyDeletes++
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetUnixListenerForkArtifact) || unixListenerFollowupProducedWitness(call) {
+			summaryWitnessWrites++
+		}
+		if commandLaunchesUnixListener(command) ||
+			commandWritesWorkspaceFile(command, targetUnixListenerPIDArtifact) ||
+			commandDeletesWorkspaceFile(command, targetUnixListenerSocketArtifact) {
+			summaryMutations++
+		}
+	}
+
+	requireExactCount(result, launchCount, 1, "initial branch launched the Unix listener exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified that branch-listener.sock returned the expected response")
+	requireExactCount(result, summaryWitnessWrites, 1, "fork follow-up wrote unix-listener-residue-fork-check.txt exactly once")
+	if historyWitnessWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided creating unix-listener-residue-fork-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later Unix listener residue witness")
+	}
+	if historyDeletes > 1 {
+		appendTargetTaskViolation(result, "initial branch avoided deleting branch-listener.sock outside listener setup")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch only touched branch-listener.sock during listener setup")
+	}
+	if summaryMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up avoided relaunching or recreating the Unix listener")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up only connected to the existing Unix listener")
+	}
+}
+
+func unixListenerFollowupProducedWitness(call langgraphShellCall) bool {
+	command := normalizeShellCommand(call.Command)
+	output := strings.TrimSpace(call.Output)
+	if !outputShowsUnixListenerResidueMarker(output) && !outputShowsMissingUnixListenerResidue(output) {
+		return false
+	}
+	return command == "" ||
+		strings.Contains(command, "unix-listener-residue-fork-check") ||
+		looksLikeUnixListenerResidueVerification(command)
+}
+
 func finalizeTargetTaskCompliance(result TargetTaskComplianceResult) TargetTaskComplianceResult {
 	switch {
 	case len(result.Violations) > 0:
@@ -760,7 +1402,15 @@ func loadLangGraphOperationShellCalls(workspace string, artifact string) (*langg
 	if summary == nil {
 		return nil, nil, false, nil
 	}
-	return summary, buildLangGraphShellCalls(summary.Messages), true, nil
+	summaryCalls := buildLangGraphShellCalls(operationFollowupMessages(summary))
+	lifecycleCalls, lifecycleOK, err := loadLangGraphLifecycleShellCalls(workspace, summary.Operation)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if lifecycleOK && len(lifecycleCalls) > 0 {
+		return summary, attachShellCallOutputs(lifecycleCalls, summaryCalls), true, nil
+	}
+	return summary, summaryCalls, true, nil
 }
 
 func loadPrimaryLangGraphShellCalls(workspace string) ([]langgraphShellCall, bool, error) {
@@ -768,16 +1418,116 @@ func loadPrimaryLangGraphShellCalls(workspace string) ([]langgraphShellCall, boo
 	if err != nil {
 		return nil, false, err
 	}
-	if len(checkpoints) == 0 {
-		return nil, false, nil
+	historyCalls, historyOK := primaryShellCallsFromHistory(checkpoints)
+
+	lifecycleCalls, lifecycleOK, err := loadLangGraphLifecycleShellCalls(workspace, "initial_run")
+	if err != nil {
+		return nil, false, err
 	}
-	best := checkpoints[0]
-	for _, checkpoint := range checkpoints[1:] {
-		if len(checkpoint.Messages) > len(best.Messages) {
-			best = checkpoint
+	if lifecycleOK && len(lifecycleCalls) > 0 {
+		return attachShellCallOutputs(lifecycleCalls, collectShellCallsFromHistory(checkpoints)), true, nil
+	}
+	if historyOK {
+		return historyCalls, true, nil
+	}
+	return nil, false, nil
+}
+
+func primaryShellCallsFromHistory(checkpoints []langgraphHistoryCheckpoint) ([]langgraphShellCall, bool) {
+	var best []langgraphShellCall
+	bestMessageCount := -1
+	for _, checkpoint := range checkpoints {
+		calls := buildLangGraphShellCalls(checkpoint.Messages)
+		if len(calls) == 0 && len(best) > 0 {
+			continue
+		}
+		if len(calls) > len(best) || (len(calls) == len(best) && len(checkpoint.Messages) > bestMessageCount) {
+			best = calls
+			bestMessageCount = len(checkpoint.Messages)
 		}
 	}
-	return buildLangGraphShellCalls(best.Messages), true, nil
+	if len(best) == 0 {
+		return nil, len(checkpoints) > 0
+	}
+	return best, true
+}
+
+func collectShellCallsFromHistory(checkpoints []langgraphHistoryCheckpoint) []langgraphShellCall {
+	var calls []langgraphShellCall
+	seen := map[string]bool{}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			key := call.Command + "\x00" + call.Output
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			calls = append(calls, call)
+		}
+	}
+	return calls
+}
+
+func attachShellCallOutputs(calls []langgraphShellCall, outputSource []langgraphShellCall) []langgraphShellCall {
+	outputs := map[string][]string{}
+	for _, call := range outputSource {
+		if strings.TrimSpace(call.Output) == "" {
+			continue
+		}
+		outputs[call.Command] = append(outputs[call.Command], call.Output)
+	}
+	merged := append([]langgraphShellCall(nil), calls...)
+	for i, call := range merged {
+		queue := outputs[call.Command]
+		if len(queue) == 0 {
+			continue
+		}
+		merged[i].Output = queue[0]
+		outputs[call.Command] = queue[1:]
+	}
+	return merged
+}
+
+type langGraphLifecycleData struct {
+	Events []langGraphLifecycleEvent `json:"events"`
+}
+
+type langGraphLifecycleEvent struct {
+	Event          string `json:"event"`
+	Operation      string `json:"operation"`
+	CommandPreview string `json:"command_preview"`
+}
+
+func loadLangGraphLifecycleShellCalls(workspace string, operation string) ([]langgraphShellCall, bool, error) {
+	path := filepath.Join(workspace, langgraphLifecycleArtifact)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("read %s: %w", langgraphLifecycleArtifact, err)
+	}
+
+	var lifecycle langGraphLifecycleData
+	if err := json.Unmarshal(raw, &lifecycle); err != nil {
+		return nil, false, fmt.Errorf("decode %s: %w", langgraphLifecycleArtifact, err)
+	}
+
+	var calls []langgraphShellCall
+	for _, event := range lifecycle.Events {
+		if event.Event != "shell_command_started" {
+			continue
+		}
+		if operation != "" && event.Operation != operation {
+			continue
+		}
+		command := strings.TrimSpace(event.CommandPreview)
+		if command == "" {
+			continue
+		}
+		calls = append(calls, langgraphShellCall{Command: command})
+	}
+	return calls, true, nil
 }
 
 func requireExactCount(result *TargetTaskComplianceResult, observed int, expected int, requirement string) {

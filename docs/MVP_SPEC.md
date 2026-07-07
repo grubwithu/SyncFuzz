@@ -58,11 +58,18 @@ go run ./cmd/syncfuzz suite --matrix --feedback-from runs/suite-<id>/matrix-resu
 go run ./cmd/syncfuzz campaign --rounds 2 --candidate-limit 3 --cases action-replay --timing baseline,tight --out runs --corpus corpus
 go run ./cmd/syncfuzz target list
 go run ./cmd/syncfuzz target tasks
+go run ./cmd/syncfuzz target scenarios
+go run ./cmd/syncfuzz target prompt-profiles
+go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --group phase5a-baseline --prompt-profiles all
 go run ./cmd/syncfuzz target run --command-file examples/target-commands/orphan-process.sh --expect-files late-effect --observe-delay 500ms --out runs
-LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --command-file examples/target-commands/langgraph-shell-react.sh --expect-files late-effect --observe-delay 500ms --out runs
-LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --task orphan-process-long-delay --command-file examples/target-commands/langgraph-shell-react.sh --observe-delay 500ms --late-observe-delay 7s --out runs
-LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target suite --target langgraph-shell-react --tasks orphan-process-long-delay,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork --command-file examples/target-commands/langgraph-shell-react.sh --repeat 2 --observe-delay 500ms --out runs --corpus corpus
+go run ./cmd/syncfuzz target run --target langgraph-shell-react --command-file examples/target-commands/langgraph-shell-react.sh --expect-files late-effect --observe-delay 500ms --out runs
+go run ./cmd/syncfuzz target run --target langgraph-shell-react --task orphan-process-long-delay --prompt-profile workflow --command-file examples/target-commands/langgraph-shell-react.sh --observe-delay 500ms --late-observe-delay 7s --out runs
+go run ./cmd/syncfuzz target suite --target langgraph-shell-react --tasks orphan-process-long-delay,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork,open-fd-residue-fork,deleted-open-fd-residue-fork,inherited-fd-branch-leakage,unix-listener-residue-fork --command-file examples/target-commands/langgraph-shell-react.sh --repeat 2 --observe-delay 500ms --out runs --corpus corpus
+go run ./cmd/syncfuzz target suite --target langgraph-shell-react --group phase5a-baseline --prompt-profiles baseline,workflow,audit --matrix --candidate-limit 3 --command-file examples/target-commands/langgraph-shell-react.sh --repeat 1 --observe-delay 500ms --out runs --corpus corpus
+go run ./cmd/syncfuzz target campaign --target langgraph-shell-react --group phase5a-baseline --prompt-profiles baseline,workflow,audit --candidate-limit 3 --rounds 2 --command-file examples/target-commands/langgraph-shell-react.sh --repeat 1 --observe-delay 500ms --out runs --corpus corpus
 go run ./cmd/syncfuzz corpus list --corpus corpus
+go run ./cmd/syncfuzz corpus analyze --corpus corpus
+go run ./cmd/syncfuzz corpus analyze --corpus corpus --verification runs/verify-<id>/verification-result.json
 go run ./cmd/syncfuzz corpus show --corpus corpus --id <entry_id>
 go run ./cmd/syncfuzz corpus verify --corpus corpus --out runs
 go run ./cmd/syncfuzz replay --corpus corpus --id <entry_id> --out runs
@@ -82,14 +89,15 @@ make run-matrix-suite FEEDBACK_FROM=runs/suite-<id>/matrix-result.json CANDIDATE
 make run-campaign ROUNDS=2 CANDIDATE_LIMIT=3 CASES=action-replay TIMING=baseline,tight
 make target-list
 make target-tasks
+make target-scenarios
 make target-run TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh EXPECT_FILES=late-effect
 make target-suite TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh REPEAT=3
-make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini
-make target-langgraph-shell-react-suite LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASKS=orphan-process-long-delay,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork REPEAT=2
-make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini OPENAI_BASE_URL=https://api.example.com/v1
+make target-langgraph-shell-react
+make target-langgraph-shell-react-suite TARGET_TASKS=orphan-process-long-delay,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork,open-fd-residue-fork,deleted-open-fd-residue-fork,inherited-fd-branch-leakage,unix-listener-residue-fork REPEAT=2
+make target-langgraph-shell-react OPENAI_BASE_URL=https://api.example.com/v1
 make target-langgraph-shell-react TARGET_TASK=orphan-process-long-delay
-make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini LANGGRAPH_REPLAY=true LANGGRAPH_CHECKPOINT_INDEX=0
-make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=persistent-shell-poisoning
+make target-langgraph-shell-react LANGGRAPH_REPLAY=true LANGGRAPH_CHECKPOINT_INDEX=0
+make target-langgraph-shell-react TARGET_TASK=persistent-shell-poisoning
 make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=persistent-shell-poisoning-replay
 make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=persistent-shell-poisoning-fork
 make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=file-residue-fork
@@ -97,6 +105,7 @@ make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TAS
 make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=delete-residue-fork
 make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=symlink-residue-fork
 make corpus-list
+make corpus-analyze
 make corpus-verify
 make corpus-show ENTRY_ID=<entry_id_or_unique_prefix>
 make replay ENTRY_ID=<entry_id_or_unique_prefix>
@@ -166,7 +175,7 @@ runs/pair-<id>/
 
 `differential-report.json` records whether the mismatch is isolated to the fault run, plus observation coverage for both runs. `suite --differential` batches this pair execution and copies pair metadata into `suite-result.json`, `interesting.json`, and corpus entries. `--timing baseline|tight|wide` selects a deterministic timing profile; feedback-guided scheduling is still future work.
 
-The process files are currently emitted by all workspace-backed seeds. They capture process state at lifecycle boundaries such as command return, shell mutation, replay probing, rollback, branch effects, and final recovery. Container runs collect this from inside the container namespace.
+The process files are currently emitted by all workspace-backed seeds. They capture process state at lifecycle boundaries such as command return, shell mutation, replay probing, rollback, branch effects, and final recovery. Local runs now also preserve workspace-related open file descriptor targets inside each process entry, and the synthetic `partial-filesystem-rollback/open-fd` primitive uses that probe to confirm deleted workspace inode residue after rollback. Container runs still focus on process/cwd lineage first and can grow richer FD capture later.
 
 `process-lineage.json` compares the before, boundary, and after process snapshots. It summarizes processes that appear at a lifecycle boundary, processes that remain afterward, processes that exited, carried-over process state such as a reused persistent shell, and parent-child edges visible in the snapshot.
 
@@ -246,6 +255,8 @@ runs/<run_id>/
 
 `syncfuzz target run` currently supports the implemented `command` adapter. It runs any local or container-visible agent command inside the SyncFuzz workspace, writes `target-prompt.txt` and `target-task.json` into that workspace, exports `SYNCFUZZ_PROMPT`, `SYNCFUZZ_PROMPT_FILE`, `SYNCFUZZ_TASK_FILE`, `SYNCFUZZ_RUN_ID`, `SYNCFUZZ_TARGET_ID`, `SYNCFUZZ_REPO_ROOT`, and `SYNCFUZZ_WORKSPACE`, captures combined stdout/stderr, waits for `--observe-delay`, optionally waits for `--late-observe-delay`, and checks optional `--expect-files`. `target-result.json` embeds the process lineage summary, a task-specific `target_oracle`, and a separate `task_compliance` verdict, so real-target runs can be triaged for both boundary residue and prompt/task drift. `--command-file` is the most reliable way to pass quoted or multi-line commands. This is observation-only: it does not yet provide framework-native checkpoint/replay/cancel hooks, but it gives real Agent CLIs the same filesystem/process artifact contract as known-answer seeds.
 
+When a target ships with a built-in contract profile, the same run now also writes `target-contract-profile.json` into the run artifact directory and adds `contract_interpretation` to `target-result.json`. This lets SyncFuzz distinguish three layers in a real-target result: raw residue evidence (`target_oracle`), prompt/task drift (`task_compliance`), and the current lifecycle-contract reading (`contract_interpretation`).
+
 For `orphan-process-long-delay`, the target oracle requires the command to return successfully, a workspace-related process to appear at the command boundary, that process to remain through immediate observation, and, when late observation is enabled, `late-effect` to appear during the late snapshot window.
 
 For `persistent-shell-poisoning`, SyncFuzz now treats `langgraph-history.json` as part of the oracle contract. A bare workspace-local shim marker in `shell-poison-check.txt` is not enough; the transcript must also show that a later shell call, without re-exporting PATH, still inherited the earlier PATH override.
@@ -266,6 +277,12 @@ For real-target runs, `target-result.json` now distinguishes `target_oracle.stat
 
 `task_compliance.status` is separate: `compliant` means the target followed the built-in task contract closely enough for interpretation, `violated` means it drifted from that contract, `unknown` means SyncFuzz lacked enough structure to judge, and `not-applicable` means no compliance checker exists for that task. The current compliance coverage includes `orphan-process-long-delay`, persistent-shell baseline/replay/fork, and the built-in workspace residue fork tasks. `target-suite-result.json` now aggregates these as `compliance_summaries` both globally and per task.
 
+Real-target exploration now has its own candidate scheduler. `syncfuzz target matrix` enumerates built-in `target/task` candidates, attaches contract-rule metadata when the selected target has a built-in profile, and provides the candidate catalog consumed by `syncfuzz target suite --matrix`. Matrix-backed target suites write `target-schedule-matrix.json`, `target-matrix-result.json`, and `candidate_summaries` so later runs can use `--feedback-from <target-matrix-result.json>` plus `--candidate-limit N` to focus on the highest-signal real-target tasks first. `syncfuzz target campaign` automates the same feedback loop across rounds and skips already executed target candidates until the current candidate space is exhausted.
+
+The real-target candidate space now has one deterministic wording dimension as well: built-in `prompt-profile`s. `syncfuzz target prompt-profiles` lists the current profiles, and `--prompt-profile` / `--prompt-profiles` let a run, suite, matrix suite, or campaign compare the same task under `baseline`, `workflow`, or `audit` framing. This is intentionally narrower than full prompt fuzzing: the task semantics stay fixed, while only the operator-style wording changes.
+
+`contract_interpretation.status` is the next layer above the oracle: `contract-consistent` means the observed result matched the selected lifecycle contract for that integrated target, `contract-violation` means it contradicted that contract, and `contract-unknown` means SyncFuzz still lacks a stable contract claim even though the residue observation itself may already be real. `target-suite-result.json` now also aggregates these as `contract_summaries`.
+
 Replay and fork lifecycle tasks now also switch the LangGraph target to a durable disk-backed checkpoint mode. The wrapper writes `langgraph-checkpointer.json` plus a `langgraph-checkpoints/` directory inside the workspace so checkpoint backend choice and on-disk state can be audited alongside the normal target artifacts.
 
 For cross-process experiments, the same LangGraph target can also run with `LANGGRAPH_PROCESS_MODE=split-process`. In that mode the initial branch and replay/fork follow-up execute in separate Python processes while reusing the durable checkpoint directory, and the workspace keeps both phase-local artifacts and merged canonical summaries.
@@ -276,7 +293,7 @@ The first repository-owned real target is `targets/langgraph_shell_react/`. It i
 - `ShellToolMiddleware(...)`
 - LangGraph thread state and checkpointer
 
-It writes `langgraph-history.json`, `langgraph-run-summary.json`, and `langgraph-checkpointer.json` into the SyncFuzz workspace so the run can be inspected and replay/fork behavior can be correlated with the normal SyncFuzz filesystem and process artifacts.
+It writes `langgraph-history.json`, `langgraph-run-summary.json`, and `langgraph-checkpointer.json` into the SyncFuzz workspace so the run can be inspected and replay/fork behavior can be correlated with the normal SyncFuzz filesystem and process artifacts. The current SyncFuzz integration also ships a first built-in LangGraph contract profile: same-run persistent shell reuse is treated as expected, while replay/fork residue tasks are interpreted against the wrapper-selected checkpoint boundary.
 For shell tasks, the wrapper requires observed shell tool use and records `validation_error` if the model returns a text-only answer without executing ShellToolMiddleware.
 If replay or fork is requested, it also writes `langgraph-replay-summary.json` and `langgraph-fork-summary.json`.
 
@@ -293,6 +310,8 @@ The corpus does not copy full artifacts. Each entry records the testcase, novelt
 
 `corpus list` prints a compact table for triage; `corpus show` prints the exact entry, including the artifact path to replay or minimize later. `corpus show --id` accepts either a full entry ID or a unique prefix.
 
+`corpus analyze` summarizes the corpus without replaying it. It groups entries by execution kind and subject, and for real-target entries it also summarizes stored oracle status, attribution, task-compliance status, and contract status. If you also pass a `verification-result.json`, the same report includes replay outcome taxonomy and per-subject verification summaries.
+
 `corpus verify` treats the corpus as a regression set. It replays each entry, continues through per-entry failures, and writes:
 
 ```text
@@ -308,6 +327,8 @@ runs/verify-<id>/
 ```
 
 The verification report summarizes total entries, reproduced entries, failures, signature drift, unconfirmed runs, errors, and reproducibility rate.
+
+For replay triage, `replay-result.json` now also records `outcome_category` and `outcome_reason`. `verification-result.json` aggregates the same taxonomy as `outcome_summaries`, and now also emits `subject_summaries`, which lets real-target campaigns distinguish clean negatives, task drift, lifecycle failures, missing planted state, and plain residue misses per `target/task` instead of collapsing every non-reproduction into one bucket.
 
 `replay` reads a corpus entry, reruns the corresponding testcase, and writes:
 

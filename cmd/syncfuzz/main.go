@@ -76,10 +76,15 @@ Usage:
   syncfuzz campaign [--rounds 2] [--candidate-limit 3] [--cases action-replay] [--timing baseline,tight,wide] [--feedback-from matrix-result.json] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz target list
   syncfuzz target tasks
+  syncfuzz target scenarios
   syncfuzz target groups
-  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
-  syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target prompt-profiles
+  syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
+  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles baseline,workflow,audit] [--matrix] [--feedback-from target-matrix-result.json] [--candidate-limit 3] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target campaign [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--group phase5a-baseline] [--prompt-profiles baseline,workflow,audit] [--rounds 2] [--candidate-limit 3] [--repeat 1] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz corpus list [--corpus corpus] [--limit 20]
+  syncfuzz corpus analyze [--corpus corpus] [--limit 0] [--verification runs/verify-<id>/verification-result.json]
   syncfuzz corpus show --id <entry_id> [--corpus corpus]
   syncfuzz corpus verify [--corpus corpus] [--out runs] [--limit 0] [--env local] [--container-image ubuntu:latest]
   syncfuzz replay --id <entry_id> [--corpus corpus] [--out runs] [--env local] [--container-image ubuntu:latest]
@@ -456,7 +461,7 @@ func campaign(args []string) {
 
 func target(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, groups, run, or suite")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, scenarios, groups, prompt-profiles, matrix, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -464,12 +469,20 @@ func target(args []string) {
 		targetList()
 	case "tasks":
 		targetTasks()
+	case "scenarios":
+		targetScenarios()
 	case "groups":
 		targetGroups()
+	case "prompt-profiles":
+		targetPromptProfiles()
+	case "matrix":
+		targetMatrix(args[1:])
 	case "run":
 		targetRun(args[1:])
 	case "suite":
 		targetSuite(args[1:])
+	case "campaign":
+		targetCampaign(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown target subcommand: %s\n", args[0])
 		os.Exit(2)
@@ -500,6 +513,22 @@ func targetTasks() {
 	}
 }
 
+func targetScenarios() {
+	fmt.Printf("%-28s %-28s %-24s %s\n", "scenario", "state_surface", "lifecycle_edge", "components")
+	for _, scenario := range syncfuzz.TargetScenarios() {
+		parts := make([]string, 0, len(scenario.Components))
+		for _, component := range scenario.Components {
+			parts = append(parts, fmt.Sprintf("%s:%s", component.Role, component.Summary))
+		}
+		fmt.Printf("%-28s %-28s %-24s %s\n",
+			scenario.ScenarioID,
+			scenario.StateSurface,
+			scenario.LifecycleEdge,
+			strings.Join(parts, " | "),
+		)
+	}
+}
+
 func targetGroups() {
 	fmt.Printf("%-22s %-60s %s\n", "group", "tasks", "description")
 	for _, group := range syncfuzz.TargetTaskGroups() {
@@ -511,12 +540,72 @@ func targetGroups() {
 	}
 }
 
+func targetPromptProfiles() {
+	fmt.Printf("%-12s %s\n", "profile", "description")
+	for _, profile := range syncfuzz.TargetPromptProfiles() {
+		fmt.Printf("%-12s %s\n", profile.ProfileID, profile.Description)
+	}
+}
+
+func targetMatrix(args []string) {
+	fs := flag.NewFlagSet("target matrix", flag.ExitOnError)
+	targetID := fs.String("target", "command", "human-readable target runtime id")
+	taskID := fs.String("task", "orphan-process", "single target task id")
+	taskList := fs.String("tasks", "", "comma-separated target task ids; overrides --task when set")
+	taskGroup := fs.String("group", "", "single built-in target task group to expand into matrix candidates")
+	taskGroups := fs.String("groups", "", "comma-separated built-in target task groups to expand before explicit tasks")
+	promptProfile := fs.String("prompt-profile", "", "single built-in target prompt profile")
+	promptProfiles := fs.String("prompt-profiles", "", "comma-separated built-in target prompt profiles; use all for every built-in profile")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	tasks, groups := resolveTargetTaskSelection(*taskID, *taskList, *taskGroup, *taskGroups, true)
+	profileIDs := splitCSV(*promptProfiles)
+	if len(profileIDs) == 0 && *promptProfile != "" {
+		profileIDs = []string{*promptProfile}
+	}
+	result, err := syncfuzz.BuildTargetScheduleMatrix(syncfuzz.TargetMatrixOptions{
+		TargetID:         *targetID,
+		Tasks:            tasks,
+		TaskGroups:       groups,
+		PromptProfileIDs: profileIDs,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target matrix failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("schema: %s\n", result.SchemaVersion)
+	fmt.Printf("target: %s\n", result.TargetID)
+	fmt.Printf("tasks: %s\n", strings.Join(result.Tasks, ","))
+	if len(result.TaskGroups) > 0 {
+		fmt.Printf("task_groups: %s\n", strings.Join(result.TaskGroups, ","))
+	}
+	if len(result.PromptProfiles) > 0 {
+		fmt.Printf("prompt_profiles: %s\n", strings.Join(result.PromptProfiles, ","))
+	}
+	fmt.Printf("total_candidates: %d\n", result.TotalCandidates)
+	fmt.Printf("%-52s %-28s %-10s %-5s %-24s %s\n", "candidate_id", "task", "prompt", "late", "contract_rule", "description")
+	for _, candidate := range result.Candidates {
+		fmt.Printf("%-52s %-28s %-10s %-5t %-24s %s\n",
+			candidate.CandidateID,
+			candidate.TaskID,
+			candidate.PromptProfileID,
+			candidate.UsesLateObservation,
+			candidate.ContractRuleID,
+			candidate.Description,
+		)
+	}
+}
+
 func targetRun(args []string) {
 	fs := flag.NewFlagSet("target run", flag.ExitOnError)
 	adapterID := fs.String("adapter", "command", "target adapter id")
 	targetID := fs.String("target", "command", "human-readable target runtime id")
 	taskID := fs.String("task", "orphan-process", "target task id")
 	objective := fs.String("objective", "", "optional target objective")
+	promptProfile := fs.String("prompt-profile", "", "built-in target prompt profile used when no explicit prompt text or prompt file is provided")
 	prompt := fs.String("prompt", "", "inline prompt passed through SYNCFUZZ_PROMPT")
 	promptFile := fs.String("prompt-file", "", "optional prompt file")
 	command := fs.String("command", "", "target command to run inside the SyncFuzz workspace")
@@ -538,6 +627,7 @@ func targetRun(args []string) {
 		TargetID:         *targetID,
 		TaskID:           *taskID,
 		Objective:        *objective,
+		PromptProfileID:  *promptProfile,
 		Prompt:           *prompt,
 		PromptFile:       *promptFile,
 		Command:          *command,
@@ -560,6 +650,9 @@ func targetRun(args []string) {
 	fmt.Printf("adapter: %s\n", result.AdapterID)
 	fmt.Printf("target: %s\n", result.TargetID)
 	fmt.Printf("task: %s\n", result.TaskID)
+	if result.PromptProfileID != "" {
+		fmt.Printf("prompt_profile: %s\n", result.PromptProfileID)
+	}
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
 	fmt.Printf("completed: %t\n", result.Completed)
@@ -574,6 +667,14 @@ func targetRun(args []string) {
 	}
 	if result.TaskCompliance.Status != "" {
 		fmt.Printf("task_compliance_status: %s\n", result.TaskCompliance.Status)
+	}
+	if result.ContractInterpretation != nil {
+		if result.ContractInterpretation.Status != "" {
+			fmt.Printf("contract_status: %s\n", result.ContractInterpretation.Status)
+		}
+		if result.ContractInterpretation.RuleID != "" {
+			fmt.Printf("contract_rule: %s\n", result.ContractInterpretation.RuleID)
+		}
 	}
 	if result.TargetOracle.Attribution != "" {
 		fmt.Printf("oracle_attribution: %s\n", result.TargetOracle.Attribution)
@@ -611,6 +712,8 @@ func targetSuite(args []string) {
 	taskGroup := fs.String("group", "", "single built-in target task group to expand into suite tasks")
 	taskGroups := fs.String("groups", "", "comma-separated built-in target task groups to expand before explicit tasks")
 	objective := fs.String("objective", "", "optional shared objective override")
+	promptProfile := fs.String("prompt-profile", "", "single built-in target prompt profile")
+	promptProfiles := fs.String("prompt-profiles", "", "comma-separated built-in target prompt profiles; use all for every built-in profile")
 	prompt := fs.String("prompt", "", "inline prompt passed through SYNCFUZZ_PROMPT")
 	promptFile := fs.String("prompt-file", "", "optional shared prompt file")
 	command := fs.String("command", "", "target command to run inside the SyncFuzz workspace")
@@ -624,19 +727,17 @@ func targetSuite(args []string) {
 	lateObserveDelay := fs.Duration("late-observe-delay", 0, "optional delay after immediate observation for delayed target effects")
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	matrixMode := fs.Bool("matrix", false, "run the real-target task matrix instead of a fixed task list")
+	feedbackFrom := fs.String("feedback-from", "", "previous target-matrix-result.json used to rank target candidates")
+	candidateLimit := fs.Int("candidate-limit", 0, "maximum matrix candidates to execute after feedback ranking; 0 means all")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
-	groups := splitCSV(*taskGroups)
-	if *taskGroup != "" {
-		groups = append([]string{*taskGroup}, groups...)
-	}
-	tasks := splitCSV(*taskList)
-	if len(tasks) == 0 && len(groups) == 0 {
-		tasks = []string{*taskID}
-	} else if len(tasks) == 0 && *taskID != "orphan-process" {
-		tasks = []string{*taskID}
+	tasks, groups := resolveTargetTaskSelection(*taskID, *taskList, *taskGroup, *taskGroups, *matrixMode)
+	profileIDs := splitCSV(*promptProfiles)
+	if len(profileIDs) == 0 && *promptProfile != "" {
+		profileIDs = []string{*promptProfile}
 	}
 
 	result, err := syncfuzz.RunTargetSuite(context.Background(), syncfuzz.TargetSuiteOptions{
@@ -645,6 +746,8 @@ func targetSuite(args []string) {
 		Tasks:            tasks,
 		TaskGroups:       groups,
 		Objective:        *objective,
+		PromptProfileID:  *promptProfile,
+		PromptProfileIDs: profileIDs,
 		Prompt:           *prompt,
 		PromptFile:       *promptFile,
 		Command:          *command,
@@ -658,6 +761,9 @@ func targetSuite(args []string) {
 		EnvKind:          *envKind,
 		ContainerImage:   *containerImage,
 		ExpectedFiles:    splitCSV(*expectFiles),
+		Matrix:           *matrixMode,
+		FeedbackFrom:     *feedbackFrom,
+		CandidateLimit:   *candidateLimit,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz target suite failed: %v\n", err)
@@ -673,6 +779,34 @@ func targetSuite(args []string) {
 	fmt.Printf("tasks: %s\n", strings.Join(result.Tasks, ","))
 	if len(result.TaskGroups) > 0 {
 		fmt.Printf("task_groups: %s\n", strings.Join(result.TaskGroups, ","))
+	}
+	if len(result.PromptProfiles) > 0 {
+		fmt.Printf("prompt_profiles: %s\n", strings.Join(result.PromptProfiles, ","))
+	}
+	if result.MatrixResult != "" {
+		fmt.Printf("scheduler: %s\n", result.SchedulerMode)
+		fmt.Printf("total_candidates: %d\n", result.TotalCandidates)
+		if result.OriginalCandidates > 0 && result.OriginalCandidates != result.TotalCandidates {
+			fmt.Printf("original_candidates: %d\n", result.OriginalCandidates)
+		}
+		if result.FeedbackFrom != "" {
+			fmt.Printf("feedback_from: %s\n", result.FeedbackFrom)
+		}
+		if result.CandidateLimit > 0 {
+			fmt.Printf("candidate_limit: %d\n", result.CandidateLimit)
+		}
+		if len(result.CandidateSummaries) > 0 {
+			top := result.CandidateSummaries[0]
+			fmt.Printf("top_candidate: %s score=%d status=%s repro=%.2f%% avg_duration_ms=%d avg_artifact_bytes=%d\n",
+				top.CandidateID,
+				top.Score,
+				top.Status,
+				top.ReproducibilityRate*100,
+				top.AvgDurationMillis,
+				top.AvgArtifactBytes,
+			)
+		}
+		fmt.Printf("matrix_result: %s\n", result.MatrixResult)
 	}
 	fmt.Printf("total_runs: %d\n", result.TotalRuns)
 	fmt.Printf("confirmed: %d\n", result.Confirmed)
@@ -694,8 +828,134 @@ func targetSuite(args []string) {
 			stats.Unconfirmed,
 		)
 	}
+	for _, stats := range result.ContractSummaries {
+		fmt.Printf("contract[%s]: total=%d confirmed=%d unconfirmed=%d\n",
+			stats.Status,
+			stats.TotalRuns,
+			stats.Confirmed,
+			stats.Unconfirmed,
+		)
+	}
 	fmt.Printf("corpus_entries: %d\n", len(result.CorpusEntries))
 	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
+}
+
+func targetCampaign(args []string) {
+	fs := flag.NewFlagSet("target campaign", flag.ExitOnError)
+	adapterID := fs.String("adapter", "command", "target adapter id")
+	targetID := fs.String("target", "command", "human-readable target runtime id")
+	taskID := fs.String("task", "orphan-process", "single target task id")
+	taskList := fs.String("tasks", "", "comma-separated target task ids; overrides --task when set")
+	taskGroup := fs.String("group", "", "single built-in target task group to expand into campaign candidates")
+	taskGroups := fs.String("groups", "", "comma-separated built-in target task groups to expand before explicit tasks")
+	objective := fs.String("objective", "", "optional shared objective override")
+	promptProfile := fs.String("prompt-profile", "", "single built-in target prompt profile")
+	promptProfiles := fs.String("prompt-profiles", "", "comma-separated built-in target prompt profiles; use all for every built-in profile")
+	prompt := fs.String("prompt", "", "inline prompt passed through SYNCFUZZ_PROMPT")
+	promptFile := fs.String("prompt-file", "", "optional shared prompt file")
+	command := fs.String("command", "", "target command to run inside the SyncFuzz workspace")
+	commandFile := fs.String("command-file", "", "optional file containing the target command")
+	expectFiles := fs.String("expect-files", "", "comma-separated files expected to exist after every target task")
+	outDir := fs.String("out", "runs", "directory for target campaign artifacts")
+	corpusDir := fs.String("corpus", "corpus", "directory for confirmed target corpus entries; empty disables corpus output")
+	rounds := fs.Int("rounds", 2, "number of target feedback rounds")
+	repeat := fs.Int("repeat", 1, "number of repetitions per target candidate")
+	candidateLimit := fs.Int("candidate-limit", 0, "candidate budget for feedback-ranked rounds; 0 means all")
+	feedbackFrom := fs.String("feedback-from", "", "optional seed target-matrix-result.json for the first round")
+	timeout := fs.Duration("timeout", 2*time.Minute, "target command timeout")
+	observeDelay := fs.Duration("observe-delay", 0, "delay after target command return before final observation; 0 uses the adapter default")
+	lateObserveDelay := fs.Duration("late-observe-delay", 0, "optional delay after immediate observation for delayed target effects")
+	envKind := fs.String("env", "local", "execution environment backend")
+	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	tasks, groups := resolveTargetTaskSelection(*taskID, *taskList, *taskGroup, *taskGroups, true)
+	profileIDs := splitCSV(*promptProfiles)
+	if len(profileIDs) == 0 && *promptProfile != "" {
+		profileIDs = []string{*promptProfile}
+	}
+	result, err := syncfuzz.RunTargetCampaign(context.Background(), syncfuzz.TargetCampaignOptions{
+		AdapterID:        *adapterID,
+		TargetID:         *targetID,
+		Tasks:            tasks,
+		TaskGroups:       groups,
+		Objective:        *objective,
+		PromptProfileID:  *promptProfile,
+		PromptProfileIDs: profileIDs,
+		Prompt:           *prompt,
+		PromptFile:       *promptFile,
+		Command:          *command,
+		CommandFile:      *commandFile,
+		OutDir:           *outDir,
+		CorpusDir:        *corpusDir,
+		Rounds:           *rounds,
+		Repeat:           *repeat,
+		CandidateLimit:   *candidateLimit,
+		FeedbackFrom:     *feedbackFrom,
+		Timeout:          *timeout,
+		ObserveDelay:     *observeDelay,
+		LateObserveDelay: *lateObserveDelay,
+		EnvKind:          *envKind,
+		ContainerImage:   *containerImage,
+		ExpectedFiles:    splitCSV(*expectFiles),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target campaign failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("campaign_id: %s\n", result.CampaignID)
+	fmt.Printf("adapter: %s\n", result.AdapterID)
+	fmt.Printf("target: %s\n", result.TargetID)
+	fmt.Printf("environment: %s\n", result.Environment)
+	printContainerImage(result.ContainerImage)
+	fmt.Printf("rounds: %d\n", result.Rounds)
+	if len(result.PromptProfiles) > 0 {
+		fmt.Printf("prompt_profiles: %s\n", strings.Join(result.PromptProfiles, ","))
+	}
+	fmt.Printf("candidate_limit: %d\n", result.CandidateLimit)
+	fmt.Printf("total_suites: %d\n", result.TotalSuites)
+	fmt.Printf("total_runs: %d\n", result.TotalRuns)
+	fmt.Printf("confirmed: %d\n", result.Confirmed)
+	fmt.Printf("unconfirmed: %d\n", result.Unconfirmed)
+	fmt.Printf("errors: %d\n", result.Errors)
+	fmt.Printf("corpus_entries: %d\n", result.CorpusEntries)
+	fmt.Printf("unique_candidates: %d\n", result.UniqueCandidates)
+	fmt.Printf("repeated_candidates: %d\n", result.RepeatedCandidates)
+	for _, round := range result.RoundResults {
+		fmt.Printf("round_%d: scheduler=%s candidates=%d runs=%d confirmed=%d errors=%d matrix_result=%s\n",
+			round.Round,
+			round.SchedulerMode,
+			round.TotalCandidates,
+			round.TotalRuns,
+			round.Confirmed,
+			round.Errors,
+			round.MatrixResult,
+		)
+	}
+	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
+}
+
+func resolveTargetTaskSelection(taskID string, taskList string, taskGroup string, taskGroups string, matrixMode bool) ([]string, []string) {
+	groups := splitCSV(taskGroups)
+	if taskGroup != "" {
+		groups = append([]string{taskGroup}, groups...)
+	}
+	tasks := splitCSV(taskList)
+	if len(tasks) == 0 && len(groups) == 0 {
+		if matrixMode {
+			if taskID != "orphan-process" {
+				tasks = []string{taskID}
+			}
+		} else {
+			tasks = []string{taskID}
+		}
+	} else if len(tasks) == 0 && taskID != "orphan-process" {
+		tasks = []string{taskID}
+	}
+	return tasks, groups
 }
 
 func corpus(args []string) {
@@ -707,6 +967,8 @@ func corpus(args []string) {
 	switch args[0] {
 	case "list":
 		corpusList(args[1:])
+	case "analyze":
+		corpusAnalyze(args[1:])
 	case "show":
 		corpusShow(args[1:])
 	case "verify":
@@ -714,6 +976,77 @@ func corpus(args []string) {
 	default:
 		fmt.Fprintf(os.Stderr, "unknown corpus subcommand: %s\n", args[0])
 		os.Exit(2)
+	}
+}
+
+func corpusAnalyze(args []string) {
+	fs := flag.NewFlagSet("corpus analyze", flag.ExitOnError)
+	corpusDir := fs.String("corpus", "corpus", "corpus directory")
+	limit := fs.Int("limit", 0, "maximum entries to analyze; 0 means all")
+	verificationFile := fs.String("verification", "", "optional verification-result.json to include replay outcome summaries")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	result, err := syncfuzz.AnalyzeCorpus(syncfuzz.CorpusAnalyzeOptions{
+		CorpusDir:              *corpusDir,
+		Limit:                  *limit,
+		VerificationResultFile: *verificationFile,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz corpus analyze failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("corpus: %s\n", result.CorpusDir)
+	fmt.Printf("total_entries: %d\n", result.TotalEntries)
+	printCorpusAnalysisFieldStats("execution", result.ExecutionSummaries)
+	printCorpusAnalysisFieldStats("target_oracle", result.TargetOracleSummaries)
+	printCorpusAnalysisFieldStats("attribution", result.AttributionSummaries)
+	printCorpusAnalysisFieldStats("task_compliance", result.TaskComplianceSummaries)
+	printCorpusAnalysisFieldStats("contract", result.ContractSummaries)
+	for _, subject := range result.SubjectSummaries {
+		if subject.ExecutionKind == "target" {
+			fmt.Printf("subject[target:%s/%s]: total=%d\n", subject.TargetID, subject.TaskID, subject.TotalEntries)
+			printCorpusAnalysisFieldStats("  attribution", subject.AttributionSummaries)
+			printCorpusAnalysisFieldStats("  contract", subject.ContractSummaries)
+			continue
+		}
+		fmt.Printf("subject[case:%s]: total=%d\n", subject.CaseName, subject.TotalEntries)
+	}
+	if result.VerificationID != "" {
+		fmt.Printf("verification_id: %s\n", result.VerificationID)
+		for _, stats := range result.VerificationOutcomeSummaries {
+			fmt.Printf("verify_outcome[%s]: total=%d\n", stats.Category, stats.TotalEntries)
+		}
+		for _, stats := range result.VerificationSubjectSummaries {
+			if stats.ExecutionKind == "target" {
+				fmt.Printf("verify_subject[target:%s/%s]: total=%d reproduced=%d signature_drift=%d unconfirmed=%d errors=%d\n",
+					stats.TargetID,
+					stats.TaskID,
+					stats.TotalEntries,
+					stats.Reproduced,
+					stats.SignatureDrift,
+					stats.Unconfirmed,
+					stats.Errors,
+				)
+				continue
+			}
+			fmt.Printf("verify_subject[case:%s]: total=%d reproduced=%d signature_drift=%d unconfirmed=%d errors=%d\n",
+				stats.CaseName,
+				stats.TotalEntries,
+				stats.Reproduced,
+				stats.SignatureDrift,
+				stats.Unconfirmed,
+				stats.Errors,
+			)
+		}
+	}
+}
+
+func printCorpusAnalysisFieldStats(prefix string, stats []syncfuzz.CorpusAnalysisFieldStats) {
+	for _, item := range stats {
+		fmt.Printf("%s[%s]: total=%d\n", prefix, item.Key, item.TotalEntries)
 	}
 }
 
@@ -765,6 +1098,21 @@ func corpusShow(args []string) {
 		fmt.Printf("adapter: %s\n", entry.AdapterID)
 		fmt.Printf("target: %s\n", entry.TargetID)
 		fmt.Printf("task: %s\n", entry.TaskID)
+		if entry.PromptProfileID != "" {
+			fmt.Printf("prompt_profile: %s\n", entry.PromptProfileID)
+		}
+		if entry.TargetOracleStatus != "" {
+			fmt.Printf("target_oracle_status: %s\n", entry.TargetOracleStatus)
+		}
+		if entry.TargetAttribution != "" {
+			fmt.Printf("target_attribution: %s\n", entry.TargetAttribution)
+		}
+		if entry.TaskComplianceStatus != "" {
+			fmt.Printf("task_compliance_status: %s\n", entry.TaskComplianceStatus)
+		}
+		if entry.ContractStatus != "" {
+			fmt.Printf("contract_status: %s\n", entry.ContractStatus)
+		}
 		fmt.Printf("subject: %s\n", entry.Subject())
 	} else {
 		fmt.Printf("case: %s\n", entry.CaseName)
@@ -833,6 +1181,31 @@ func corpusVerify(args []string) {
 	fmt.Printf("signature_drift: %d\n", result.SignatureDrift)
 	fmt.Printf("unconfirmed: %d\n", result.Unconfirmed)
 	fmt.Printf("errors: %d\n", result.Errors)
+	for _, stats := range result.OutcomeSummaries {
+		fmt.Printf("outcome[%s]: total=%d\n", stats.Category, stats.TotalEntries)
+	}
+	for _, stats := range result.SubjectSummaries {
+		if stats.ExecutionKind == "target" {
+			fmt.Printf("subject[target:%s/%s]: total=%d reproduced=%d signature_drift=%d unconfirmed=%d errors=%d\n",
+				stats.TargetID,
+				stats.TaskID,
+				stats.TotalEntries,
+				stats.Reproduced,
+				stats.SignatureDrift,
+				stats.Unconfirmed,
+				stats.Errors,
+			)
+		} else {
+			fmt.Printf("subject[case:%s]: total=%d reproduced=%d signature_drift=%d unconfirmed=%d errors=%d\n",
+				stats.CaseName,
+				stats.TotalEntries,
+				stats.Reproduced,
+				stats.SignatureDrift,
+				stats.Unconfirmed,
+				stats.Errors,
+			)
+		}
+	}
 	fmt.Printf("reproducibility_rate: %.2f%%\n", result.ReproducibilityRate*100)
 	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
 	if result.Failed > 0 {
@@ -891,6 +1264,12 @@ func replay(args []string) {
 	fmt.Printf("confirmed: %t\n", result.Confirmed)
 	fmt.Printf("signature_matched: %t\n", result.SignatureMatched)
 	fmt.Printf("reproduced: %t\n", result.Reproduced)
+	if result.OutcomeCategory != "" {
+		fmt.Printf("outcome_category: %s\n", result.OutcomeCategory)
+	}
+	if result.OutcomeReason != "" {
+		fmt.Printf("outcome_reason: %s\n", result.OutcomeReason)
+	}
 	fmt.Printf("expected: %s\n", result.ExpectedSignature.String())
 	fmt.Printf("actual: %s\n", result.ActualSignature.String())
 	fmt.Printf("artifacts: %s\n", result.ArtifactDir)

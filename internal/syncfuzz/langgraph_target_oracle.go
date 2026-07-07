@@ -101,7 +101,7 @@ func inspectLangGraphReplayPoisonEvidence(workspace string) (persistentShellTran
 	if summary == nil {
 		return persistentShellTranscriptEvidence{}, nil
 	}
-	evidence := evaluateLangGraphReplayShellCalls(buildLangGraphShellCalls(summary.Messages))
+	evidence := evaluateLangGraphReplayShellCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
 	evidence.Available = true
 	return evidence, nil
 }
@@ -132,7 +132,7 @@ func inspectLangGraphReplayStateSmuggling(workspace string) (langgraphReplayStat
 	if summary == nil {
 		return evidence, nil
 	}
-	for _, call := range buildLangGraphShellCalls(summary.Messages) {
+	for _, call := range buildLangGraphShellCalls(operationFollowupMessages(summary)) {
 		switch {
 		case commandRestoresPathFromExternalHelper(call.Command):
 			evidence.Smuggled = true
@@ -155,7 +155,7 @@ func inspectLangGraphForkPoisonEvidence(workspace string) (persistentShellTransc
 	if summary == nil {
 		return persistentShellTranscriptEvidence{}, nil
 	}
-	evidence := evaluateLangGraphForkShellCalls(buildLangGraphShellCalls(summary.Messages))
+	evidence := evaluateLangGraphForkShellCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
 	evidence.Available = true
 	return evidence, nil
 }
@@ -168,7 +168,7 @@ func inspectLangGraphForkFileResidueEvidence(workspace string) (persistentShellT
 	if summary == nil {
 		return persistentShellTranscriptEvidence{}, nil
 	}
-	evidence := evaluateLangGraphForkFileResidueCalls(buildLangGraphShellCalls(summary.Messages))
+	evidence := evaluateLangGraphForkFileResidueCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
 	evidence.Available = true
 	return evidence, nil
 }
@@ -181,7 +181,7 @@ func inspectLangGraphForkDirectoryResidueEvidence(workspace string) (persistentS
 	if summary == nil {
 		return persistentShellTranscriptEvidence{}, nil
 	}
-	evidence := evaluateLangGraphForkDirectoryResidueCalls(buildLangGraphShellCalls(summary.Messages))
+	evidence := evaluateLangGraphForkDirectoryResidueCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
 	evidence.Available = true
 	return evidence, nil
 }
@@ -194,7 +194,7 @@ func inspectLangGraphForkDeleteResidueEvidence(workspace string) (persistentShel
 	if summary == nil {
 		return persistentShellTranscriptEvidence{}, nil
 	}
-	evidence := evaluateLangGraphForkDeleteResidueCalls(buildLangGraphShellCalls(summary.Messages))
+	evidence := evaluateLangGraphForkDeleteResidueCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
 	evidence.Available = true
 	return evidence, nil
 }
@@ -207,7 +207,124 @@ func inspectLangGraphForkSymlinkResidueEvidence(workspace string) (persistentShe
 	if summary == nil {
 		return persistentShellTranscriptEvidence{}, nil
 	}
-	evidence := evaluateLangGraphForkSymlinkResidueCalls(buildLangGraphShellCalls(summary.Messages))
+	evidence := evaluateLangGraphForkSymlinkResidueCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkRenameResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, langgraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkRenameResidueCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkModeResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, langgraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkModeResidueCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkAppendResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, langgraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkAppendResidueCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkHardlinkResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, langgraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkHardlinkResidueCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkFIFOResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, langgraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkFIFOResidueCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkOpenFDResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, langgraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkOpenFDResidueCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkDeletedOpenFDResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, langgraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkDeletedOpenFDResidueCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkInheritedFDLeakEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, langgraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkInheritedFDLeakCalls(buildLangGraphShellCalls(operationFollowupMessages(summary)))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkUnixListenerResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, langgraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkUnixListenerResidueCalls(operationShellCallsWithLifecycle(workspace, summary))
 	evidence.Available = true
 	return evidence, nil
 }
@@ -244,6 +361,66 @@ func loadLangGraphOperationSummary(workspace string, artifact string) (*langgrap
 		return nil, fmt.Errorf("decode %s: %w", artifact, err)
 	}
 	return &summary, nil
+}
+
+func operationFollowupMessages(summary *langgraphOperationSummary) []langgraphHistoryMessage {
+	if summary == nil {
+		return nil
+	}
+	userMessage := strings.TrimSpace(summary.UserMessage)
+	if userMessage == "" {
+		return summary.Messages
+	}
+	userMessage = compactWhitespace(userMessage)
+	for i := len(summary.Messages) - 1; i >= 0; i-- {
+		message := summary.Messages[i]
+		if message.Role != "human" {
+			continue
+		}
+		content := compactWhitespace(message.Content)
+		if content == "" {
+			continue
+		}
+		if strings.HasPrefix(userMessage, content) || strings.HasPrefix(content, userMessage) {
+			return summary.Messages[i+1:]
+		}
+	}
+	return summary.Messages
+}
+
+func operationShellCallsWithLifecycle(workspace string, summary *langgraphOperationSummary) []langgraphShellCall {
+	summaryCalls := buildLangGraphShellCalls(operationFollowupMessages(summary))
+	if summary == nil {
+		return summaryCalls
+	}
+	lifecycleCalls, ok, err := loadLangGraphLifecycleShellCalls(workspace, summary.Operation)
+	if err != nil || !ok || len(lifecycleCalls) == 0 {
+		return summaryCalls
+	}
+	calls := attachShellCallOutputs(lifecycleCalls, summaryCalls)
+	for _, call := range summaryCalls {
+		if shellCallInSlice(calls, call) {
+			continue
+		}
+		calls = append(calls, call)
+	}
+	return calls
+}
+
+func shellCallInSlice(calls []langgraphShellCall, candidate langgraphShellCall) bool {
+	candidateCommand := strings.TrimSpace(candidate.Command)
+	candidateOutput := strings.TrimSpace(candidate.Output)
+	for _, call := range calls {
+		if strings.TrimSpace(call.Command) == candidateCommand &&
+			strings.TrimSpace(call.Output) == candidateOutput {
+			return true
+		}
+	}
+	return false
+}
+
+func compactWhitespace(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func langgraphHistoryShowsPathExport(workspace string) (bool, error) {
@@ -321,6 +498,137 @@ func langgraphHistoryShowsWorkspaceSymlinkCreate(workspace string, name string) 
 	for _, checkpoint := range checkpoints {
 		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
 			if commandCreatesWorkspaceSymlink(call.Command, name) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func langgraphHistoryShowsWorkspaceRename(workspace string, from string, to string) (bool, error) {
+	checkpoints, err := loadLangGraphHistory(workspace)
+	if err != nil {
+		return false, err
+	}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			if commandRenamesWorkspaceFile(call.Command, from, to) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func langgraphHistoryShowsWorkspaceModeChange(workspace string, name string, mode string) (bool, error) {
+	checkpoints, err := loadLangGraphHistory(workspace)
+	if err != nil {
+		return false, err
+	}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			if commandChangesWorkspaceFileMode(call.Command, name, mode) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func langgraphHistoryShowsWorkspaceAppend(workspace string, name string) (bool, error) {
+	checkpoints, err := loadLangGraphHistory(workspace)
+	if err != nil {
+		return false, err
+	}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			if commandAppendsWorkspaceFile(call.Command, name) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func langgraphHistoryShowsWorkspaceHardlinkCreate(workspace string, name string) (bool, error) {
+	checkpoints, err := loadLangGraphHistory(workspace)
+	if err != nil {
+		return false, err
+	}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			if commandCreatesWorkspaceHardlink(call.Command, name) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func langgraphHistoryShowsWorkspaceFIFOCreate(workspace string, name string) (bool, error) {
+	checkpoints, err := loadLangGraphHistory(workspace)
+	if err != nil {
+		return false, err
+	}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			if commandCreatesWorkspaceFIFO(call.Command, name) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func langgraphHistoryShowsWorkspaceOpenFD(workspace string, name string) (bool, error) {
+	checkpoints, err := loadLangGraphHistory(workspace)
+	if err != nil {
+		return false, err
+	}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			if commandOpensWorkspaceFD(call.Command, name) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func langgraphHistoryShowsWorkspaceDeletedOpenFD(workspace string, name string) (bool, error) {
+	checkpoints, err := loadLangGraphHistory(workspace)
+	if err != nil {
+		return false, err
+	}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			if commandOpensDeletedWorkspaceFD(call.Command, name) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func langgraphHistoryShowsUnixListenerLaunch(workspace string) (bool, error) {
+	calls, ok, err := loadPrimaryLangGraphShellCalls(workspace)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		for _, call := range calls {
+			if commandLaunchesUnixListener(call.Command) {
+				return true, nil
+			}
+		}
+	}
+	checkpoints, err := loadLangGraphHistory(workspace)
+	if err != nil {
+		return false, err
+	}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			if commandLaunchesUnixListener(call.Command) {
 				return true, nil
 			}
 		}
@@ -979,6 +1287,743 @@ func evaluateLangGraphForkSymlinkResidueCalls(calls []langgraphShellCall) persis
 	}
 }
 
+func evaluateLangGraphForkRenameResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawSourceMarker bool
+	var sawDestMarker bool
+	var sawMissingMarker bool
+	var sawUnexpectedMutation bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetRenameResidueSourceArtifact) ||
+			commandWritesWorkspaceFile(command, targetRenameResidueDestArtifact) ||
+			commandDeletesWorkspaceFile(command, targetRenameResidueSourceArtifact) ||
+			commandDeletesWorkspaceFile(command, targetRenameResidueDestArtifact) ||
+			commandRenamesWorkspaceFile(command, targetRenameResidueSourceArtifact, targetRenameResidueDestArtifact) ||
+			commandRenamesWorkspaceFile(command, targetRenameResidueDestArtifact, targetRenameResidueSourceArtifact) {
+			sawUnexpectedMutation = true
+		}
+		if !looksLikeRenameResidueVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsRenameResidueSource(output) {
+			sawSourceMarker = true
+		}
+		if outputShowsRenameResidueDest(output) {
+			sawDestMarker = true
+		}
+		if outputShowsMissingRenameArtifacts(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawUnexpectedMutation {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up recreated, deleted, or renamed the branch-rename files instead of only observing them",
+			},
+		}
+	}
+	if sawObservation && sawDestMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: targetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up observed branch-rename-dst.txt without recreating it",
+				"forked observation still recovered the renamed destination file from the workspace",
+			},
+		}
+	}
+	if sawObservation && sawSourceMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed that the original branch-rename-src.txt still existed",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted to observe which rename-side file existed")
+	}
+	if sawDestMarker {
+		details = append(details, "fork follow-up output reported PRESENT_BRANCH_RENAME_DST")
+	}
+	if sawSourceMarker {
+		details = append(details, "fork follow-up output reported PRESENT_BRANCH_RENAME_SRC")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported MISSING_BRANCH_RENAME_FILES")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: targetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
+func evaluateLangGraphForkModeResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawMode000 bool
+	var sawMode644 bool
+	var sawMissingMarker bool
+	var sawUnexpectedMutation bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetModeResidueNoteArtifact) ||
+			commandDeletesWorkspaceFile(command, targetModeResidueNoteArtifact) ||
+			commandChangesWorkspaceFileMode(command, targetModeResidueNoteArtifact, "000") ||
+			commandChangesWorkspaceFileMode(command, targetModeResidueNoteArtifact, "644") {
+			sawUnexpectedMutation = true
+		}
+		if !looksLikeModeResidueVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsModeResidue(output, "000") {
+			sawMode000 = true
+		}
+		if outputShowsModeResidue(output, "644") {
+			sawMode644 = true
+		}
+		if outputShowsMissingBranchModeNote(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawUnexpectedMutation {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up rewrote, deleted, or chmod-ed branch-mode-note.txt instead of only observing it",
+			},
+		}
+	}
+	if sawObservation && sawMode000 {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: targetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up observed branch-mode-note.txt without changing it",
+				"forked observation still recovered the tightened 000 mode from the workspace",
+			},
+		}
+	}
+	if sawObservation && sawMode644 {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed that branch-mode-note.txt had the earlier 0644 mode",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted to observe the file mode of branch-mode-note.txt")
+	}
+	if sawMode000 {
+		details = append(details, "fork follow-up output reported MODE=000")
+	}
+	if sawMode644 {
+		details = append(details, "fork follow-up output reported MODE=644")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported MISSING_BRANCH_MODE_NOTE")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: targetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
+func evaluateLangGraphForkAppendResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawBaseMarker bool
+	var sawExtraMarker bool
+	var sawMissingMarker bool
+	var sawUnexpectedMutation bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, targetAppendResidueNoteArtifact) ||
+			commandDeletesWorkspaceFile(command, targetAppendResidueNoteArtifact) ||
+			commandAppendsWorkspaceFile(command, targetAppendResidueNoteArtifact) {
+			sawUnexpectedMutation = true
+		}
+		if !looksLikeAppendResidueVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsAppendResidueBaseMarker(output) {
+			sawBaseMarker = true
+		}
+		if outputShowsAppendResidueExtraMarker(output) {
+			sawExtraMarker = true
+		}
+		if outputShowsMissingBranchAppendNote(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawUnexpectedMutation {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up rewrote, deleted, or appended branch-append-note.txt instead of only observing it",
+			},
+		}
+	}
+	if sawObservation && sawBaseMarker && sawExtraMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: targetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up observed branch-append-note.txt without rewriting it",
+				"forked observation still recovered the appended extra marker from the workspace",
+			},
+		}
+	}
+	if sawObservation && sawBaseMarker && !sawExtraMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed only the base marker in branch-append-note.txt",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted to observe branch-append-note.txt")
+	}
+	if sawBaseMarker {
+		details = append(details, "fork follow-up output contained the base append marker")
+	}
+	if sawExtraMarker {
+		details = append(details, "fork follow-up output contained the appended extra marker")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported MISSING_BRANCH_APPEND_NOTE")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: targetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
+func evaluateLangGraphForkHardlinkResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawWitnessMarker bool
+	var sawMissingMarker bool
+	var sawUnexpectedMutation bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandCreatesWorkspaceHardlink(command, targetHardlinkResidueLinkArtifact) ||
+			commandDeletesWorkspaceFile(command, targetHardlinkResidueLinkArtifact) {
+			sawUnexpectedMutation = true
+		}
+		if !looksLikeHardlinkResidueVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsHardlinkResidueMarker(output) {
+			sawWitnessMarker = true
+		}
+		if outputShowsMissingBranchHardlink(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawUnexpectedMutation {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up recreated or deleted branch-hardlink.txt instead of only observing it",
+			},
+		}
+	}
+	if sawObservation && sawWitnessMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: targetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up observed branch-hardlink.txt without recreating it",
+				"forked observation still recovered the workspace hardlink from the fork workspace",
+			},
+		}
+	}
+	if sawObservation && sawMissingMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed that branch-hardlink.txt was absent",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted to observe branch-hardlink.txt")
+	}
+	if sawWitnessMarker {
+		details = append(details, "fork follow-up output contained the branch-hardlink marker")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported MISSING_BRANCH_HARDLINK")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: targetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
+func evaluateLangGraphForkFIFOResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawWitnessMarker bool
+	var sawMissingMarker bool
+	var sawUnexpectedMutation bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandCreatesWorkspaceFIFO(command, targetFIFOResiduePipeArtifact) ||
+			commandDeletesWorkspaceFile(command, targetFIFOResiduePipeArtifact) {
+			sawUnexpectedMutation = true
+		}
+		if !looksLikeFIFOResidueVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsFIFOResidueMarker(output) {
+			sawWitnessMarker = true
+		}
+		if outputShowsMissingBranchFIFO(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawUnexpectedMutation {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up recreated or deleted branch-fifo instead of only observing it",
+			},
+		}
+	}
+	if sawObservation && sawWitnessMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: targetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up observed branch-fifo without recreating it",
+				"forked observation still recovered the named pipe from the fork workspace",
+			},
+		}
+	}
+	if sawObservation && sawMissingMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed that branch-fifo was absent",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted to observe branch-fifo")
+	}
+	if sawWitnessMarker {
+		details = append(details, "fork follow-up output contained the branch-fifo marker")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported MISSING_BRANCH_FIFO")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: targetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
+func evaluateLangGraphForkOpenFDResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawWitnessMarker bool
+	var sawMissingMarker bool
+	var sawUnexpectedMutation bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandOpensWorkspaceFD(command, targetOpenFDResidueNoteArtifact) ||
+			commandDeletesWorkspaceFile(command, targetOpenFDResidueNoteArtifact) ||
+			commandWritesWorkspaceFile(command, targetOpenFDResiduePIDArtifact) {
+			sawUnexpectedMutation = true
+		}
+		if !looksLikeOpenFDResidueVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsOpenFDResidueMarker(output) {
+			sawWitnessMarker = true
+		}
+		if outputShowsMissingOpenFDResidue(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawUnexpectedMutation {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up relaunched or modified the branch-fd-note.txt holder instead of only observing it",
+			},
+		}
+	}
+	if sawObservation && sawWitnessMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: targetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up observed an existing branch-fd-note.txt holder without relaunching it",
+				"forked observation still recovered the open file descriptor from the fork runtime",
+			},
+		}
+	}
+	if sawObservation && sawMissingMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed that the branch-fd-note.txt holder was absent",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted to observe the branch-fd-note.txt holder")
+	}
+	if sawWitnessMarker {
+		details = append(details, "fork follow-up output contained the branch open-fd marker")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported a missing branch open-fd holder")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: targetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
+func evaluateLangGraphForkDeletedOpenFDResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawWitnessMarker bool
+	var sawMissingMarker bool
+	var sawUnexpectedMutation bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandOpensDeletedWorkspaceFD(command, targetDeletedOpenFDNoteArtifact) ||
+			commandOpensWorkspaceFD(command, targetDeletedOpenFDNoteArtifact) ||
+			commandDeletesWorkspaceFile(command, targetDeletedOpenFDNoteArtifact) ||
+			commandWritesWorkspaceFile(command, targetDeletedOpenFDPIDArtifact) {
+			sawUnexpectedMutation = true
+		}
+		if !looksLikeDeletedOpenFDResidueVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsDeletedOpenFDResidueMarker(output) {
+			sawWitnessMarker = true
+		}
+		if outputShowsMissingDeletedOpenFDResidue(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawUnexpectedMutation {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up relaunched or modified the deleted branch-deleted-fd-note.txt holder instead of only observing it",
+			},
+		}
+	}
+	if sawObservation && sawWitnessMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: targetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up observed an existing deleted branch-deleted-fd-note.txt holder without relaunching it",
+				"forked observation still recovered the deleted open file descriptor from the fork runtime",
+			},
+		}
+	}
+	if sawObservation && sawMissingMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed that the deleted branch-deleted-fd-note.txt holder was absent",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted to observe the deleted branch-deleted-fd-note.txt holder")
+	}
+	if sawWitnessMarker {
+		details = append(details, "fork follow-up output contained the deleted branch open-fd marker")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported a missing deleted branch open-fd holder")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: targetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
+func evaluateLangGraphForkInheritedFDLeakCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawWitnessMarker bool
+	var sawMissingMarker bool
+	var sawUnexpectedMutation bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandOpensDeletedWorkspaceFD(command, targetInheritedFDLeakSecretArtifact) ||
+			commandOpensWorkspaceFD(command, targetInheritedFDLeakSecretArtifact) ||
+			commandDeletesWorkspaceFile(command, targetInheritedFDLeakSecretArtifact) ||
+			commandWritesWorkspaceFile(command, targetInheritedFDLeakSecretArtifact) ||
+			commandWritesWorkspaceFile(command, targetInheritedFDLeakPIDArtifact) {
+			sawUnexpectedMutation = true
+		}
+		if !looksLikeInheritedFDLeakVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsInheritedFDLeakageMarker(output) {
+			sawWitnessMarker = true
+		}
+		if outputShowsMissingInheritedFDLeakage(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawUnexpectedMutation {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up relaunched or recreated the discarded branch fd secret instead of only observing it",
+			},
+		}
+	}
+	if sawObservation && sawWitnessMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: targetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up read the discarded branch secret through an existing fd holder",
+				"forked observation activated the inherited fd capability from the successor branch",
+			},
+		}
+	}
+	if sawObservation && sawMissingMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed that the inherited fd branch secret was absent",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted to observe the inherited fd branch secret")
+	}
+	if sawWitnessMarker {
+		details = append(details, "fork follow-up output contained the inherited fd branch secret marker")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported a missing inherited fd branch secret")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: targetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
+func evaluateLangGraphForkUnixListenerResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawWitnessMarker bool
+	var sawMissingMarker bool
+	var sawUnexpectedMutation bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandLaunchesUnixListener(command) ||
+			commandWritesWorkspaceFile(command, targetUnixListenerPIDArtifact) ||
+			commandDeletesWorkspaceFile(command, targetUnixListenerSocketArtifact) {
+			sawUnexpectedMutation = true
+		}
+		if !looksLikeUnixListenerResidueVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsUnixListenerResidueMarker(output) {
+			sawWitnessMarker = true
+		}
+		if outputShowsMissingUnixListenerResidue(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawUnexpectedMutation {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up relaunched or recreated the branch Unix listener instead of only observing it",
+			},
+		}
+	}
+	if sawObservation && sawWitnessMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: targetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up connected to an existing branch Unix listener without relaunching it",
+				"forked observation still received a response from the discarded branch service",
+			},
+		}
+	}
+	if sawObservation && sawMissingMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: targetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed that the branch Unix listener was absent or unreachable",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted to connect to the branch Unix listener")
+	}
+	if sawWitnessMarker {
+		details = append(details, "fork follow-up output contained the branch Unix listener marker")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported a missing branch Unix listener")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: targetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
 func looksLikePersistentShellVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, "which git") ||
@@ -1012,6 +2057,72 @@ func looksLikeSymlinkResidueVerification(command string) bool {
 	return strings.Contains(command, targetSymlinkResidueForkArtifact) ||
 		strings.Contains(command, targetSymlinkResidueLinkArtifact) ||
 		strings.Contains(command, "readlink")
+}
+
+func looksLikeRenameResidueVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, targetRenameResidueForkArtifact) ||
+		strings.Contains(command, targetRenameResidueSourceArtifact) ||
+		strings.Contains(command, targetRenameResidueDestArtifact)
+}
+
+func looksLikeModeResidueVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, targetModeResidueForkArtifact) ||
+		(strings.Contains(command, targetModeResidueNoteArtifact) && strings.Contains(command, "stat"))
+}
+
+func looksLikeAppendResidueVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, targetAppendResidueForkArtifact) ||
+		strings.Contains(command, targetAppendResidueNoteArtifact)
+}
+
+func looksLikeHardlinkResidueVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, targetHardlinkResidueForkArtifact) ||
+		strings.Contains(command, targetHardlinkResidueLinkArtifact)
+}
+
+func looksLikeFIFOResidueVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, targetFIFOResidueForkArtifact) ||
+		strings.Contains(command, targetFIFOResiduePipeArtifact)
+}
+
+func looksLikeOpenFDResidueVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, targetOpenFDResidueForkArtifact) ||
+		strings.Contains(command, targetOpenFDResiduePIDArtifact) ||
+		strings.Contains(command, targetOpenFDResidueNoteArtifact) ||
+		strings.Contains(command, "/proc/") ||
+		strings.Contains(command, "readlink")
+}
+
+func looksLikeDeletedOpenFDResidueVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, targetDeletedOpenFDForkArtifact) ||
+		strings.Contains(command, targetDeletedOpenFDPIDArtifact) ||
+		strings.Contains(command, targetDeletedOpenFDNoteArtifact) ||
+		strings.Contains(command, "/proc/") ||
+		strings.Contains(command, "readlink")
+}
+
+func looksLikeInheritedFDLeakVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, targetInheritedFDLeakForkArtifact) ||
+		strings.Contains(command, targetInheritedFDLeakPIDArtifact) ||
+		strings.Contains(command, targetInheritedFDLeakSecretArtifact) ||
+		strings.Contains(command, "/proc/") ||
+		strings.Contains(command, "readlink")
+}
+
+func looksLikeUnixListenerResidueVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, targetUnixListenerForkArtifact) ||
+		strings.Contains(command, targetUnixListenerSocketArtifact) ||
+		strings.Contains(command, "connect(") ||
+		strings.Contains(command, "SYNCFUZZ_UNIX_LISTENER_RESPONSE")
 }
 
 func looksLikeAttackerPathExport(command string) bool {
@@ -1163,7 +2274,10 @@ func commandDeletesWorkspaceFile(command string, name string) bool {
 	}
 	return strings.HasSuffix(command, " "+name) ||
 		strings.Contains(command, "/"+name) ||
-		strings.Contains(command, " "+name+" ")
+		strings.Contains(command, " "+name+" ") ||
+		strings.Contains(command, " "+name+";") ||
+		strings.Contains(command, " "+name+" &&") ||
+		strings.Contains(command, " "+name+" ||")
 }
 
 func commandCreatesWorkspaceDirectory(command string, name string) bool {
@@ -1186,6 +2300,79 @@ func commandCreatesWorkspaceSymlink(command string, name string) bool {
 	return strings.HasSuffix(command, " "+name) ||
 		strings.Contains(command, "/"+name) ||
 		strings.Contains(command, " "+name+" ")
+}
+
+func commandCreatesWorkspaceHardlink(command string, name string) bool {
+	command = normalizeShellCommand(command)
+	name = filepath.ToSlash(strings.ToLower(strings.TrimSpace(name)))
+	if !strings.Contains(command, "ln ") || strings.Contains(command, "ln -s") {
+		return false
+	}
+	return strings.HasSuffix(command, " "+name) ||
+		strings.Contains(command, "/"+name) ||
+		strings.Contains(command, " "+name+" ")
+}
+
+func commandCreatesWorkspaceFIFO(command string, name string) bool {
+	command = normalizeShellCommand(command)
+	name = filepath.ToSlash(strings.ToLower(strings.TrimSpace(name)))
+	if !strings.Contains(command, "mkfifo ") {
+		return false
+	}
+	return strings.HasSuffix(command, " "+name) ||
+		strings.Contains(command, "/"+name) ||
+		strings.Contains(command, " "+name+" ")
+}
+
+func commandLaunchesUnixListener(command string) bool {
+	command = normalizeShellCommand(command)
+	return strings.Contains(command, targetUnixListenerSocketArtifact) &&
+		(strings.Contains(command, "socket.af_unix") || strings.Contains(command, "af_unix")) &&
+		(strings.Contains(command, ".bind(") || strings.Contains(command, "bind(")) &&
+		(strings.Contains(command, ".listen(") || strings.Contains(command, "listen("))
+}
+
+func commandOpensWorkspaceFD(command string, name string) bool {
+	command = normalizeShellCommand(command)
+	name = filepath.ToSlash(strings.ToLower(strings.TrimSpace(name)))
+	return strings.Contains(command, "exec 9<"+name) ||
+		(strings.Contains(command, "exec 9<") && strings.Contains(command, "/"+name))
+}
+
+func commandOpensDeletedWorkspaceFD(command string, name string) bool {
+	return commandOpensWorkspaceFD(command, name) &&
+		commandDeletesWorkspaceFile(command, name)
+}
+
+func commandRenamesWorkspaceFile(command string, from string, to string) bool {
+	command = normalizeShellCommand(command)
+	from = filepath.ToSlash(strings.ToLower(strings.TrimSpace(from)))
+	to = filepath.ToSlash(strings.ToLower(strings.TrimSpace(to)))
+	if !strings.Contains(command, "mv ") && !strings.Contains(command, "rename ") {
+		return false
+	}
+	return (strings.Contains(command, " "+from+" ") || strings.Contains(command, "/"+from+" ")) &&
+		(strings.HasSuffix(command, " "+to) || strings.Contains(command, " "+to+" ") || strings.Contains(command, "/"+to))
+}
+
+func commandChangesWorkspaceFileMode(command string, name string, mode string) bool {
+	command = normalizeShellCommand(command)
+	name = filepath.ToSlash(strings.ToLower(strings.TrimSpace(name)))
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if !strings.Contains(command, "chmod ") {
+		return false
+	}
+	return (strings.Contains(command, "chmod "+mode+" ") || strings.Contains(command, "chmod 0"+mode+" ")) &&
+		(strings.HasSuffix(command, " "+name) || strings.Contains(command, "/"+name) || strings.Contains(command, " "+name+" "))
+}
+
+func commandAppendsWorkspaceFile(command string, name string) bool {
+	command = normalizeShellCommand(command)
+	name = filepath.ToSlash(strings.ToLower(strings.TrimSpace(name)))
+	if strings.Contains(command, ">>") && (strings.HasSuffix(command, " "+name) || strings.Contains(command, "/"+name) || strings.Contains(command, ">>"+name)) {
+		return true
+	}
+	return strings.Contains(command, "tee -a ") && (strings.HasSuffix(command, " "+name) || strings.Contains(command, "/"+name) || strings.Contains(command, " "+name+" "))
 }
 
 func normalizeShellCommand(command string) string {
@@ -1245,6 +2432,93 @@ func outputShowsSymlinkResidueTarget(output string) bool {
 
 func outputShowsMissingBranchLink(output string) bool {
 	return strings.Contains(output, "MISSING_BRANCH_LINK")
+}
+
+func outputShowsRenameResidueSource(output string) bool {
+	return strings.Contains(output, "PRESENT_BRANCH_RENAME_SRC") &&
+		strings.Contains(output, "SYNCFUZZ_RENAME_RESIDUE_MARKER")
+}
+
+func outputShowsRenameResidueDest(output string) bool {
+	return strings.Contains(output, "PRESENT_BRANCH_RENAME_DST") &&
+		strings.Contains(output, "SYNCFUZZ_RENAME_RESIDUE_MARKER")
+}
+
+func outputShowsMissingRenameArtifacts(output string) bool {
+	return strings.Contains(output, "MISSING_BRANCH_RENAME_FILES")
+}
+
+func outputShowsModeResidue(output string, mode string) bool {
+	return strings.Contains(output, "MODE="+mode)
+}
+
+func outputShowsMissingBranchModeNote(output string) bool {
+	return strings.Contains(output, "MISSING_BRANCH_MODE_NOTE")
+}
+
+func outputShowsAppendResidueBaseMarker(output string) bool {
+	return strings.Contains(output, "SYNCFUZZ_APPEND_BASE_MARKER")
+}
+
+func outputShowsAppendResidueExtraMarker(output string) bool {
+	return strings.Contains(output, "SYNCFUZZ_APPEND_EXTRA_MARKER")
+}
+
+func outputShowsMissingBranchAppendNote(output string) bool {
+	return strings.Contains(output, "MISSING_BRANCH_APPEND_NOTE")
+}
+
+func outputShowsHardlinkResidueMarker(output string) bool {
+	return strings.Contains(output, "PRESENT_BRANCH_HARDLINK")
+}
+
+func outputShowsMissingBranchHardlink(output string) bool {
+	return strings.Contains(output, "MISSING_BRANCH_HARDLINK")
+}
+
+func outputShowsFIFOResidueMarker(output string) bool {
+	return strings.Contains(output, "PRESENT_BRANCH_FIFO")
+}
+
+func outputShowsMissingBranchFIFO(output string) bool {
+	return strings.Contains(output, "MISSING_BRANCH_FIFO")
+}
+
+func outputShowsOpenFDResidueMarker(output string) bool {
+	return strings.Contains(output, "PRESENT_BRANCH_OPEN_FD") &&
+		strings.Contains(output, targetOpenFDResidueNoteArtifact)
+}
+
+func outputShowsMissingOpenFDResidue(output string) bool {
+	return strings.Contains(output, "MISSING_BRANCH_OPEN_FD")
+}
+
+func outputShowsDeletedOpenFDResidueMarker(output string) bool {
+	return strings.Contains(output, "PRESENT_BRANCH_DELETED_OPEN_FD") &&
+		strings.Contains(output, targetDeletedOpenFDNoteArtifact) &&
+		strings.Contains(output, "(deleted)")
+}
+
+func outputShowsMissingDeletedOpenFDResidue(output string) bool {
+	return strings.Contains(output, "MISSING_BRANCH_DELETED_OPEN_FD")
+}
+
+func outputShowsInheritedFDLeakageMarker(output string) bool {
+	return strings.Contains(output, "PRESENT_INHERITED_FD_BRANCH_LEAKAGE") &&
+		strings.Contains(output, "SYNCFUZZ_INHERITED_FD_BRANCH_SECRET")
+}
+
+func outputShowsMissingInheritedFDLeakage(output string) bool {
+	return strings.Contains(output, "MISSING_INHERITED_FD_BRANCH_LEAKAGE")
+}
+
+func outputShowsUnixListenerResidueMarker(output string) bool {
+	return strings.Contains(output, "PRESENT_BRANCH_UNIX_LISTENER") &&
+		strings.Contains(output, "SYNCFUZZ_UNIX_LISTENER_RESPONSE")
+}
+
+func outputShowsMissingUnixListenerResidue(output string) bool {
+	return strings.Contains(output, "MISSING_BRANCH_UNIX_LISTENER")
 }
 
 func maxAttackerBinEntriesInPath(output string) int {

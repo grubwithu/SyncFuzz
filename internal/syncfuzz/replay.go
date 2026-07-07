@@ -23,30 +23,37 @@ type ReplayOptions struct {
 }
 
 type ReplayResult struct {
-	ExecutionKind     string            `json:"execution_kind"`
-	ReplayID          string            `json:"replay_id"`
-	EntryID           string            `json:"entry_id"`
-	CaseName          string            `json:"case_name"`
-	AdapterID         string            `json:"adapter_id,omitempty"`
-	TargetID          string            `json:"target_id,omitempty"`
-	TaskID            string            `json:"task_id,omitempty"`
-	Environment       string            `json:"environment"`
-	ContainerImage    string            `json:"container_image,omitempty"`
-	FaultPlanID       string            `json:"fault_plan_id,omitempty"`
-	PrimitiveID       string            `json:"primitive_id,omitempty"`
-	TimingProfileID   string            `json:"timing_profile_id,omitempty"`
-	SourceSuiteID     string            `json:"source_suite_id"`
-	SourceRunID       string            `json:"source_run_id"`
-	ExpectedSignature MismatchSignature `json:"expected_signature"`
-	RunID             string            `json:"run_id"`
-	Confirmed         bool              `json:"confirmed"`
-	ActualSignature   MismatchSignature `json:"actual_signature"`
-	SignatureMatched  bool              `json:"signature_matched"`
-	Reproduced        bool              `json:"reproduced"`
-	ArtifactDir       string            `json:"artifact_dir"`
-	RunArtifactDir    string            `json:"run_artifact_dir"`
-	StartedAt         string            `json:"started_at"`
-	FinishedAt        string            `json:"finished_at"`
+	ExecutionKind        string                             `json:"execution_kind"`
+	ReplayID             string                             `json:"replay_id"`
+	EntryID              string                             `json:"entry_id"`
+	CaseName             string                             `json:"case_name"`
+	AdapterID            string                             `json:"adapter_id,omitempty"`
+	TargetID             string                             `json:"target_id,omitempty"`
+	TaskID               string                             `json:"task_id,omitempty"`
+	PromptProfileID      string                             `json:"prompt_profile_id,omitempty"`
+	Environment          string                             `json:"environment"`
+	ContainerImage       string                             `json:"container_image,omitempty"`
+	FaultPlanID          string                             `json:"fault_plan_id,omitempty"`
+	PrimitiveID          string                             `json:"primitive_id,omitempty"`
+	TimingProfileID      string                             `json:"timing_profile_id,omitempty"`
+	SourceSuiteID        string                             `json:"source_suite_id"`
+	SourceRunID          string                             `json:"source_run_id"`
+	ExpectedSignature    MismatchSignature                  `json:"expected_signature"`
+	RunID                string                             `json:"run_id"`
+	Confirmed            bool                               `json:"confirmed"`
+	ActualSignature      MismatchSignature                  `json:"actual_signature"`
+	SignatureMatched     bool                               `json:"signature_matched"`
+	Reproduced           bool                               `json:"reproduced"`
+	OutcomeCategory      ReplayOutcomeCategory              `json:"outcome_category,omitempty"`
+	OutcomeReason        string                             `json:"outcome_reason,omitempty"`
+	TargetOracleStatus   TargetOracleStatus                 `json:"target_oracle_status,omitempty"`
+	TargetAttribution    string                             `json:"target_attribution,omitempty"`
+	TaskComplianceStatus TargetTaskComplianceStatus         `json:"task_compliance_status,omitempty"`
+	ContractStatus       TargetContractInterpretationStatus `json:"contract_status,omitempty"`
+	ArtifactDir          string                             `json:"artifact_dir"`
+	RunArtifactDir       string                             `json:"run_artifact_dir"`
+	StartedAt            string                             `json:"started_at"`
+	FinishedAt           string                             `json:"finished_at"`
 }
 
 // ReplayCorpusEntry turns a compact corpus handle back into an executable
@@ -104,6 +111,7 @@ func replayCaseEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions,
 	}
 
 	signatureMatched := runResult.Signature.String() == entry.Signature.String()
+	outcome := classifyCaseReplayOutcome(runResult, signatureMatched)
 	finished := time.Now().UTC()
 	result := &ReplayResult{
 		ExecutionKind:     entry.EffectiveExecutionKind(),
@@ -123,6 +131,8 @@ func replayCaseEntry(ctx context.Context, entry CorpusEntry, opts ReplayOptions,
 		ActualSignature:   runResult.Signature,
 		SignatureMatched:  signatureMatched,
 		Reproduced:        runResult.Confirmed && signatureMatched,
+		OutcomeCategory:   outcome.Category,
+		OutcomeReason:     outcome.Reason,
 		ArtifactDir:       replayDir,
 		RunArtifactDir:    runResult.ArtifactDir,
 		StartedAt:         started.Format(time.RFC3339Nano),
@@ -145,6 +155,7 @@ func replayTargetEntry(ctx context.Context, entry CorpusEntry, opts ReplayOption
 		TargetID:         task.TargetID,
 		TaskID:           task.TaskID,
 		Objective:        task.Objective,
+		PromptProfileID:  task.PromptProfileID,
 		Prompt:           task.Prompt,
 		Command:          task.Command,
 		OutDir:           replayDir,
@@ -160,29 +171,37 @@ func replayTargetEntry(ctx context.Context, entry CorpusEntry, opts ReplayOption
 	}
 
 	signatureMatched := runResult.Signature.String() == entry.Signature.String()
+	outcome := classifyTargetReplayOutcome(runResult, signatureMatched)
 	finished := time.Now().UTC()
 	result := &ReplayResult{
-		ExecutionKind:     entry.EffectiveExecutionKind(),
-		ReplayID:          replayID,
-		EntryID:           entry.EntryID,
-		CaseName:          entry.Subject(),
-		AdapterID:         runResult.AdapterID,
-		TargetID:          runResult.TargetID,
-		TaskID:            runResult.TaskID,
-		Environment:       runResult.Environment,
-		ContainerImage:    runResult.ContainerImage,
-		SourceSuiteID:     entry.SuiteID,
-		SourceRunID:       entry.RunID,
-		ExpectedSignature: entry.Signature,
-		RunID:             runResult.RunID,
-		Confirmed:         runResult.ExpectationsMet,
-		ActualSignature:   runResult.Signature,
-		SignatureMatched:  signatureMatched,
-		Reproduced:        runResult.ExpectationsMet && signatureMatched,
-		ArtifactDir:       replayDir,
-		RunArtifactDir:    runResult.ArtifactDir,
-		StartedAt:         started.Format(time.RFC3339Nano),
-		FinishedAt:        finished.Format(time.RFC3339Nano),
+		ExecutionKind:        entry.EffectiveExecutionKind(),
+		ReplayID:             replayID,
+		EntryID:              entry.EntryID,
+		CaseName:             entry.Subject(),
+		AdapterID:            runResult.AdapterID,
+		TargetID:             runResult.TargetID,
+		TaskID:               runResult.TaskID,
+		PromptProfileID:      runResult.PromptProfileID,
+		Environment:          runResult.Environment,
+		ContainerImage:       runResult.ContainerImage,
+		SourceSuiteID:        entry.SuiteID,
+		SourceRunID:          entry.RunID,
+		ExpectedSignature:    entry.Signature,
+		RunID:                runResult.RunID,
+		Confirmed:            runResult.ExpectationsMet,
+		ActualSignature:      runResult.Signature,
+		SignatureMatched:     signatureMatched,
+		Reproduced:           runResult.ExpectationsMet && signatureMatched,
+		OutcomeCategory:      outcome.Category,
+		OutcomeReason:        outcome.Reason,
+		TargetOracleStatus:   runResult.TargetOracle.Status,
+		TargetAttribution:    runResult.TargetOracle.Attribution,
+		TaskComplianceStatus: runResult.TaskCompliance.Status,
+		ContractStatus:       targetContractInterpretationStatusValue(runResult.ContractInterpretation),
+		ArtifactDir:          replayDir,
+		RunArtifactDir:       runResult.ArtifactDir,
+		StartedAt:            started.Format(time.RFC3339Nano),
+		FinishedAt:           finished.Format(time.RFC3339Nano),
 	}
 	if err := writeJSON(filepath.Join(replayDir, "replay-result.json"), result); err != nil {
 		return nil, err

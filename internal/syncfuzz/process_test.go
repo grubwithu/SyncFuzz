@@ -42,6 +42,44 @@ func TestLocalProcessSnapshotFindsWorkspaceProcess(t *testing.T) {
 	t.Fatalf("expected workspace sleep process, got %#v", snapshot.Processes)
 }
 
+func TestLocalProcessSnapshotFindsWorkspaceFDProcess(t *testing.T) {
+	tmp := t.TempDir()
+	env, err := newEnvironment("local", "")
+	if err != nil {
+		t.Fatalf("newEnvironment failed: %v", err)
+	}
+	run, err := env.PrepareRun(context.Background(), RunOptions{
+		CaseName: "process-fd-test",
+		OutDir:   filepath.Join(tmp, "runs"),
+	}, time.Now().UTC(), true)
+	if err != nil {
+		t.Fatalf("PrepareRun failed: %v", err)
+	}
+	defer run.Close()
+
+	heldFile := filepath.Join(run.workspace, "held.txt")
+	if err := os.WriteFile(heldFile, []byte("held\n"), 0o644); err != nil {
+		t.Fatalf("write held file: %v", err)
+	}
+	command := "nohup sh -c 'cd / && exec 9<" + shellQuote(heldFile) + " && sleep 2' >/dev/null 2>&1 &"
+	if _, err := env.ExecShell(context.Background(), run, command); err != nil {
+		t.Fatalf("ExecShell failed: %v", err)
+	}
+
+	var snapshot ProcessSnapshot
+	for attempt := 0; attempt < 20; attempt++ {
+		snapshot, err = env.SnapshotProcesses(context.Background(), run)
+		if err != nil {
+			t.Fatalf("SnapshotProcesses failed: %v", err)
+		}
+		if containsWorkspaceFDProcess(snapshot, heldFile) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("expected workspace-related fd process, got %#v", snapshot.Processes)
+}
+
 func TestParseContainerProcessLines(t *testing.T) {
 	output := "1\t0\tS (sleeping)\tsleep\t/workspace\ttrue\tsleep infinity \n"
 	entries, err := parseContainerProcessLines(output)
@@ -210,6 +248,20 @@ func hasProcessEdge(edges []ProcessEdge, parentPID int, childPID int) bool {
 	for _, edge := range edges {
 		if edge.ParentPID == parentPID && edge.ChildPID == childPID {
 			return true
+		}
+	}
+	return false
+}
+
+func containsWorkspaceFDProcess(snapshot ProcessSnapshot, target string) bool {
+	for _, process := range snapshot.Processes {
+		if !process.WorkspaceRelated {
+			continue
+		}
+		for _, fd := range process.OpenFDs {
+			if fd.WorkspaceRelated && strings.TrimSuffix(fd.Target, " (deleted)") == target {
+				return true
+			}
 		}
 	}
 	return false

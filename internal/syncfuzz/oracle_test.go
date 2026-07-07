@@ -1,6 +1,9 @@
 package syncfuzz
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestOrphanProcessOracleConfirmsLateEffect(t *testing.T) {
 	before := Snapshot{Files: []FileEntry{}}
@@ -156,6 +159,87 @@ func TestPartialFilesystemRollbackOracleIgnoresCleanRollback(t *testing.T) {
 	}
 	if len(evidence) != 0 {
 		t.Fatalf("expected no evidence, got %d", len(evidence))
+	}
+}
+
+func TestPartialFilesystemRollbackFDOracleConfirmsDeletedFDResidue(t *testing.T) {
+	after := Snapshot{Root: "/tmp/workspace", Files: []FileEntry{
+		{Path: "tracked.txt", Type: "file", Mode: "-rw-r--r--"},
+	}}
+	processAfter := ProcessSnapshot{
+		Processes: []ProcessEntry{
+			{
+				PID:              42,
+				WorkspaceRelated: true,
+				OpenFDs: []ProcessFDEntry{
+					{FD: 9, Target: "/tmp/workspace/tracked.txt (deleted)", Deleted: true, WorkspaceRelated: true},
+				},
+			},
+		},
+	}
+
+	confirmed, evidence := partialFilesystemRollbackFDOracle(after, processAfter, "/tmp/workspace")
+	if !confirmed {
+		t.Fatalf("expected fd oracle to confirm deleted workspace residue")
+	}
+	if len(evidence) != 2 {
+		t.Fatalf("expected two evidence items, got %d", len(evidence))
+	}
+}
+
+func TestPartialFilesystemRollbackFDOracleIgnoresCleanRollback(t *testing.T) {
+	after := Snapshot{Root: "/tmp/workspace", Files: []FileEntry{
+		{Path: "tracked.txt", Type: "file", Mode: "-rw-r--r--"},
+	}}
+	processAfter := ProcessSnapshot{
+		Processes: []ProcessEntry{
+			{
+				PID:              42,
+				WorkspaceRelated: true,
+				OpenFDs: []ProcessFDEntry{
+					{FD: 9, Target: "/tmp/workspace/tracked.txt", Deleted: false, WorkspaceRelated: true},
+				},
+			},
+		},
+	}
+
+	confirmed, evidence := partialFilesystemRollbackFDOracle(after, processAfter, "/tmp/workspace")
+	if confirmed {
+		t.Fatalf("expected fd oracle to ignore clean rollback")
+	}
+	if len(evidence) != 0 {
+		t.Fatalf("expected no evidence, got %d", len(evidence))
+	}
+}
+
+func TestPartialFilesystemRollbackFDOracleMatchesRelativeWorkspace(t *testing.T) {
+	absTarget, err := filepath.Abs(filepath.Join("runs/example/workspace", "tracked.txt"))
+	if err != nil {
+		t.Fatalf("resolve target path: %v", err)
+	}
+	after := Snapshot{Root: "runs/example/workspace", Files: []FileEntry{
+		{Path: "tracked.txt", Type: "file", Mode: "-rw-r--r--"},
+	}}
+	processAfter := ProcessSnapshot{
+		Processes: []ProcessEntry{
+			{
+				PID:              42,
+				WorkspaceRelated: true,
+				OpenFDs: []ProcessFDEntry{
+					{
+						FD:               9,
+						Target:           absTarget + " (deleted)",
+						Deleted:          true,
+						WorkspaceRelated: true,
+					},
+				},
+			},
+		},
+	}
+
+	confirmed, evidence := partialFilesystemRollbackFDOracle(after, processAfter, "runs/example/workspace")
+	if !confirmed {
+		t.Fatalf("expected fd oracle to match relative workspace, got evidence %#v", evidence)
 	}
 }
 

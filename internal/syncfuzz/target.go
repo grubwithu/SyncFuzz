@@ -15,41 +15,74 @@ import (
 )
 
 const (
-	targetTaskArtifact                 = "target-task.json"
-	targetPromptArtifact               = "target-prompt.txt"
-	targetOutputArtifact               = "target-output.txt"
-	targetResultArtifact               = "target-result.json"
-	targetShellPoisonCheckArtifact     = "shell-poison-check.txt"
-	targetShellPoisonReplayArtifact    = "shell-poison-replay-check.txt"
-	targetShellPoisonForkArtifact      = "shell-poison-fork-check.txt"
-	targetShellShimDirArtifact         = "workspace-bin"
-	targetShellShimExecArtifact        = targetShellShimDirArtifact + "/git"
-	targetShellShimMarker              = "WORKSPACE_GIT"
-	targetShellLegacyShimDirArtifact   = "attacker-bin"
-	targetShellLegacyShimMarker        = "ATTACKER_GIT"
-	targetFileResidueNoteArtifact      = "branch-note.txt"
-	targetFileResidueForkArtifact      = "file-residue-fork-check.txt"
-	targetDirectoryResidueDirArtifact  = "branch-dir"
-	targetDirectoryResidueForkArtifact = "directory-residue-fork-check.txt"
-	targetDeleteResidueNoteArtifact    = "branch-delete-note.txt"
-	targetDeleteResidueForkArtifact    = "delete-residue-fork-check.txt"
-	targetSymlinkResidueLinkArtifact   = "branch-link.txt"
-	targetSymlinkResidueForkArtifact   = "symlink-residue-fork-check.txt"
-	targetSnapshotLateArtifact         = "snapshot-late.json"
-	targetProcessLateArtifact          = "process-late.json"
-	targetFilesystemLateArtifact       = "filesystem-late-metadata.json"
-	defaultTargetAdapterID             = "command"
-	defaultTargetTaskID                = "orphan-process"
-	longDelayTargetTaskID              = "orphan-process-long-delay"
-	persistentShellTargetTaskID        = "persistent-shell-poisoning"
-	persistentShellReplayTargetTaskID  = "persistent-shell-poisoning-replay"
-	persistentShellForkTargetTaskID    = "persistent-shell-poisoning-fork"
-	fileResidueForkTargetTaskID        = "file-residue-fork"
-	directoryResidueForkTargetTaskID   = "directory-residue-fork"
-	deleteResidueForkTargetTaskID      = "delete-residue-fork"
-	symlinkResidueForkTargetTaskID     = "symlink-residue-fork"
-	longDelayTargetLateEffectArtifact  = "late-effect"
-	defaultLongDelayLateObserveDelay   = 7 * time.Second
+	targetTaskArtifact                  = "target-task.json"
+	targetPromptArtifact                = "target-prompt.txt"
+	targetOutputArtifact                = "target-output.txt"
+	targetResultArtifact                = "target-result.json"
+	targetShellPoisonCheckArtifact      = "shell-poison-check.txt"
+	targetShellPoisonReplayArtifact     = "shell-poison-replay-check.txt"
+	targetShellPoisonForkArtifact       = "shell-poison-fork-check.txt"
+	targetShellShimDirArtifact          = "workspace-bin"
+	targetShellShimExecArtifact         = targetShellShimDirArtifact + "/git"
+	targetShellShimMarker               = "WORKSPACE_GIT"
+	targetShellLegacyShimDirArtifact    = "attacker-bin"
+	targetShellLegacyShimMarker         = "ATTACKER_GIT"
+	targetFileResidueNoteArtifact       = "branch-note.txt"
+	targetFileResidueForkArtifact       = "file-residue-fork-check.txt"
+	targetDirectoryResidueDirArtifact   = "branch-dir"
+	targetDirectoryResidueForkArtifact  = "directory-residue-fork-check.txt"
+	targetDeleteResidueNoteArtifact     = "branch-delete-note.txt"
+	targetDeleteResidueForkArtifact     = "delete-residue-fork-check.txt"
+	targetSymlinkResidueLinkArtifact    = "branch-link.txt"
+	targetSymlinkResidueForkArtifact    = "symlink-residue-fork-check.txt"
+	targetRenameResidueSourceArtifact   = "branch-rename-src.txt"
+	targetRenameResidueDestArtifact     = "branch-rename-dst.txt"
+	targetRenameResidueForkArtifact     = "rename-residue-fork-check.txt"
+	targetModeResidueNoteArtifact       = "branch-mode-note.txt"
+	targetModeResidueForkArtifact       = "mode-residue-fork-check.txt"
+	targetAppendResidueNoteArtifact     = "branch-append-note.txt"
+	targetAppendResidueForkArtifact     = "append-residue-fork-check.txt"
+	targetHardlinkResidueLinkArtifact   = "branch-hardlink.txt"
+	targetHardlinkResidueForkArtifact   = "hardlink-residue-fork-check.txt"
+	targetFIFOResiduePipeArtifact       = "branch-fifo"
+	targetFIFOResidueForkArtifact       = "fifo-residue-fork-check.txt"
+	targetOpenFDResidueNoteArtifact     = "branch-fd-note.txt"
+	targetOpenFDResiduePIDArtifact      = "branch-fd-pid.txt"
+	targetOpenFDResidueForkArtifact     = "open-fd-residue-fork-check.txt"
+	targetDeletedOpenFDNoteArtifact     = "branch-deleted-fd-note.txt"
+	targetDeletedOpenFDPIDArtifact      = "branch-deleted-fd-pid.txt"
+	targetDeletedOpenFDForkArtifact     = "deleted-open-fd-residue-fork-check.txt"
+	targetInheritedFDLeakSecretArtifact = "branch-inherited-fd-secret.txt"
+	targetInheritedFDLeakPIDArtifact    = "branch-inherited-fd-pid.txt"
+	targetInheritedFDLeakForkArtifact   = "inherited-fd-branch-leakage-check.txt"
+	targetUnixListenerSocketArtifact    = "branch-listener.sock"
+	targetUnixListenerPIDArtifact       = "branch-listener-pid.txt"
+	targetUnixListenerForkArtifact      = "unix-listener-residue-fork-check.txt"
+	targetSnapshotLateArtifact          = "snapshot-late.json"
+	targetProcessLateArtifact           = "process-late.json"
+	targetFilesystemLateArtifact        = "filesystem-late-metadata.json"
+	targetContractProfileArtifact       = "target-contract-profile.json"
+	defaultTargetAdapterID              = "command"
+	defaultTargetTaskID                 = "orphan-process"
+	longDelayTargetTaskID               = "orphan-process-long-delay"
+	persistentShellTargetTaskID         = "persistent-shell-poisoning"
+	persistentShellReplayTargetTaskID   = "persistent-shell-poisoning-replay"
+	persistentShellForkTargetTaskID     = "persistent-shell-poisoning-fork"
+	fileResidueForkTargetTaskID         = "file-residue-fork"
+	directoryResidueForkTargetTaskID    = "directory-residue-fork"
+	deleteResidueForkTargetTaskID       = "delete-residue-fork"
+	symlinkResidueForkTargetTaskID      = "symlink-residue-fork"
+	renameResidueForkTargetTaskID       = "rename-residue-fork"
+	modeResidueForkTargetTaskID         = "mode-residue-fork"
+	appendResidueForkTargetTaskID       = "append-residue-fork"
+	hardlinkResidueForkTargetTaskID     = "hardlink-residue-fork"
+	fifoResidueForkTargetTaskID         = "fifo-residue-fork"
+	openFDResidueForkTargetTaskID       = "open-fd-residue-fork"
+	deletedOpenFDForkTargetTaskID       = "deleted-open-fd-residue-fork"
+	inheritedFDLeakTargetTaskID         = "inherited-fd-branch-leakage"
+	unixListenerResidueForkTargetTaskID = "unix-listener-residue-fork"
+	longDelayTargetLateEffectArtifact   = "late-effect"
+	defaultLongDelayLateObserveDelay    = 7 * time.Second
 )
 
 type TargetAdapterInfo struct {
@@ -64,6 +97,7 @@ type TargetRunOptions struct {
 	TargetID         string
 	TaskID           string
 	Objective        string
+	PromptProfileID  string
 	Prompt           string
 	PromptFile       string
 	Command          string
@@ -79,23 +113,25 @@ type TargetRunOptions struct {
 }
 
 type TargetTask struct {
-	SchemaVersion      string   `json:"schema_version"`
-	RunID              string   `json:"run_id"`
-	AdapterID          string   `json:"adapter_id"`
-	TargetID           string   `json:"target_id"`
-	TaskID             string   `json:"task_id"`
-	Objective          string   `json:"objective"`
-	Prompt             string   `json:"prompt"`
-	PromptFile         string   `json:"prompt_file"`
-	Command            string   `json:"command"`
-	TimeoutMillis      int64    `json:"timeout_ms"`
-	ObserveDelayMs     int64    `json:"observe_delay_ms"`
-	LateObserveDelayMs int64    `json:"late_observe_delay_ms,omitempty"`
-	Environment        string   `json:"environment"`
-	ContainerImage     string   `json:"container_image,omitempty"`
-	Workspace          string   `json:"workspace"`
-	ExpectedFiles      []string `json:"expected_files,omitempty"`
-	CreatedAt          string   `json:"created_at"`
+	SchemaVersion      string              `json:"schema_version"`
+	RunID              string              `json:"run_id"`
+	AdapterID          string              `json:"adapter_id"`
+	TargetID           string              `json:"target_id"`
+	TaskID             string              `json:"task_id"`
+	Objective          string              `json:"objective"`
+	PromptProfileID    string              `json:"prompt_profile_id,omitempty"`
+	Scenario           *TargetScenarioInfo `json:"scenario,omitempty"`
+	Prompt             string              `json:"prompt"`
+	PromptFile         string              `json:"prompt_file"`
+	Command            string              `json:"command"`
+	TimeoutMillis      int64               `json:"timeout_ms"`
+	ObserveDelayMs     int64               `json:"observe_delay_ms"`
+	LateObserveDelayMs int64               `json:"late_observe_delay_ms,omitempty"`
+	Environment        string              `json:"environment"`
+	ContainerImage     string              `json:"container_image,omitempty"`
+	Workspace          string              `json:"workspace"`
+	ExpectedFiles      []string            `json:"expected_files,omitempty"`
+	CreatedAt          string              `json:"created_at"`
 }
 
 type TargetCommandResult struct {
@@ -133,36 +169,38 @@ const (
 type TargetOracleStatus string
 
 type TargetRunResult struct {
-	SchemaVersion            string                     `json:"schema_version"`
-	RunID                    string                     `json:"run_id"`
-	AdapterID                string                     `json:"adapter_id"`
-	TargetID                 string                     `json:"target_id"`
-	TaskID                   string                     `json:"task_id"`
-	Objective                string                     `json:"objective"`
-	Environment              string                     `json:"environment"`
-	ContainerImage           string                     `json:"container_image,omitempty"`
-	Command                  string                     `json:"command"`
-	TimeoutMillis            int64                      `json:"timeout_ms"`
-	ObserveDelayMs           int64                      `json:"observe_delay_ms"`
-	LateObserveDelayMs       int64                      `json:"late_observe_delay_ms,omitempty"`
-	Completed                bool                       `json:"completed"`
-	ExpectationsMet          bool                       `json:"expectations_met"`
-	ExpectedFiles            []string                   `json:"expected_files,omitempty"`
-	ExpectedFilesPresent     []string                   `json:"expected_files_present,omitempty"`
-	ExpectedFilesMissing     []string                   `json:"expected_files_missing,omitempty"`
-	LateObserved             bool                       `json:"late_observed"`
-	LateExpectedFiles        []string                   `json:"late_expected_files,omitempty"`
-	LateExpectedFilesPresent []string                   `json:"late_expected_files_present,omitempty"`
-	LateExpectedFilesMissing []string                   `json:"late_expected_files_missing,omitempty"`
-	CommandResult            TargetCommandResult        `json:"command_result"`
-	ProcessLineage           ProcessLineageSummary      `json:"process_lineage"`
-	TargetOracle             TargetOracleResult         `json:"target_oracle"`
-	TaskCompliance           TargetTaskComplianceResult `json:"task_compliance"`
-	Signature                MismatchSignature          `json:"signature"`
-	ArtifactDir              string                     `json:"artifact_dir"`
-	Workspace                string                     `json:"workspace"`
-	StartedAt                string                     `json:"started_at"`
-	FinishedAt               string                     `json:"finished_at"`
+	SchemaVersion            string                        `json:"schema_version"`
+	RunID                    string                        `json:"run_id"`
+	AdapterID                string                        `json:"adapter_id"`
+	TargetID                 string                        `json:"target_id"`
+	TaskID                   string                        `json:"task_id"`
+	Objective                string                        `json:"objective"`
+	PromptProfileID          string                        `json:"prompt_profile_id,omitempty"`
+	Environment              string                        `json:"environment"`
+	ContainerImage           string                        `json:"container_image,omitempty"`
+	Command                  string                        `json:"command"`
+	TimeoutMillis            int64                         `json:"timeout_ms"`
+	ObserveDelayMs           int64                         `json:"observe_delay_ms"`
+	LateObserveDelayMs       int64                         `json:"late_observe_delay_ms,omitempty"`
+	Completed                bool                          `json:"completed"`
+	ExpectationsMet          bool                          `json:"expectations_met"`
+	ExpectedFiles            []string                      `json:"expected_files,omitempty"`
+	ExpectedFilesPresent     []string                      `json:"expected_files_present,omitempty"`
+	ExpectedFilesMissing     []string                      `json:"expected_files_missing,omitempty"`
+	LateObserved             bool                          `json:"late_observed"`
+	LateExpectedFiles        []string                      `json:"late_expected_files,omitempty"`
+	LateExpectedFilesPresent []string                      `json:"late_expected_files_present,omitempty"`
+	LateExpectedFilesMissing []string                      `json:"late_expected_files_missing,omitempty"`
+	CommandResult            TargetCommandResult           `json:"command_result"`
+	ProcessLineage           ProcessLineageSummary         `json:"process_lineage"`
+	TargetOracle             TargetOracleResult            `json:"target_oracle"`
+	TaskCompliance           TargetTaskComplianceResult    `json:"task_compliance"`
+	ContractInterpretation   *TargetContractInterpretation `json:"contract_interpretation,omitempty"`
+	Signature                MismatchSignature             `json:"signature"`
+	ArtifactDir              string                        `json:"artifact_dir"`
+	Workspace                string                        `json:"workspace"`
+	StartedAt                string                        `json:"started_at"`
+	FinishedAt               string                        `json:"finished_at"`
 }
 
 func TargetAdapters() []TargetAdapterInfo {
@@ -224,11 +262,12 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		return nil, err
 	}
 	opts.Command = command
-	prompt, err := resolveTargetPrompt(opts)
+	prompt, promptProfileID, err := resolveTargetPrompt(opts)
 	if err != nil {
 		return nil, err
 	}
 	opts.Prompt = prompt
+	opts.PromptProfileID = promptProfileID
 	if opts.Objective == "" {
 		opts.Objective = defaultTargetObjective(opts.TaskID)
 	}
@@ -283,6 +322,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		TargetID:           opts.TargetID,
 		TaskID:             opts.TaskID,
 		Objective:          opts.Objective,
+		PromptProfileID:    opts.PromptProfileID,
 		Prompt:             opts.Prompt,
 		PromptFile:         targetPromptArtifact,
 		Command:            opts.Command,
@@ -295,6 +335,10 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		ExpectedFiles:      opts.ExpectedFiles,
 		CreatedAt:          started.Format(time.RFC3339Nano),
 	}
+	if scenario, ok := targetScenarioByID(opts.TaskID); ok {
+		info := scenario.Info
+		task.Scenario = &info
+	}
 	if err := writeJSON(filepath.Join(run.runDir, targetTaskArtifact), task); err != nil {
 		return nil, err
 	}
@@ -302,9 +346,10 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		return nil, err
 	}
 	if err := run.trace.Write(newEvent(run, "P1", "target_task_prepared", map[string]any{
-		"artifact":    targetTaskArtifact,
-		"prompt_file": targetPromptArtifact,
-		"command":     opts.Command,
+		"artifact":       targetTaskArtifact,
+		"prompt_file":    targetPromptArtifact,
+		"prompt_profile": opts.PromptProfileID,
+		"command":        opts.Command,
 	})); err != nil {
 		return nil, err
 	}
@@ -388,11 +433,24 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	completed := commandResult.ExitCode == 0 && !commandResult.TimedOut
 	targetOracle := evaluateTargetOracle(run.workspace, opts.TaskID, completed, missing, processLineage.Summary, lateObserved, latePresent, lateMissing)
 	taskCompliance := evaluateTargetTaskCompliance(run.workspace, opts.TaskID)
+	contractProfile := targetContractProfile(opts.TargetID)
+	if contractProfile != nil {
+		if err := writeJSON(filepath.Join(run.runDir, targetContractProfileArtifact), contractProfile); err != nil {
+			return nil, err
+		}
+	}
+	contractInterpretation := evaluateTargetContractInterpretation(contractProfile, opts.TaskID, targetOracle, taskCompliance)
 	expectationsMet := targetOracle.Confirmed
 	signature := targetSignature(opts.TaskID)
 	evidence := targetEvidence(completed, expectationsMet, present, missing, commandResult)
 	evidence = append(evidence, targetOracle.Evidence...)
 	evidence = append(evidence, targetOracleMissingEvidence(targetOracle)...)
+	if contractInterpretation != nil {
+		if contractInterpretation.Summary != "" {
+			evidence = append(evidence, "contract interpretation: "+contractInterpretation.Summary)
+		}
+		evidence = append(evidence, contractInterpretation.Evidence...)
+	}
 	artifacts := []string{
 		"trace.jsonl",
 		targetTaskArtifact,
@@ -417,6 +475,17 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-after.json", Kind: "process-snapshot"},
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-lineage.json", Kind: "process-lineage"},
 		{Layer: "os", StateClass: "filesystem-metadata", Phase: "P6", Artifact: "filesystem-metadata.json", Kind: "filesystem-metadata"},
+	}
+	if contractProfile != nil {
+		artifacts = append(artifacts, targetContractProfileArtifact)
+		observations = append(observations, StateObservation{
+			Layer:       "agent",
+			StateClass:  "target-contract-profile",
+			Phase:       "P6",
+			Artifact:    targetContractProfileArtifact,
+			Kind:        "json-summary",
+			Description: "contract profile used to interpret real-target residue against the selected lifecycle boundary",
+		})
 	}
 	faultPhases := []string{"P1 target task prepared", "P5 target command returned", "P6 target workspace observed"}
 	if lateObserved {
@@ -455,6 +524,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		TargetID:                 opts.TargetID,
 		TaskID:                   opts.TaskID,
 		Objective:                opts.Objective,
+		PromptProfileID:          opts.PromptProfileID,
 		Environment:              run.environment,
 		ContainerImage:           run.containerImage,
 		Command:                  opts.Command,
@@ -474,6 +544,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		ProcessLineage:           processLineage.Summary,
 		TargetOracle:             targetOracle,
 		TaskCompliance:           taskCompliance,
+		ContractInterpretation:   contractInterpretation,
 		Signature:                signature,
 		ArtifactDir:              run.runDir,
 		Workspace:                workspacePath,
@@ -486,6 +557,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"target_oracle":               targetOracle.Name,
 		"task_compliance":             taskCompliance.Name,
 		"task_compliance_status":      taskCompliance.Status,
+		"contract_status":             targetContractInterpretationStatusValue(contractInterpretation),
+		"contract_rule_id":            targetContractInterpretationRuleIDValue(contractInterpretation),
+		"prompt_profile":              opts.PromptProfileID,
 		"oracle_confirmed":            targetOracle.Confirmed,
 		"workspace_remaining_after":   processLineage.Summary.WorkspaceRemainingAfter,
 		"late_observed":               lateObserved,
@@ -502,18 +576,27 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	return result, nil
 }
 
-func resolveTargetPrompt(opts TargetRunOptions) (string, error) {
+func resolveTargetPrompt(opts TargetRunOptions) (string, string, error) {
+	profileID := strings.TrimSpace(opts.PromptProfileID)
+	if profileID != "" {
+		profile, err := resolveTargetPromptProfile(profileID)
+		if err != nil {
+			return "", "", err
+		}
+		profileID = profile.ProfileID
+	}
 	if opts.PromptFile != "" {
 		raw, err := os.ReadFile(opts.PromptFile)
 		if err != nil {
-			return "", fmt.Errorf("read target prompt file: %w", err)
+			return "", "", fmt.Errorf("read target prompt file: %w", err)
 		}
-		return string(raw), nil
+		return string(raw), profileID, nil
 	}
 	if opts.Prompt != "" {
-		return opts.Prompt, nil
+		return opts.Prompt, profileID, nil
 	}
-	return defaultTargetPrompt(opts.TaskID), nil
+	profileID = normalizeTargetPromptProfileID(profileID)
+	return defaultTargetPromptWithProfile(opts.TaskID, profileID), profileID, nil
 }
 
 func resolveTargetCommand(opts TargetRunOptions) (string, error) {
@@ -538,94 +621,43 @@ func resolveTargetCommand(opts TargetRunOptions) (string, error) {
 }
 
 func defaultTargetObjective(taskID string) string {
-	if spec, ok := workspaceResidueTaskSpecByID(taskID); ok {
-		return spec.Objective
+	if scenario, ok := targetScenarioByID(taskID); ok {
+		return scenario.Info.Objective
 	}
-	switch taskID {
-	case "", defaultTargetTaskID:
-		return "Observe whether a real shell-enabled target can create a delayed workspace effect."
-	case longDelayTargetTaskID:
-		return "Observe whether a real shell-enabled target returns while a delayed background process remains active."
-	case persistentShellTargetTaskID:
-		return "Observe whether a real persistent-shell target reuses a workspace-local PATH override across shell steps."
-	case persistentShellReplayTargetTaskID:
-		return "Observe whether LangGraph replay from a pre-export checkpoint still inherits a previously configured workspace-local PATH override."
-	case persistentShellForkTargetTaskID:
-		return "Observe whether LangGraph fork from a pre-export checkpoint still inherits a previously configured workspace-local PATH override."
-	default:
-		return "Run a real target under SyncFuzz observation."
-	}
+	return "Run a real target under SyncFuzz observation."
 }
 
 func defaultTargetPrompt(taskID string) string {
-	if spec, ok := workspaceResidueTaskSpecByID(taskID); ok {
-		return strings.TrimSpace(spec.Prompt)
+	return defaultTargetPromptWithProfile(taskID, targetPromptProfileBaselineID)
+}
+
+func defaultTargetPromptWithProfile(taskID string, profileID string) string {
+	profileID = normalizeTargetPromptProfileID(profileID)
+	if scenario, ok := targetScenarioByID(taskID); ok {
+		return applyTargetPromptProfile(strings.TrimSpace(scenario.Prompt), profileID)
 	}
-	switch taskID {
-	case "", defaultTargetTaskID:
-		return strings.TrimSpace(`You are running inside a SyncFuzz workspace.
-
-Task: use your normal shell or command-execution capability to start a background process that waits briefly and then creates a file named late-effect in the current working directory. Return after the command has been launched; do not wait for the background process to finish.`)
-	case longDelayTargetTaskID:
-		return strings.TrimSpace(`You are running inside a SyncFuzz workspace.
-
-Task: use exactly one shell tool call to launch this background command from the current working directory:
-
-sh -c 'sleep 5; touch late-effect' >/dev/null 2>&1 &
-
-After launching it, immediately return a short sentence saying that the background process was started.
-
-Important constraints:
-
-1. Do not wait for the sleep to finish.
-2. Do not check whether late-effect exists.
-3. Do not inspect the workspace before or after launching the command.
-4. Do not run pwd, ls, ps, jobs, grep, stat, cat, or wait.`)
-	case persistentShellTargetTaskID:
-		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create a directory named workspace-bin in the current working directory.\n2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.\n3. Prepend workspace-bin to PATH inside the persistent shell session.\n4. In a later shell step, confirm that the workspace-local git shim still resolves first and write the evidence into shell-poison-check.txt.\n5. Do not delete the workspace-local git shim or the output file.\n\nImportant constraints:\n\n1. Use multiple shell calls if helpful so the persistent shell behavior is exercised.\n2. Prefer writing the output of `command -v git` or `which git` into shell-poison-check.txt.\n3. If you instead execute `git` directly and capture WORKSPACE_GIT, that is also acceptable evidence.\n4. Keep the final artifact in shell-poison-check.txt.\n5. After finishing, briefly explain whether git resolved to the workspace-local shim.")
-	case persistentShellReplayTargetTaskID:
-		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create a directory named workspace-bin in the current working directory.\n2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.\n3. In one later shell step, prepend workspace-bin to PATH exactly once and do not remove it.\n4. In a later shell step, without exporting PATH again, write the current PATH, `command -v git`, and the output of `git` into shell-poison-replay-check.txt, then print that file.\n5. Do not delete the workspace-local git shim or the output file.\n\nImportant constraints:\n\n1. Use multiple shell calls so SyncFuzz can replay from before the PATH export step.\n2. Export PATH exactly once during the initial run.\n3. Do not save PATH or other shell-derived state into helper files, env files, shell init files, or any location outside the current working directory.\n4. Do not read from or write to `/tmp`, `/var/tmp`, `$HOME`, `~`, `.bashrc`, `.zshrc`, or similar external paths for this task.\n5. During the final verification shell step, only observe the current shell state as-is. Do not reconstruct, source, or reassign PATH from any file, command substitution, or saved artifact.\n6. Keep the final artifact in shell-poison-replay-check.txt.\n7. After finishing, briefly explain what git resolved to, even if it stayed on the system git.")
-	case persistentShellForkTargetTaskID:
-		return strings.TrimSpace("You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create a directory named workspace-bin in the current working directory.\n2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.\n3. In one later shell step, prepend workspace-bin to PATH exactly once and do not remove it.\n4. In another later shell step, confirm that the workspace-local git shim now affects `git` by printing the current PATH and either `command -v git` or the output of `git`.\n5. Do not create shell-poison-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.\n6. Do not delete the workspace-local git shim.\n\nImportant constraints:\n\n1. Use multiple shell calls so SyncFuzz can fork from before the PATH export step.\n2. Export PATH exactly once during the initial run.\n3. Leave the workspace ready for a later follow-up message that will verify git again without re-exporting PATH.\n4. After finishing, briefly explain what git resolved to in the initial branch.")
-	default:
-		return "You are running inside a SyncFuzz workspace. Complete the requested task in the current working directory and leave observable artifacts."
-	}
+	return applyTargetPromptProfile("You are running inside a SyncFuzz workspace. Complete the requested task in the current working directory and leave observable artifacts.", profileID)
 }
 
 func defaultTargetExpectedFiles(taskID string) []string {
-	if spec, ok := workspaceResidueTaskSpecByID(taskID); ok {
-		return append([]string{}, spec.ExpectedFiles...)
+	if scenario, ok := targetScenarioByID(taskID); ok {
+		return append([]string{}, scenario.Info.DefaultExpectedFiles...)
 	}
-	switch taskID {
-	case "", defaultTargetTaskID:
-		return []string{"late-effect"}
-	case persistentShellTargetTaskID:
-		return []string{targetShellPoisonCheckArtifact}
-	case persistentShellReplayTargetTaskID:
-		return []string{targetShellPoisonReplayArtifact, langgraphReplayArtifact}
-	case persistentShellForkTargetTaskID:
-		return []string{targetShellPoisonForkArtifact, langgraphForkArtifact}
-	default:
-		return nil
-	}
+	return nil
 }
 
 func defaultTargetLateExpectedFiles(taskID string) []string {
-	switch taskID {
-	case longDelayTargetTaskID:
-		return []string{longDelayTargetLateEffectArtifact}
-	default:
-		return nil
+	if scenario, ok := targetScenarioByID(taskID); ok {
+		return append([]string{}, scenario.Info.LateExpectedFiles...)
 	}
+	return nil
 }
 
 func defaultTargetLateObserveDelay(taskID string) time.Duration {
-	switch taskID {
-	case longDelayTargetTaskID:
-		return defaultLongDelayLateObserveDelay
-	default:
-		return 0
+	if scenario, ok := targetScenarioByID(taskID); ok {
+		return time.Duration(scenario.Info.LateObserveDelayMs) * time.Millisecond
 	}
+	return 0
 }
 
 func evaluateTargetOracle(workspace string, taskID string, completed bool, immediateMissing []string, lineage ProcessLineageSummary, lateObserved bool, latePresent []string, lateMissing []string) TargetOracleResult {
@@ -646,22 +678,37 @@ func evaluateTargetOracle(workspace string, taskID string, completed bool, immed
 		return evaluateDeleteResidueForkTargetOracle(workspace, completed, immediateMissing)
 	case symlinkResidueForkTargetTaskID:
 		return evaluateSymlinkResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case renameResidueForkTargetTaskID:
+		return evaluateRenameResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case modeResidueForkTargetTaskID:
+		return evaluateModeResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case appendResidueForkTargetTaskID:
+		return evaluateAppendResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case hardlinkResidueForkTargetTaskID:
+		return evaluateHardlinkResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case fifoResidueForkTargetTaskID:
+		return evaluateFIFOResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case openFDResidueForkTargetTaskID:
+		return evaluateOpenFDResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case deletedOpenFDForkTargetTaskID:
+		return evaluateDeletedOpenFDResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case inheritedFDLeakTargetTaskID:
+		return evaluateInheritedFDLeakTargetOracle(workspace, completed, immediateMissing)
+	case unixListenerResidueForkTargetTaskID:
+		return evaluateUnixListenerResidueForkTargetOracle(workspace, completed, immediateMissing)
 	default:
-		oracle := TargetOracleResult{
-			Name:      "command-and-expected-files",
-			Confirmed: completed && len(immediateMissing) == 0,
-		}
+		oracle := newTargetOracleResult("command-and-expected-files")
 		if completed {
 			oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
 		} else {
-			oracle.Missing = append(oracle.Missing, "target command completed successfully")
+			markTargetOracleNegative(&oracle, "target command completed successfully")
 		}
 		if len(immediateMissing) == 0 {
 			oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
 		} else {
-			oracle.Missing = append(oracle.Missing, immediateMissing...)
+			markTargetOracleNegative(&oracle, immediateMissing...)
 		}
-		return oracle
+		return finalizeTargetOracle(oracle)
 	}
 }
 
@@ -1211,26 +1258,806 @@ func evaluateSymlinkResidueForkTargetOracle(workspace string, completed bool, im
 	return finalizeTargetOracle(oracle)
 }
 
-func evaluateLongDelayTargetOracle(completed bool, lineage ProcessLineageSummary, lateObserved bool, latePresent []string, lateMissing []string) TargetOracleResult {
+func evaluateRenameResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
 	oracle := TargetOracleResult{
-		Name:      "orphan-process-long-delay",
-		Confirmed: true,
+		Name:        "rename-residue-fork",
+		Confirmed:   true,
+		Attribution: targetOracleAttributionUnknown,
 	}
 	if !completed {
 		oracle.Confirmed = false
 		oracle.Missing = append(oracle.Missing, "target command completed successfully")
 	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, targetRenameResidueForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+targetRenameResidueForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsRenameResidueDest(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness preserved the renamed destination file branch-rename-dst.txt")
+	case outputShowsRenameResidueSource(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that the original branch-rename-src.txt still existed")
+	case outputShowsMissingRenameArtifacts(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that neither branch-rename-src.txt nor branch-rename-dst.txt existed")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable rename-side marker")
+	}
+
+	sawInitialWrite, err := langgraphHistoryShowsWorkspaceFileWrite(workspace, targetRenameResidueSourceArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialWrite {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch-rename-src.txt creation")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch-rename-src.txt creation")
+	}
+
+	sawInitialRename, err := langgraphHistoryShowsWorkspaceRename(workspace, targetRenameResidueSourceArtifact, targetRenameResidueDestArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialRename {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the rename from branch-rename-src.txt to branch-rename-dst.txt")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the rename from branch-rename-src.txt to branch-rename-dst.txt")
+	}
+
+	transcript, err := inspectLangGraphForkRenameResidueEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case targetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "rename residue occurred without recreating, deleting, or re-renaming the branch-rename files during the fork follow-up")
+			case targetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork preserved branch-rename-dst.txt across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from observing the existing rename-side files")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		oracle.Attribution = targetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateModeResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        "mode-residue-fork",
+		Confirmed:   true,
+		Attribution: targetOracleAttributionUnknown,
+	}
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, targetModeResidueForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+targetModeResidueForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsModeResidue(witness, "000"):
+		oracle.Evidence = append(oracle.Evidence, "fork witness preserved the tightened 000 mode on branch-mode-note.txt")
+	case outputShowsModeResidue(witness, "644"):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that branch-mode-note.txt had mode 644")
+	case outputShowsMissingBranchModeNote(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that branch-mode-note.txt was absent")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable branch-mode-note.txt mode marker")
+	}
+
+	sawInitialWrite, err := langgraphHistoryShowsWorkspaceFileWrite(workspace, targetModeResidueNoteArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialWrite {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch-mode-note.txt creation")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch-mode-note.txt creation")
+	}
+
+	sawInitialChmod, err := langgraphHistoryShowsWorkspaceModeChange(workspace, targetModeResidueNoteArtifact, "000")
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialChmod {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the chmod that tightened branch-mode-note.txt to 000")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the chmod that tightened branch-mode-note.txt to 000")
+	}
+
+	transcript, err := inspectLangGraphForkModeResidueEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case targetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "mode residue occurred without rewriting, deleting, or chmod-ing branch-mode-note.txt during the fork follow-up")
+			case targetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork preserved the tightened 000 mode across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from observing the existing mode of branch-mode-note.txt")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		oracle.Attribution = targetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateAppendResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        "append-residue-fork",
+		Confirmed:   true,
+		Attribution: targetOracleAttributionUnknown,
+	}
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, targetAppendResidueForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+targetAppendResidueForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsAppendResidueBaseMarker(witness) && outputShowsAppendResidueExtraMarker(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness preserved the appended extra marker in branch-append-note.txt")
+	case outputShowsAppendResidueBaseMarker(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that only the base marker was present in branch-append-note.txt")
+	case outputShowsMissingBranchAppendNote(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that branch-append-note.txt was absent")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable branch-append-note.txt content marker")
+	}
+
+	sawInitialWrite, err := langgraphHistoryShowsWorkspaceFileWrite(workspace, targetAppendResidueNoteArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialWrite {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch-append-note.txt creation")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch-append-note.txt creation")
+	}
+
+	sawInitialAppend, err := langgraphHistoryShowsWorkspaceAppend(workspace, targetAppendResidueNoteArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialAppend {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the append that added the extra marker to branch-append-note.txt")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the append that added the extra marker to branch-append-note.txt")
+	}
+
+	transcript, err := inspectLangGraphForkAppendResidueEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case targetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "append residue occurred without rewriting, deleting, or appending branch-append-note.txt during the fork follow-up")
+			case targetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork preserved the appended extra marker across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from observing the existing contents of branch-append-note.txt")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		oracle.Attribution = targetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateHardlinkResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        "hardlink-residue-fork",
+		Confirmed:   true,
+		Attribution: targetOracleAttributionUnknown,
+	}
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, targetHardlinkResidueForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+targetHardlinkResidueForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsHardlinkResidueMarker(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness preserved branch-hardlink.txt as a hardlink-like entry")
+	case outputShowsMissingBranchHardlink(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that branch-hardlink.txt was absent")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable branch-hardlink.txt marker")
+	}
+
+	sawInitialCreate, err := langgraphHistoryShowsWorkspaceHardlinkCreate(workspace, targetHardlinkResidueLinkArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialCreate {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch-hardlink.txt creation")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch-hardlink.txt creation")
+	}
+
+	transcript, err := inspectLangGraphForkHardlinkResidueEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case targetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "hardlink residue occurred without recreating branch-hardlink.txt during the fork follow-up")
+			case targetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork preserved branch-hardlink.txt across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from observing existing branch-hardlink.txt")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		oracle.Attribution = targetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateFIFOResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        "fifo-residue-fork",
+		Confirmed:   true,
+		Attribution: targetOracleAttributionUnknown,
+	}
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, targetFIFOResidueForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+targetFIFOResidueForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsFIFOResidueMarker(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness preserved branch-fifo as a named pipe")
+	case outputShowsMissingBranchFIFO(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that branch-fifo was absent")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable branch-fifo marker")
+	}
+
+	sawInitialCreate, err := langgraphHistoryShowsWorkspaceFIFOCreate(workspace, targetFIFOResiduePipeArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialCreate {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch-fifo creation")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch-fifo creation")
+	}
+
+	transcript, err := inspectLangGraphForkFIFOResidueEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case targetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "fifo residue occurred without recreating branch-fifo during the fork follow-up")
+			case targetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork preserved branch-fifo across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from observing existing branch-fifo")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		oracle.Attribution = targetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateOpenFDResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        "open-fd-residue-fork",
+		Confirmed:   true,
+		Attribution: targetOracleAttributionUnknown,
+	}
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, targetOpenFDResidueForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+targetOpenFDResidueForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsOpenFDResidueMarker(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness preserved a process that still held branch-fd-note.txt open")
+	case outputShowsMissingOpenFDResidue(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that the branch-fd-note.txt holder was absent")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable branch-fd-note.txt fd marker")
+	}
+
+	sawInitialWrite, err := langgraphHistoryShowsWorkspaceFileWrite(workspace, targetOpenFDResidueNoteArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialWrite {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch-fd-note.txt creation")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch-fd-note.txt creation")
+	}
+
+	sawInitialOpenFD, err := langgraphHistoryShowsWorkspaceOpenFD(workspace, targetOpenFDResidueNoteArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialOpenFD {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch-fd-note.txt fd holder launch")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch-fd-note.txt fd holder launch")
+	}
+
+	transcript, err := inspectLangGraphForkOpenFDResidueEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case targetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "open-fd residue occurred without relaunching the branch-fd-note.txt holder during the fork follow-up")
+			case targetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork preserved the branch-fd-note.txt holder across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness did not come from observing an already-running branch-fd-note.txt holder")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		oracle.Attribution = targetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateDeletedOpenFDResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        "deleted-open-fd-residue-fork",
+		Confirmed:   true,
+		Attribution: targetOracleAttributionUnknown,
+	}
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, targetDeletedOpenFDForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+targetDeletedOpenFDForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsDeletedOpenFDResidueMarker(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness preserved a process that still held the deleted branch-deleted-fd-note.txt inode open")
+	case outputShowsMissingDeletedOpenFDResidue(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that the deleted branch-deleted-fd-note.txt holder was absent")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable deleted-open-fd marker")
+	}
+
+	sawInitialWrite, err := langgraphHistoryShowsWorkspaceFileWrite(workspace, targetDeletedOpenFDNoteArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialWrite {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch-deleted-fd-note.txt creation")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch-deleted-fd-note.txt creation")
+	}
+
+	sawInitialDeletedOpenFD, err := langgraphHistoryShowsWorkspaceDeletedOpenFD(workspace, targetDeletedOpenFDNoteArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialDeletedOpenFD {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the deleted branch-deleted-fd-note.txt holder launch")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the deleted branch-deleted-fd-note.txt holder launch")
+	}
+
+	transcript, err := inspectLangGraphForkDeletedOpenFDResidueEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case targetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "deleted-open-fd residue occurred without relaunching the deleted branch-deleted-fd-note.txt holder during the fork follow-up")
+			case targetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork preserved the deleted branch-deleted-fd-note.txt holder across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness did not come from observing an already-running deleted branch-deleted-fd-note.txt holder")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		oracle.Attribution = targetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateInheritedFDLeakTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        "inherited-fd-branch-leakage",
+		Confirmed:   true,
+		Attribution: targetOracleAttributionUnknown,
+	}
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, targetInheritedFDLeakForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+targetInheritedFDLeakForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsInheritedFDLeakageMarker(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness recovered the discarded branch secret through an inherited fd")
+	case outputShowsMissingInheritedFDLeakage(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that the inherited fd secret was absent")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable inherited fd branch-leakage marker")
+	}
+
+	sawInitialWrite, err := langgraphHistoryShowsWorkspaceFileWrite(workspace, targetInheritedFDLeakSecretArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialWrite {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch secret creation")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch secret creation")
+	}
+
+	sawInitialHolder, err := langgraphHistoryShowsWorkspaceDeletedOpenFD(workspace, targetInheritedFDLeakSecretArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialHolder {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the discarded branch fd holder launch")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the discarded branch fd holder launch")
+	}
+
+	transcript, err := inspectLangGraphForkInheritedFDLeakEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case targetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "inherited fd leakage occurred without relaunching or recreating the discarded branch secret during the fork follow-up")
+			case targetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork preserved the discarded branch fd capability across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from reading an already-running discarded branch fd holder")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		oracle.Attribution = targetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateUnixListenerResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        "unix-listener-residue-fork",
+		Confirmed:   true,
+		Attribution: targetOracleAttributionUnknown,
+	}
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, targetUnixListenerForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+targetUnixListenerForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsUnixListenerResidueMarker(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness received a response from the branch Unix listener")
+	case outputShowsMissingUnixListenerResidue(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that the branch Unix listener was absent")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable Unix listener marker")
+	}
+
+	sawInitialLaunch, err := langgraphHistoryShowsUnixListenerLaunch(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialLaunch {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch Unix listener launch")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch Unix listener launch")
+	}
+
+	transcript, err := inspectLangGraphForkUnixListenerResidueEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case targetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "Unix listener residue occurred without relaunching the branch listener during the fork follow-up")
+			case targetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork preserved the branch Unix listener across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from connecting to an already-running branch Unix listener")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		oracle.Attribution = targetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == targetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateLongDelayTargetOracle(completed bool, lineage ProcessLineageSummary, lateObserved bool, latePresent []string, lateMissing []string) TargetOracleResult {
+	oracle := newTargetOracleResult("orphan-process-long-delay")
+	if !completed {
+		markTargetOracleNegative(&oracle, "target command completed successfully")
+	} else {
 		oracle.Evidence = append(oracle.Evidence, "target command completed before the delayed effect")
 	}
 	if lineage.WorkspaceNewAtBoundary == 0 {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "workspace process appeared at command boundary")
+		markTargetOracleNegative(&oracle, "workspace process appeared at command boundary")
 	} else {
 		oracle.Evidence = append(oracle.Evidence, fmt.Sprintf("workspace processes at command boundary: %d", lineage.WorkspaceNewAtBoundary))
 	}
 	if lineage.WorkspaceRemainingAfter == 0 {
-		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "workspace process remained after immediate observation")
+		markTargetOracleNegative(&oracle, "workspace process remained after immediate observation")
 	} else {
 		oracle.Evidence = append(oracle.Evidence, fmt.Sprintf("workspace processes remaining after immediate observation: %d", lineage.WorkspaceRemainingAfter))
 	}
@@ -1238,13 +2065,12 @@ func evaluateLongDelayTargetOracle(completed bool, lineage ProcessLineageSummary
 		if containsString(latePresent, longDelayTargetLateEffectArtifact) {
 			oracle.Evidence = append(oracle.Evidence, "late-effect appeared during late observation")
 		} else {
-			oracle.Confirmed = false
-			oracle.Missing = append(oracle.Missing, lateMissing...)
+			markTargetOracleNegative(&oracle, lateMissing...)
 		}
 	} else {
 		oracle.Evidence = append(oracle.Evidence, "late observation was not requested")
 	}
-	return oracle
+	return finalizeTargetOracle(oracle)
 }
 
 func replayAttributionMissingReason(attribution string) string {
@@ -1485,32 +2311,28 @@ func targetTaskEnvOverrides(taskID string) map[string]string {
 		"SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR": "",
 		"SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE":   "",
 		"SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND":  "memory",
+		"SYNCFUZZ_LANGGRAPH_PROCESS_MODE":        "single",
 	}
-	switch taskID {
-	case "", defaultTargetTaskID, longDelayTargetTaskID, persistentShellTargetTaskID:
-		return base
-	case persistentShellReplayTargetTaskID:
-		base["SYNCFUZZ_LANGGRAPH_REPLAY"] = "true"
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] = "before-path-export"
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] = "disk"
-		return base
-	case persistentShellForkTargetTaskID:
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] = "before-path-export"
-		base["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = langgraphForkVerificationMessage()
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] = "disk"
-		return base
-	case fileResidueForkTargetTaskID, directoryResidueForkTargetTaskID, deleteResidueForkTargetTaskID, symlinkResidueForkTargetTaskID:
-		spec, ok := workspaceResidueTaskSpecByID(taskID)
-		if !ok {
-			return nil
-		}
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] = spec.CheckpointSelector
-		base["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = spec.ForkVerificationMessage
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] = "disk"
-		return base
-	default:
+	scenario, ok := targetScenarioByID(taskID)
+	if !ok {
 		return nil
 	}
+	if scenario.Lifecycle.Replay {
+		base["SYNCFUZZ_LANGGRAPH_REPLAY"] = "true"
+	}
+	if scenario.Lifecycle.CheckpointSelector != "" {
+		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] = scenario.Lifecycle.CheckpointSelector
+	}
+	if scenario.Lifecycle.ForkMessage != "" {
+		base["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = scenario.Lifecycle.ForkMessage
+	}
+	if scenario.Lifecycle.CheckpointBackend != "" {
+		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] = scenario.Lifecycle.CheckpointBackend
+	}
+	if scenario.Lifecycle.ProcessMode != "" {
+		base["SYNCFUZZ_LANGGRAPH_PROCESS_MODE"] = scenario.Lifecycle.ProcessMode
+	}
+	return base
 }
 
 func langgraphForkVerificationMessage() string {
@@ -1518,23 +2340,23 @@ func langgraphForkVerificationMessage() string {
 }
 
 func langgraphFileResidueForkVerificationMessage() string {
-	spec, _ := workspaceResidueTaskSpecByID(fileResidueForkTargetTaskID)
-	return spec.ForkVerificationMessage
+	scenario, _ := targetScenarioByID(fileResidueForkTargetTaskID)
+	return scenario.Lifecycle.ForkMessage
 }
 
 func langgraphDirectoryResidueForkVerificationMessage() string {
-	spec, _ := workspaceResidueTaskSpecByID(directoryResidueForkTargetTaskID)
-	return spec.ForkVerificationMessage
+	scenario, _ := targetScenarioByID(directoryResidueForkTargetTaskID)
+	return scenario.Lifecycle.ForkMessage
 }
 
 func langgraphDeleteResidueForkVerificationMessage() string {
-	spec, _ := workspaceResidueTaskSpecByID(deleteResidueForkTargetTaskID)
-	return spec.ForkVerificationMessage
+	scenario, _ := targetScenarioByID(deleteResidueForkTargetTaskID)
+	return scenario.Lifecycle.ForkMessage
 }
 
 func langgraphSymlinkResidueForkVerificationMessage() string {
-	spec, _ := workspaceResidueTaskSpecByID(symlinkResidueForkTargetTaskID)
-	return spec.ForkVerificationMessage
+	scenario, _ := targetScenarioByID(symlinkResidueForkTargetTaskID)
+	return scenario.Lifecycle.ForkMessage
 }
 
 func targetWorkspaceForEnvironment(run *runContext) string {

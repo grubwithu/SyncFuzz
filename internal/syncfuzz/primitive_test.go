@@ -47,6 +47,28 @@ func TestBuildScheduleMatrixIncludesExecutableDoubleFork(t *testing.T) {
 	}
 }
 
+func TestBuildScheduleMatrixIncludesExecutableOpenFD(t *testing.T) {
+	matrix, err := BuildScheduleMatrix(MatrixOptions{
+		Cases:            []string{"partial-filesystem-rollback"},
+		TimingProfileIDs: []string{"baseline"},
+	})
+	if err != nil {
+		t.Fatalf("BuildScheduleMatrix failed: %v", err)
+	}
+	var found bool
+	for _, candidate := range matrix.Candidates {
+		if candidate.PrimitiveID == "open-fd" {
+			found = true
+			if !candidate.Implemented {
+				t.Fatalf("expected open-fd candidate to be executable")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected open-fd in executable partial-filesystem-rollback matrix: %#v", matrix.Candidates)
+	}
+}
+
 func TestBuildScheduleMatrixEnumeratesCandidates(t *testing.T) {
 	matrix, err := BuildScheduleMatrix(MatrixOptions{
 		Cases:            []string{"action-replay"},
