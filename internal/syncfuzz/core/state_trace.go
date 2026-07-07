@@ -1,0 +1,292 @@
+package core
+
+import (
+	"path/filepath"
+	"sort"
+	"time"
+)
+
+const (
+	AgentStateArtifact = "agent-state.json"
+	StateTraceArtifact = "state-trace.json"
+)
+
+type StateObservation struct {
+	Layer       string `json:"layer"`
+	StateClass  string `json:"state_class"`
+	Phase       string `json:"phase"`
+	Artifact    string `json:"artifact"`
+	Kind        string `json:"kind"`
+	Description string `json:"description,omitempty"`
+}
+
+type StateLayerSummary struct {
+	Layer        string   `json:"layer"`
+	Present      bool     `json:"present"`
+	StateClasses []string `json:"state_classes,omitempty"`
+	Artifacts    []string `json:"artifacts,omitempty"`
+	Phases       []string `json:"phases,omitempty"`
+}
+
+type LifecyclePhase struct {
+	Phase string `json:"phase"`
+	Label string `json:"label"`
+}
+
+type AgentStateProjection struct {
+	RunID             string            `json:"run_id"`
+	CaseName          string            `json:"case_name"`
+	RunRole           string            `json:"run_role,omitempty"`
+	TimingProfileID   string            `json:"timing_profile_id,omitempty"`
+	Environment       string            `json:"environment"`
+	ContainerImage    string            `json:"container_image,omitempty"`
+	GeneratedAt       string            `json:"generated_at"`
+	Objective         string            `json:"objective"`
+	StateClasses      []string          `json:"state_classes"`
+	FaultPhases       []string          `json:"fault_phases"`
+	Primitives        []string          `json:"primitives"`
+	ExpectedSignature MismatchSignature `json:"expected_signature"`
+	Confirmed         bool              `json:"confirmed"`
+	Evidence          []string          `json:"evidence"`
+}
+
+type CrossLayerTrace struct {
+	SchemaVersion     string              `json:"schema_version"`
+	RunID             string              `json:"run_id"`
+	CaseName          string              `json:"case_name"`
+	RunRole           string              `json:"run_role,omitempty"`
+	TimingProfileID   string              `json:"timing_profile_id,omitempty"`
+	Environment       string              `json:"environment"`
+	ContainerImage    string              `json:"container_image,omitempty"`
+	GeneratedAt       string              `json:"generated_at"`
+	PhaseCatalog      []LifecyclePhase    `json:"phase_catalog"`
+	Layers            []StateLayerSummary `json:"layers"`
+	Observations      []StateObservation  `json:"observations"`
+	ExpectedSignature MismatchSignature   `json:"expected_signature"`
+	Confirmed         bool                `json:"confirmed"`
+}
+
+func WriteCrossLayerArtifacts(run *RunContext, manifest CaseManifest, confirmed bool, evidence []string, observations []StateObservation) error {
+	generatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	agent := AgentStateProjection{
+		RunID:             run.RunID,
+		CaseName:          run.CaseName,
+		RunRole:           run.RunRole,
+		TimingProfileID:   run.Timing.ProfileID,
+		Environment:       run.Environment,
+		ContainerImage:    run.ContainerImage,
+		GeneratedAt:       generatedAt,
+		Objective:         manifest.Objective,
+		StateClasses:      manifest.StateClasses,
+		FaultPhases:       manifest.FaultPhases,
+		Primitives:        manifest.Primitives,
+		ExpectedSignature: manifest.ExpectedSignature,
+		Confirmed:         confirmed,
+		Evidence:          evidence,
+	}
+	if err := WriteJSON(filepath.Join(run.RunDir, AgentStateArtifact), agent); err != nil {
+		return err
+	}
+
+	observations = append([]StateObservation{{
+		Layer:       "agent",
+		StateClass:  "agent-logical",
+		Phase:       "oracle",
+		Artifact:    AgentStateArtifact,
+		Kind:        "agent-state-projection",
+		Description: "deterministic projection of the agent-side lifecycle and oracle state",
+	}}, observations...)
+	if observation, ok := faultPlanObservation(run); ok {
+		observations = append([]StateObservation{observation}, observations...)
+	}
+
+	trace := BuildCrossLayerTrace(run, manifest.ExpectedSignature, confirmed, generatedAt, observations)
+	if err := WriteJSON(filepath.Join(run.RunDir, StateTraceArtifact), trace); err != nil {
+		return err
+	}
+	return run.Trace.Write(NewEvent(run, "oracle", "cross_layer_trace_written", map[string]any{
+		"artifact":          StateTraceArtifact,
+		"agent_artifact":    AgentStateArtifact,
+		"observation_count": len(trace.Observations),
+		"layers":            PresentLayerNames(trace.Layers),
+	}))
+}
+
+func BuildCrossLayerTrace(run *RunContext, signature MismatchSignature, confirmed bool, generatedAt string, observations []StateObservation) CrossLayerTrace {
+	sortStateObservations(observations)
+	return CrossLayerTrace{
+		SchemaVersion:     "syncfuzz.state-trace.v1",
+		RunID:             run.RunID,
+		CaseName:          run.CaseName,
+		RunRole:           run.RunRole,
+		TimingProfileID:   run.Timing.ProfileID,
+		Environment:       run.Environment,
+		ContainerImage:    run.ContainerImage,
+		GeneratedAt:       generatedAt,
+		PhaseCatalog:      lifecyclePhaseCatalog(),
+		Layers:            summarizeStateLayers(observations),
+		Observations:      observations,
+		ExpectedSignature: signature,
+		Confirmed:         confirmed,
+	}
+}
+
+func lifecyclePhaseCatalog() []LifecyclePhase {
+	return []LifecyclePhase{
+		{Phase: "P0", Label: "before tool intent or testcase setup"},
+		{Phase: "P1", Label: "after intent before dispatch"},
+		{Phase: "P2", Label: "after shell receives command"},
+		{Phase: "P3", Label: "after child process creation"},
+		{Phase: "P4", Label: "after first OS, external, or authority effect"},
+		{Phase: "P5", Label: "after command finishes before result delivery"},
+		{Phase: "P6", Label: "after result delivery before checkpoint persistence"},
+		{Phase: "P7", Label: "after checkpoint persistence before acknowledgment"},
+		{Phase: "P8", Label: "during replay, resume, or alternate branch commit"},
+		{Phase: "oracle", Label: "oracle verdict and artifact finalization"},
+	}
+}
+
+func summarizeStateLayers(observations []StateObservation) []StateLayerSummary {
+	knownLayers := []string{"agent", "os", "external", "authority"}
+	byLayer := make(map[string][]StateObservation)
+	for _, observation := range observations {
+		byLayer[observation.Layer] = append(byLayer[observation.Layer], observation)
+	}
+
+	summaries := make([]StateLayerSummary, 0, len(knownLayers))
+	for _, layer := range knownLayers {
+		layerObservations := byLayer[layer]
+		summaries = append(summaries, StateLayerSummary{
+			Layer:        layer,
+			Present:      len(layerObservations) > 0,
+			StateClasses: UniqueObservationValues(layerObservations, func(o StateObservation) string { return o.StateClass }),
+			Artifacts:    UniqueObservationValues(layerObservations, func(o StateObservation) string { return o.Artifact }),
+			Phases:       UniqueObservationValues(layerObservations, func(o StateObservation) string { return o.Phase }),
+		})
+	}
+	return summaries
+}
+
+func PresentLayerNames(layers []StateLayerSummary) []string {
+	var names []string
+	for _, layer := range layers {
+		if layer.Present {
+			names = append(names, layer.Layer)
+		}
+	}
+	return names
+}
+
+func UniqueObservationValues(observations []StateObservation, value func(StateObservation) string) []string {
+	seen := make(map[string]struct{})
+	for _, observation := range observations {
+		item := value(observation)
+		if item == "" {
+			continue
+		}
+		seen[item] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for item := range seen {
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		leftRank := phaseRank(out[i])
+		rightRank := phaseRank(out[j])
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		return out[i] < out[j]
+	})
+	return out
+}
+
+func sortStateObservations(observations []StateObservation) {
+	sort.Slice(observations, func(i, j int) bool {
+		leftRank := phaseRank(observations[i].Phase)
+		rightRank := phaseRank(observations[j].Phase)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		if observations[i].Layer != observations[j].Layer {
+			return observations[i].Layer < observations[j].Layer
+		}
+		if observations[i].StateClass != observations[j].StateClass {
+			return observations[i].StateClass < observations[j].StateClass
+		}
+		return observations[i].Artifact < observations[j].Artifact
+	})
+}
+
+func phaseRank(phase string) int {
+	switch phase {
+	case "P0":
+		return 0
+	case "P1":
+		return 1
+	case "P2":
+		return 2
+	case "P3":
+		return 3
+	case "P4":
+		return 4
+	case "P5":
+		return 5
+	case "P6":
+		return 6
+	case "P7":
+		return 7
+	case "P8":
+		return 8
+	case "oracle":
+		return 99
+	default:
+		return 50
+	}
+}
+
+func AppendPhase2Artifacts(artifacts []string) []string {
+	out := make([]string, 0, len(artifacts)+2)
+	inserted := false
+	for _, artifact := range artifacts {
+		out = AppendUniqueStrings(out, artifact)
+		if artifact == "trace.jsonl" {
+			out = AppendUniqueStrings(out, AgentStateArtifact, StateTraceArtifact, FaultPlanArtifact)
+			inserted = true
+		}
+	}
+	if !inserted {
+		out = AppendUniqueStrings(out, AgentStateArtifact, StateTraceArtifact, FaultPlanArtifact)
+	}
+	return out
+}
+
+func AppendUniqueStrings(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	out := make([]string, 0, len(values)+len(additions))
+	for _, value := range append(values, additions...) {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func faultPlanObservation(run *RunContext) (StateObservation, bool) {
+	if run == nil || run.FaultPlan.ID == "" {
+		return StateObservation{}, false
+	}
+	return StateObservation{
+		Layer:       "agent",
+		StateClass:  "fault-plan",
+		Phase:       string(run.FaultPlan.InjectPhase),
+		Artifact:    FaultPlanArtifact,
+		Kind:        "fault-plan",
+		Description: run.FaultPlan.Description,
+	}, true
+}

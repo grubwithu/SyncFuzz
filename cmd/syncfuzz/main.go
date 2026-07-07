@@ -8,7 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grubwithu/syncfuzz/internal/syncfuzz"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/cases"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/scheduler"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
 const version = "0.1.0-mvp"
@@ -39,9 +43,9 @@ func main() {
 	case "campaign":
 		campaign(os.Args[2:])
 	case "target":
-		target(os.Args[2:])
+		runTarget(os.Args[2:])
 	case "corpus":
-		corpus(os.Args[2:])
+		runCorpus(os.Args[2:])
 	case "replay":
 		replay(os.Args[2:])
 	case "version":
@@ -94,14 +98,14 @@ Usage:
 }
 
 func list() {
-	for _, c := range syncfuzz.Cases() {
+	for _, c := range core.Cases() {
 		fmt.Printf("%-30s %s\n", c.Name, c.Description)
 	}
 }
 
 func faultPlans() {
 	fmt.Printf("%-58s %-28s %-5s %-28s %s\n", "id", "case", "phase", "impact", "fault")
-	for _, plan := range syncfuzz.FaultPlans() {
+	for _, plan := range core.FaultPlans() {
 		fmt.Printf("%-58s %-28s %-5s %-28s %s\n",
 			plan.ID,
 			plan.CaseName,
@@ -114,7 +118,7 @@ func faultPlans() {
 
 func timingProfiles() {
 	fmt.Printf("%-12s %-16s %-16s %-14s %s\n", "id", "recovery", "orphan_child", "replay", "description")
-	for _, profile := range syncfuzz.TimingProfiles() {
+	for _, profile := range core.TimingProfiles() {
 		recoveryDelay := profile.RecoveryDelay
 		if recoveryDelay == "" {
 			recoveryDelay = "<--delay>"
@@ -137,7 +141,7 @@ func primitives() {
 	}
 
 	fmt.Printf("%-30s %-12s %-7s %-28s %s\n", "id", "category", "ready", "cases", "description")
-	for _, primitive := range syncfuzz.MutationPrimitives() {
+	for _, primitive := range core.MutationPrimitives() {
 		if !*includePlanned && !primitive.Implemented {
 			continue
 		}
@@ -160,7 +164,7 @@ func matrix(args []string) {
 		os.Exit(2)
 	}
 
-	result, err := syncfuzz.BuildScheduleMatrix(syncfuzz.MatrixOptions{
+	result, err := scheduler.BuildScheduleMatrix(scheduler.MatrixOptions{
 		Cases:            splitCases(*caseList),
 		TimingProfileIDs: splitCSV(*timingList),
 		IncludePlanned:   *includePlanned,
@@ -199,12 +203,12 @@ func run(args []string) {
 	faultPlanID := fs.String("fault-plan", "", "fault plan id; defaults to the testcase known-answer plan")
 	primitiveID := fs.String("primitive", "", "optional mutation primitive id")
 	timingProfileID := fs.String("timing", "", "timing profile id; defaults to baseline")
-	runRole := fs.String("role", syncfuzz.RunRoleFault, "run role: fault or control")
+	runRole := fs.String("role", core.RunRoleFault, "run role: fault or control")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
-	opts := syncfuzz.RunOptions{
+	opts := core.RunOptions{
 		CaseName:        *caseName,
 		OutDir:          *outDir,
 		Workspace:       *workspace,
@@ -220,7 +224,7 @@ func run(args []string) {
 
 	// The CLI is intentionally thin: all testcase semantics live in the
 	// syncfuzz package so future adapters can reuse the same runner directly.
-	result, err := syncfuzz.Run(context.Background(), opts)
+	result, err := cases.Run(context.Background(), opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz run failed: %v\n", err)
 		os.Exit(1)
@@ -254,7 +258,7 @@ func pair(args []string) {
 		os.Exit(2)
 	}
 
-	result, err := syncfuzz.RunPair(context.Background(), syncfuzz.PairOptions{
+	result, err := scheduler.RunPair(context.Background(), scheduler.PairOptions{
 		CaseName:        *caseName,
 		OutDir:          *outDir,
 		Delay:           *delay,
@@ -311,7 +315,7 @@ func suite(args []string) {
 		timingProfile = ""
 	}
 
-	result, err := syncfuzz.RunSuite(context.Background(), syncfuzz.SuiteOptions{
+	result, err := scheduler.RunSuite(context.Background(), scheduler.SuiteOptions{
 		OutDir:           *outDir,
 		Repeat:           *repeat,
 		Cases:            splitCases(*caseList),
@@ -411,7 +415,7 @@ func campaign(args []string) {
 		os.Exit(2)
 	}
 
-	result, err := syncfuzz.RunCampaign(context.Background(), syncfuzz.CampaignOptions{
+	result, err := scheduler.RunCampaign(context.Background(), scheduler.CampaignOptions{
 		OutDir:           *outDir,
 		CorpusDir:        *corpusDir,
 		Rounds:           *rounds,
@@ -459,7 +463,7 @@ func campaign(args []string) {
 	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
 }
 
-func target(args []string) {
+func runTarget(args []string) {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, scenarios, groups, prompt-profiles, matrix, run, suite, or campaign")
 		os.Exit(2)
@@ -491,7 +495,7 @@ func target(args []string) {
 
 func targetList() {
 	fmt.Printf("%-14s %-7s %-48s %s\n", "adapter", "ready", "capabilities", "description")
-	for _, adapter := range syncfuzz.TargetAdapters() {
+	for _, adapter := range target.TargetAdapters() {
 		fmt.Printf("%-14s %-7t %-48s %s\n",
 			adapter.AdapterID,
 			adapter.Implemented,
@@ -503,7 +507,7 @@ func targetList() {
 
 func targetTasks() {
 	fmt.Printf("%-28s %-5s %-28s %s\n", "task", "late", "default_expected", "description")
-	for _, task := range syncfuzz.TargetTasks() {
+	for _, task := range target.TargetTasks() {
 		fmt.Printf("%-28s %-5t %-28s %s\n",
 			task.TaskID,
 			task.UsesLateObservation,
@@ -515,7 +519,7 @@ func targetTasks() {
 
 func targetScenarios() {
 	fmt.Printf("%-28s %-28s %-24s %s\n", "scenario", "state_surface", "lifecycle_edge", "components")
-	for _, scenario := range syncfuzz.TargetScenarios() {
+	for _, scenario := range target.TargetScenarios() {
 		parts := make([]string, 0, len(scenario.Components))
 		for _, component := range scenario.Components {
 			parts = append(parts, fmt.Sprintf("%s:%s", component.Role, component.Summary))
@@ -531,7 +535,7 @@ func targetScenarios() {
 
 func targetGroups() {
 	fmt.Printf("%-22s %-60s %s\n", "group", "tasks", "description")
-	for _, group := range syncfuzz.TargetTaskGroups() {
+	for _, group := range target.TargetTaskGroups() {
 		fmt.Printf("%-22s %-60s %s\n",
 			group.GroupID,
 			strings.Join(group.Tasks, ","),
@@ -542,7 +546,7 @@ func targetGroups() {
 
 func targetPromptProfiles() {
 	fmt.Printf("%-12s %s\n", "profile", "description")
-	for _, profile := range syncfuzz.TargetPromptProfiles() {
+	for _, profile := range target.TargetPromptProfiles() {
 		fmt.Printf("%-12s %s\n", profile.ProfileID, profile.Description)
 	}
 }
@@ -565,7 +569,7 @@ func targetMatrix(args []string) {
 	if len(profileIDs) == 0 && *promptProfile != "" {
 		profileIDs = []string{*promptProfile}
 	}
-	result, err := syncfuzz.BuildTargetScheduleMatrix(syncfuzz.TargetMatrixOptions{
+	result, err := scheduler.BuildTargetScheduleMatrix(scheduler.TargetMatrixOptions{
 		TargetID:         *targetID,
 		Tasks:            tasks,
 		TaskGroups:       groups,
@@ -622,7 +626,7 @@ func targetRun(args []string) {
 		os.Exit(2)
 	}
 
-	result, err := syncfuzz.RunTarget(context.Background(), syncfuzz.TargetRunOptions{
+	result, err := target.RunTarget(context.Background(), target.TargetRunOptions{
 		AdapterID:        *adapterID,
 		TargetID:         *targetID,
 		TaskID:           *taskID,
@@ -740,7 +744,7 @@ func targetSuite(args []string) {
 		profileIDs = []string{*promptProfile}
 	}
 
-	result, err := syncfuzz.RunTargetSuite(context.Background(), syncfuzz.TargetSuiteOptions{
+	result, err := scheduler.RunTargetSuite(context.Background(), scheduler.TargetSuiteOptions{
 		AdapterID:        *adapterID,
 		TargetID:         *targetID,
 		Tasks:            tasks,
@@ -876,7 +880,7 @@ func targetCampaign(args []string) {
 	if len(profileIDs) == 0 && *promptProfile != "" {
 		profileIDs = []string{*promptProfile}
 	}
-	result, err := syncfuzz.RunTargetCampaign(context.Background(), syncfuzz.TargetCampaignOptions{
+	result, err := scheduler.RunTargetCampaign(context.Background(), scheduler.TargetCampaignOptions{
 		AdapterID:        *adapterID,
 		TargetID:         *targetID,
 		Tasks:            tasks,
@@ -958,7 +962,7 @@ func resolveTargetTaskSelection(taskID string, taskList string, taskGroup string
 	return tasks, groups
 }
 
-func corpus(args []string) {
+func runCorpus(args []string) {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "missing corpus subcommand: list, show, or verify")
 		os.Exit(2)
@@ -988,7 +992,7 @@ func corpusAnalyze(args []string) {
 		os.Exit(2)
 	}
 
-	result, err := syncfuzz.AnalyzeCorpus(syncfuzz.CorpusAnalyzeOptions{
+	result, err := corpus.AnalyzeCorpus(corpus.CorpusAnalyzeOptions{
 		CorpusDir:              *corpusDir,
 		Limit:                  *limit,
 		VerificationResultFile: *verificationFile,
@@ -1044,7 +1048,7 @@ func corpusAnalyze(args []string) {
 	}
 }
 
-func printCorpusAnalysisFieldStats(prefix string, stats []syncfuzz.CorpusAnalysisFieldStats) {
+func printCorpusAnalysisFieldStats(prefix string, stats []corpus.CorpusAnalysisFieldStats) {
 	for _, item := range stats {
 		fmt.Printf("%s[%s]: total=%d\n", prefix, item.Key, item.TotalEntries)
 	}
@@ -1058,7 +1062,7 @@ func corpusList(args []string) {
 		os.Exit(2)
 	}
 
-	entries, err := syncfuzz.ListCorpus(*corpusDir, *limit)
+	entries, err := corpus.ListCorpus(*corpusDir, *limit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz corpus list failed: %v\n", err)
 		os.Exit(1)
@@ -1084,7 +1088,7 @@ func corpusShow(args []string) {
 		os.Exit(2)
 	}
 
-	entry, err := syncfuzz.ShowCorpusEntry(*corpusDir, *entryID)
+	entry, err := corpus.ShowCorpusEntry(*corpusDir, *entryID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz corpus show failed: %v\n", err)
 		os.Exit(1)
@@ -1156,7 +1160,7 @@ func corpusVerify(args []string) {
 		os.Exit(2)
 	}
 
-	result, err := syncfuzz.VerifyCorpus(context.Background(), syncfuzz.VerifyOptions{
+	result, err := corpus.VerifyCorpus(context.Background(), corpus.VerifyOptions{
 		CorpusDir:       *corpusDir,
 		OutDir:          *outDir,
 		Limit:           *limit,
@@ -1229,7 +1233,7 @@ func replay(args []string) {
 		os.Exit(2)
 	}
 
-	result, err := syncfuzz.ReplayCorpusEntry(context.Background(), syncfuzz.ReplayOptions{
+	result, err := corpus.ReplayCorpusEntry(context.Background(), corpus.ReplayOptions{
 		CorpusDir:       *corpusDir,
 		EntryID:         *entryID,
 		OutDir:          *outDir,

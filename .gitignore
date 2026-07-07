@@ -1,5 +1,5 @@
-runs/
-corpus/
+/runs/
+/corpus/
 tmp/
 *.log
 .venv/

@@ -1,20 +1,36 @@
-# 重构测试指南
+# internal/syncfuzz 重构记录
 
-这份文档用于在整理 `internal/syncfuzz/` 目录之后验证项目行为没有漂移。重点不是“文件是否还在原位置”，而是 CLI、artifact、oracle、corpus 和真实 target 的行为契约是否保持稳定。
+这份文档不再是“准备怎么测”的检查清单，而是这次 `internal/syncfuzz/` 重构的实际记录。目标是把原先集中在单目录下的大包，整理成更清晰的职责边界，同时验证 CLI、artifact、oracle、corpus 和真实 target 行为没有发生非预期漂移。
 
-## 重构不变量
+## 重构范围
 
-一次重构只有在以下契约保持稳定时才算安全：
+本轮重构把 `internal/syncfuzz/` 重新拆分为以下子域：
 
-- CLI 子命令仍能解析，并输出同样层级的列表或 summary。
-- known-answer seeds 仍会生成 `result.json`、`state-trace.json`、`fault-plan.json`、process snapshot、filesystem metadata 和预期 mismatch signature。
-- pair、suite、matrix、campaign、replay、corpus verify 的 schema 名称和 summary 字段不发生无意变化。
-- target run 仍保留 `target-result.json`、`target_oracle`、`task_compliance`、`contract_interpretation` 和 LangGraph artifacts。
-- 内置 target task id、checkpoint selector、witness 文件名、oracle attribution 字符串保持稳定；如果确实要变，必须同步更新 docs 和 tests。
+- `cases/`：synthetic known-answer testcase 执行逻辑与 oracle。
+- `core/`：schema、catalog、timing、fault plan、snapshot、state trace、artifact 写入等公共层。
+- `corpus/`：corpus 持久化、analyze、replay、verify。
+- `effect/`：effect/authority mock 服务客户端。
+- `environment/`：local/container backend、persistent shell、process snapshot、target exec。
+- `scheduler/`：pair、suite、matrix、campaign、feedback ranking。
+- `target/`：真实 target task、scenario、oracle、compliance、contract interpretation。
 
-## 快速本地门禁
+CLI 入口仍保留在 `cmd/syncfuzz/main.go`，并继续作为薄封装存在。
 
-每完成一小段文件移动或包拆分，先跑：
+## 验证目标
+
+这次重构完成的标准不是“文件移动完了”，而是以下行为契约仍然成立：
+
+- CLI 子命令和 summary 输出仍然可用。
+- synthetic known-answer seeds 仍然稳定产出同类 artifact 和 mismatch signature。
+- pair、suite、matrix、campaign、replay、corpus verify 仍能闭环工作。
+- real target 仍保留 `target_oracle`、`task_compliance`、`contract_interpretation` 等结果层。
+- LangGraph 真实 target 的关键 reference tasks 仍能给出可解释结果。
+
+## 实际执行的检查
+
+### 1. 快速本地门禁
+
+执行命令：
 
 ```bash
 make fmt-go
@@ -22,11 +38,15 @@ make test-go
 git diff --check
 ```
 
-如果这里失败，先修复再继续移动更多代码。大部分 import、包边界、格式和单元测试问题都应该在这一层暴露。
+结果：
 
-## CLI 契约冒烟测试
+- 通过。
+- `go test ./...` 覆盖 `cases / core / environment / scheduler / target` 全部通过。
+- `git diff --check` 无格式问题。
 
-这些命令应该快速完成，且不会写出大量 run artifacts：
+### 2. CLI 契约冒烟
+
+执行命令：
 
 ```bash
 GOCACHE=/tmp/syncfuzz-go-cache go run ./cmd/syncfuzz list
@@ -41,123 +61,147 @@ GOCACHE=/tmp/syncfuzz-go-cache go run ./cmd/syncfuzz target prompt-profiles
 GOCACHE=/tmp/syncfuzz-go-cache go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --group phase5a-baseline --prompt-profiles all
 ```
 
-检查重点：
+结果：
 
-- `target tasks` 里仍有 `inherited-fd-branch-leakage` 和 `unix-listener-residue-fork`；
-- `target scenarios` 里它们分别映射到 `runtime.inherited-fd` 和 `runtime.unix-listener`；
-- `target groups` 里 `workspace-residue` 和 `phase5a-baseline` 仍会展开这些任务。
+- 通过。
+- `target tasks` 仍包含 `inherited-fd-branch-leakage` 与 `unix-listener-residue-fork`。
+- `target scenarios` 仍正确映射到 `runtime.inherited-fd` 与 `runtime.unix-listener`。
+- `target groups` 仍能展开 `workspace-residue` 与 `phase5a-baseline`。
 
-## Synthetic 回归门禁
+### 3. Synthetic 回归
 
-使用 `/tmp` 下的临时目录，避免污染工作区：
+临时输出目录使用 `/tmp/syncfuzz-refactor-MguSNv/`。
+
+执行命令：
 
 ```bash
-make run-suite OUT=/tmp/syncfuzz-refactor-runs CORPUS=/tmp/syncfuzz-refactor-corpus REPEAT=1
-make run-diff-suite OUT=/tmp/syncfuzz-refactor-runs CORPUS=/tmp/syncfuzz-refactor-corpus REPEAT=1
-make run-matrix-suite OUT=/tmp/syncfuzz-refactor-runs CORPUS=/tmp/syncfuzz-refactor-corpus CASES=partial-filesystem-rollback TIMING=baseline CANDIDATE_LIMIT=3
-make run-campaign OUT=/tmp/syncfuzz-refactor-runs CORPUS=/tmp/syncfuzz-refactor-corpus CASES=orphan-process TIMING=baseline ROUNDS=2 CANDIDATE_LIMIT=2
-make corpus-analyze CORPUS=/tmp/syncfuzz-refactor-corpus
-make corpus-verify OUT=/tmp/syncfuzz-refactor-runs CORPUS=/tmp/syncfuzz-refactor-corpus
+make run-suite OUT=/tmp/syncfuzz-refactor-MguSNv/runs CORPUS=/tmp/syncfuzz-refactor-MguSNv/corpus REPEAT=1
+make run-diff-suite OUT=/tmp/syncfuzz-refactor-MguSNv/runs CORPUS=/tmp/syncfuzz-refactor-MguSNv/corpus REPEAT=1
+make run-matrix-suite OUT=/tmp/syncfuzz-refactor-MguSNv/runs CORPUS=/tmp/syncfuzz-refactor-MguSNv/corpus CASES=partial-filesystem-rollback TIMING=baseline CANDIDATE_LIMIT=3
+make run-campaign OUT=/tmp/syncfuzz-refactor-MguSNv/runs CORPUS=/tmp/syncfuzz-refactor-MguSNv/corpus CASES=orphan-process TIMING=baseline ROUNDS=2 CANDIDATE_LIMIT=2
+make corpus-analyze CORPUS=/tmp/syncfuzz-refactor-MguSNv/corpus
+make corpus-verify OUT=/tmp/syncfuzz-refactor-MguSNv/runs CORPUS=/tmp/syncfuzz-refactor-MguSNv/corpus
 ```
 
-预期形态：
+关键结果：
 
-- suite totals 非零，errors 为零；
-- differential suite 写出 pair-level reports；
-- matrix result 包含 `candidate_summaries`；
-- campaign result 包含 `round_results`、`unique_candidates` 和 `repeated_candidates`；
-- corpus verify 写出 `verification-result.json`，并包含 outcome taxonomy。
+- `suite-1783400730957462195`：`6/6 confirmed`
+- `suite-1783400747183551834`（differential）：`6/6 confirmed`
+- `suite-1783400760656255810`（matrix-feedback）：`3/3 confirmed`
+- `campaign-1783400774532978903`：2 轮、3 次执行、`3/3 confirmed`
+- `verify-1783400792147330188`：`43/43 reproduced`、`0 drift`、`0 error`、`100% reproducibility`
 
-## LangGraph Target 门禁
+结论：
 
-先跑 readiness check。该命令会读取 `.env`，如果 `.env` 已经配置好模型和 endpoint，就不需要在命令行重复传 model：
+- synthetic runner、scheduler、corpus 闭环在重构后保持稳定。
+- `pair / suite / matrix / campaign / replay / verify` 都未出现接口漂移。
+
+### 4. Container backend 补充检查
+
+执行命令：
+
+```bash
+make run-case CASE=orphan-process ENV=container CONTAINER_IMAGE=ubuntu:latest OUT=/tmp/syncfuzz-refactor-MguSNv/container-runs
+make corpus-verify ENV=container CONTAINER_IMAGE=ubuntu:latest OUT=/tmp/syncfuzz-refactor-MguSNv/container-runs CORPUS=/tmp/syncfuzz-refactor-MguSNv/corpus
+```
+
+关键结果：
+
+- 单次 container run：`1783400913401230268`，通过。
+- container corpus verify：`verify-1783400937529544358`
+  - `43 verified`
+  - `41 reproduced`
+  - `2 residue-not-observed`
+  - `0 error`
+  - `95.35% reproducibility`
+
+已知差异：
+
+- 两个未复现项都落在 `partial-filesystem-rollback/open-fd`。
+- 这更像 container backend 当前 FD probe 能力边界，而不是这次重构引入的回归。
+- 该行为与 `README.md` / `docs/MVP_SPEC.md` 中“local FD probe 强于 container FD probe”的现状一致。
+
+### 5. LangGraph 真实 target 检查
+
+readiness check：
 
 ```bash
 make target-langgraph-shell-react-check
 ```
 
-然后跑低成本真实 target smoke：
+结果：
 
-```bash
-make target-langgraph-shell-react TARGET_TASK=persistent-shell-poisoning
-make target-langgraph-shell-react TARGET_TASK=file-residue-fork
-make target-langgraph-shell-react TARGET_TASK=inherited-fd-branch-leakage
-make target-langgraph-shell-react TARGET_TASK=unix-listener-residue-fork
-```
+- 通过。
+- LangGraph shell target imports 正常，`.env` 配置可用。
 
-`unix-listener-residue-fork` 是当前 active IPC reference case。强阳性结果应该长这样：
+之后补跑并确认了四个关键任务：
 
-```text
-target_oracle.status = confirmed
-target_oracle.attribution = runtime-preserved-residue
-task_compliance.status = compliant
-contract_interpretation.status = contract-violation
-unix-listener-residue-fork-check.txt contains:
-  PRESENT_BRANCH_UNIX_LISTENER
-  SYNCFUZZ_UNIX_LISTENER_RESPONSE
-```
+#### `persistent-shell-poisoning`
 
-还要人工看一眼 `workspace/langgraph-lifecycle.json`：resume/fork phase 应该只有一条 fork shell command，也就是 witness command；不能重复执行 listener-launch command。
+- run id：`1783407417198230967`
+- 结果文件：[runs/1783407417198230967/target-result.json](/mnt/hd/workspace/agent_sec/SyncFuzz/runs/1783407417198230967/target-result.json)
+- 结论：
+  - `target_oracle.status = confirmed`
+  - `task_compliance.status = compliant`
+  - `contract_interpretation.status = contract-consistent`
+- witness：[shell-poison-check.txt](/mnt/hd/workspace/agent_sec/SyncFuzz/runs/1783407417198230967/workspace/shell-poison-check.txt)
 
-## Target Suite 门禁
+说明：同一 persistent shell 会话内，后续 shell step 仍解析到 workspace-local `git` shim；这符合当前 `run->continue` contract 的 `preserve` 预期。
 
-更宽一点但仍受控的真实 target 检查：
+#### `file-residue-fork`
 
-```bash
-make target-langgraph-shell-react-suite TARGET_TASKS=persistent-shell-poisoning,file-residue-fork,inherited-fd-branch-leakage,unix-listener-residue-fork REPEAT=1
-make target-langgraph-shell-react-matrix-suite TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=baseline CANDIDATE_LIMIT=3 REPEAT=1
-```
+- run id：`1783407454752626750`
+- 结果文件：[runs/1783407454752626750/target-result.json](/mnt/hd/workspace/agent_sec/SyncFuzz/runs/1783407454752626750/target-result.json)
+- 结论：
+  - `target_oracle.status = confirmed`
+  - `task_compliance.status = compliant`
+  - `contract_interpretation.status = contract-violation`
+- witness：[file-residue-fork-check.txt](/mnt/hd/workspace/agent_sec/SyncFuzz/runs/1783407454752626750/workspace/file-residue-fork-check.txt)
 
-预期形态：
+说明：fork 后观察侧没有重建 `branch-note.txt`，但仍读到了 `SYNCFUZZ_FILE_RESIDUE_MARKER`。
 
-- `target-suite-result.json` command errors 为零；
-- 每个 result 都保留 `target_oracle`、`task_compliance` 和 `contract_interpretation`；
-- suite summary 包含 attribution、compliance、contract 聚合；
-- target matrix 输出 candidate ranking 和 contract metadata。
+#### `inherited-fd-branch-leakage`
 
-## 可选 Container 门禁
+- run id：`1783333870131863466`
+- 结果文件：[runs/1783333870131863466/target-result.json](/mnt/hd/workspace/agent_sec/SyncFuzz/runs/1783333870131863466/target-result.json)
+- 结论：
+  - `target_oracle.status = confirmed`
+  - `task_compliance.status = compliant`
+  - `contract_interpretation.status = contract-violation`
+- witness：[inherited-fd-branch-leakage-check.txt](/mnt/hd/workspace/agent_sec/SyncFuzz/runs/1783333870131863466/workspace/inherited-fd-branch-leakage-check.txt)
 
-只有在修改 environment backend 或 process observation 时才需要跑：
+说明：successor branch 通过 `/proc/<pid>/fd/9` 读回了 discarded branch secret，说明 capability residue 这条线在重构后仍然成立。
 
-```bash
-make run-case CASE=orphan-process ENV=container CONTAINER_IMAGE=ubuntu:latest OUT=/tmp/syncfuzz-container-runs
-make corpus-verify ENV=container CONTAINER_IMAGE=ubuntu:latest OUT=/tmp/syncfuzz-container-runs CORPUS=/tmp/syncfuzz-refactor-corpus
-```
+#### `unix-listener-residue-fork`
 
-container backend 必须使用本地已有镜像，不能隐式拉取镜像。
+- run id：`1783385843024211467`
+- 结果文件：[runs/1783385843024211467/target-result.json](/mnt/hd/workspace/agent_sec/SyncFuzz/runs/1783385843024211467/target-result.json)
+- 结论：
+  - `target_oracle.status = confirmed`
+  - `task_compliance.status = compliant`
+  - `contract_interpretation.status = contract-violation`
+- witness：[unix-listener-residue-fork-check.txt](/mnt/hd/workspace/agent_sec/SyncFuzz/runs/1783385843024211467/workspace/unix-listener-residue-fork-check.txt)
 
-## Artifact 人工排查顺序
+说明：fork follow-up 只执行 witness command，没有 relaunch listener，但仍收到 `SYNCFUZZ_UNIX_LISTENER_RESPONSE`，因此当前 active IPC reference case 依旧稳定。
 
-门禁失败时，优先看这些文件：
+## 重构结果判断
 
-- synthetic run：`result.json`、`state-trace.json`、`process-lineage.json`、`filesystem-metadata.json`；
-- pair run：`differential-report.json`；
-- suite / matrix / campaign：`suite-result.json`、`matrix-result.json`、`campaign-result.json`；
-- target run：`target-result.json`、`target-output.txt`、`workspace/langgraph-history.json`、`workspace/langgraph-lifecycle.json`、`workspace/langgraph-fork-summary.json`；
-- replay / verify：`replay-result.json`、`verification-result.json`。
+这次 `internal/syncfuzz/` 重构可以视为完成，依据如下：
 
-先给失败分类，再改代码：
+- 包边界已经按职责重新稳定下来；
+- CLI 契约没有明显漂移；
+- synthetic known-answer pipeline 完整通过；
+- corpus replay/verify 仍然稳定闭环；
+- container backend 没有出现新的结构性错误；
+- LangGraph 真实 target 主线仍然可用，且关键 reference tasks 仍能给出可解释结果。
 
-- command 或 adapter 没执行；
-- task noncompliant；
-- lifecycle edge 没触发；
-- state 没植入；
-- residue 没观测到；
-- oracle inconclusive；
-- 这是 honest clean negative；
-- schema 或 artifact contract 发生了漂移。
+## 当前已知保留项
 
-## 大重构合并前门禁
+- `cmd/syncfuzz/main.go` 仍然偏大，未来如果继续整理，可以把 CLI 子命令进一步拆分。
+- `scheduler/` 现在是新的重模块，后续可能继续按 synthetic 调度、target 调度、feedback/ranking 再细分。
+- container backend 对 open-FD residue 的观测仍弱于 local backend，这不是这次重构要解决的问题，但应在后续 environment 演进中持续记录。
 
-合并大范围目录整理前，至少跑：
+## 结论
 
-```bash
-make fmt-go
-make test-go
-git diff --check
-make run-suite OUT=/tmp/syncfuzz-final-runs CORPUS=/tmp/syncfuzz-final-corpus REPEAT=1
-make corpus-verify OUT=/tmp/syncfuzz-final-runs CORPUS=/tmp/syncfuzz-final-corpus
-make target-langgraph-shell-react TARGET_TASK=unix-listener-residue-fork
-```
-
-如果暂时没有 LangGraph 真实模型凭据，就记录“target gate 未运行”，先以 synthetic 和 unit-test gate 为准，等凭据可用后再补跑真实 target gate。
+本轮重构没有把 SyncFuzz 的主能力链路打断。
+项目现在处于“结构已经整理完，行为已经回归验证过，可以继续沿当前 Phase 5B 路线推进开发”的状态。
