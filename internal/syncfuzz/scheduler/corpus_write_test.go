@@ -48,6 +48,9 @@ func TestRunTargetSuiteWritesTargetCorpus(t *testing.T) {
 		if entry.TargetOracleStatus == "" {
 			t.Fatalf("expected target oracle metadata, got %#v", entry)
 		}
+		if entry.TargetOutcomeCategory == "" {
+			t.Fatalf("expected target outcome metadata, got %#v", entry)
+		}
 		if entry.TaskComplianceStatus == "" {
 			t.Fatalf("expected target compliance metadata, got %#v", entry)
 		}

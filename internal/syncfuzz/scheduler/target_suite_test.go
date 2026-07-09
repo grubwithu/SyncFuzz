@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
@@ -32,12 +33,27 @@ func TestRunTargetSuiteRepeatsSingleTask(t *testing.T) {
 	if len(result.ComplianceSummaries) != 1 || result.ComplianceSummaries[0].Status != target.TargetTaskComplianceStatusNotApplicable || result.ComplianceSummaries[0].TotalRuns != 2 {
 		t.Fatalf("unexpected target suite compliance summary: %#v", result.ComplianceSummaries)
 	}
+	if len(result.OutcomeSummaries) != 1 || result.OutcomeSummaries[0].Category != corpus.TargetObservationResidueObserved || result.OutcomeSummaries[0].TotalRuns != 2 {
+		t.Fatalf("unexpected target suite outcome summary: %#v", result.OutcomeSummaries)
+	}
+	if len(result.ActivationSummaries) != 1 || result.ActivationSummaries[0].Stage != TargetActivationStageActivationReached || result.ActivationSummaries[0].TotalRuns != 2 {
+		t.Fatalf("unexpected target suite activation summary: %#v", result.ActivationSummaries)
+	}
 	if len(result.TaskSummaries[0].ComplianceSummaries) != 1 || result.TaskSummaries[0].ComplianceSummaries[0].Status != target.TargetTaskComplianceStatusNotApplicable || result.TaskSummaries[0].ComplianceSummaries[0].TotalRuns != 2 {
 		t.Fatalf("unexpected per-task compliance summary: %#v", result.TaskSummaries[0].ComplianceSummaries)
+	}
+	if len(result.TaskSummaries[0].OutcomeSummaries) != 1 || result.TaskSummaries[0].OutcomeSummaries[0].Category != corpus.TargetObservationResidueObserved {
+		t.Fatalf("unexpected per-task outcome summary: %#v", result.TaskSummaries[0].OutcomeSummaries)
+	}
+	if len(result.TaskSummaries[0].ActivationSummaries) != 1 || result.TaskSummaries[0].ActivationSummaries[0].Stage != TargetActivationStageActivationReached {
+		t.Fatalf("unexpected per-task activation summary: %#v", result.TaskSummaries[0].ActivationSummaries)
 	}
 	for _, item := range result.Results {
 		if item.TaskCompliance.Status != target.TargetTaskComplianceStatusNotApplicable {
 			t.Fatalf("expected suite result to carry task compliance status: %#v", item.TaskCompliance)
+		}
+		if item.OutcomeCategory != corpus.TargetObservationResidueObserved || item.ActivationStage != TargetActivationStageActivationReached {
+			t.Fatalf("expected suite result to carry outcome/activation metadata: %#v", item)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(result.ArtifactDir, targetSuiteResultArtifact)); err != nil {

@@ -124,6 +124,53 @@ func TestSelectTargetMatrixCandidatesPrefersNewSeedsBeforeSameSeedVariants(t *te
 	}
 }
 
+func TestSelectTargetMatrixCandidatesUsesCoverageGapsToPrioritizeUnseenCandidates(t *testing.T) {
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates: []TargetScheduleCandidate{
+			testTargetScenarioCandidateWithProfile("task-a", "seed-a", "primitive-a", target.TargetPromptProfileBaselineID),
+			testTargetScenarioCandidateWithProfile("task-b", "seed-b", "primitive-b", target.TargetPromptProfileBaselineID),
+			testTargetScenarioCandidateWithProfile("task-z", "seed-z", "primitive-z", target.TargetPromptProfileBaselineID),
+		},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	tmp := t.TempDir()
+	feedbackPath := filepath.Join(tmp, "feedback.json")
+	if err := core.WriteJSON(feedbackPath, &TargetMatrixResult{
+		SchemaVersion: "syncfuzz.target-matrix-result.v1",
+		CandidateSummaries: []TargetCandidateSummary{
+			{CandidateID: targetScheduleCandidateID("test-target", "task-a", target.TargetPromptProfileBaselineID), Score: 9, ReproducibilityRate: 1, Confirmed: 1},
+		},
+		DimensionCoverage: []TargetDimensionCoverageSummary{
+			{Dimension: "task_id", TotalValues: 3, ExecutedValues: 1, MissingValues: []string{"task-z"}},
+			{Dimension: "seed_id", TotalValues: 3, ExecutedValues: 1, MissingValues: []string{"seed-z"}},
+			{Dimension: "plant_primitive_id", TotalValues: 3, ExecutedValues: 1, MissingValues: []string{"primitive-z"}},
+		},
+	}); err != nil {
+		t.Fatalf("write feedback: %v", err)
+	}
+
+	selected, err := selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{
+		FeedbackFrom:        feedbackPath,
+		ExcludeCandidateIDs: []string{targetScheduleCandidateID("test-target", "task-a", target.TargetPromptProfileBaselineID)},
+		Limit:               2,
+	})
+	if err != nil {
+		t.Fatalf("selectTargetMatrixCandidates failed: %v", err)
+	}
+	if len(selected.Candidates) != 2 {
+		t.Fatalf("expected 2 selected candidates, got %d", len(selected.Candidates))
+	}
+	if selected.Candidates[0].TaskID != "task-z" {
+		t.Fatalf("expected coverage gap candidate first, got task=%q", selected.Candidates[0].TaskID)
+	}
+	if selected.Candidates[1].TaskID != "task-b" {
+		t.Fatalf("expected remaining candidate second, got task=%q", selected.Candidates[1].TaskID)
+	}
+}
+
 func testTargetScheduleCandidate(taskID string, profileID string) TargetScheduleCandidate {
 	return TargetScheduleCandidate{
 		CandidateID:            targetScheduleCandidateID("test-target", taskID, profileID),
@@ -140,7 +187,11 @@ func testTargetScheduleCandidate(taskID string, profileID string) TargetSchedule
 }
 
 func testTargetScenarioCandidate(taskID string, seedID string, primitiveID string) TargetScheduleCandidate {
-	item := testTargetScheduleCandidate(taskID, target.TargetPromptProfileBaselineID)
+	return testTargetScenarioCandidateWithProfile(taskID, seedID, primitiveID, target.TargetPromptProfileBaselineID)
+}
+
+func testTargetScenarioCandidateWithProfile(taskID string, seedID string, primitiveID string, profileID string) TargetScheduleCandidate {
+	item := testTargetScheduleCandidate(taskID, profileID)
 	item.SeedID = seedID
 	item.PlantPrimitiveID = primitiveID
 	item.LifecycleOperationID = "checkpoint-fork"

@@ -63,6 +63,9 @@ esac`,
 	if len(result.SubjectSummaries) != 2 {
 		t.Fatalf("expected 2 subject summaries, got %#v", result.SubjectSummaries)
 	}
+	if len(result.TargetOutcomeSummaries) == 0 || len(result.ActivationSummaries) == 0 {
+		t.Fatalf("expected target outcome/activation summaries, got %#v", result)
+	}
 	if result.VerificationID == "" || len(result.VerificationOutcomeSummaries) == 0 || len(result.VerificationSubjectSummaries) != 2 {
 		t.Fatalf("expected embedded verification summaries, got %#v", result)
 	}

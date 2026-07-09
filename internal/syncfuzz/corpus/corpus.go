@@ -48,6 +48,8 @@ type CorpusEntry struct {
 	PromptProfileID      string                                    `json:"prompt_profile_id,omitempty"`
 	TargetOracleStatus   target.TargetOracleStatus                 `json:"target_oracle_status,omitempty"`
 	TargetAttribution    string                                    `json:"target_attribution,omitempty"`
+	TargetOutcomeCategory TargetObservationCategory                `json:"target_outcome_category,omitempty"`
+	ActivationReached    bool                                      `json:"activation_reached,omitempty"`
 	TaskComplianceStatus target.TargetTaskComplianceStatus         `json:"task_compliance_status,omitempty"`
 	ContractStatus       target.TargetContractInterpretationStatus `json:"contract_status,omitempty"`
 	ContractProfileID    string                                    `json:"contract_profile_id,omitempty"`

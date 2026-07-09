@@ -87,7 +87,7 @@ Usage:
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles baseline,workflow,audit] [--matrix] [--feedback-from target-matrix-result.json] [--candidate-limit 3] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
-  syncfuzz target campaign [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--group phase5a-baseline] [--prompt-profiles baseline,workflow,audit] [--rounds 2] [--candidate-limit 3] [--repeat 1] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target campaign [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--group phase5a-baseline] [--prompt-profiles baseline,workflow,audit] [--rounds 2] [--candidate-limit 3] [--repeat 1] [--min-coverage-gain-score 0] [--max-stagnant-rounds 0] [--auto-pivot] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz corpus list [--corpus corpus] [--limit 20]
   syncfuzz corpus analyze [--corpus corpus] [--limit 0] [--verification runs/verify-<id>/verification-result.json]
   syncfuzz corpus show --id <entry_id> [--corpus corpus]
@@ -847,6 +847,15 @@ func targetSuite(args []string) {
 				top.AvgArtifactBytes,
 			)
 		}
+		if len(result.FrontierCandidates) > 0 {
+			next := result.FrontierCandidates[0]
+			fmt.Printf("next_candidate: %s mode=%s gap_score=%d novelty_score=%d\n",
+				next.CandidateID,
+				next.SelectionMode,
+				next.GapScore,
+				next.NoveltyScore,
+			)
+		}
 		fmt.Printf("matrix_result: %s\n", result.MatrixResult)
 	}
 	fmt.Printf("total_runs: %d\n", result.TotalRuns)
@@ -905,6 +914,9 @@ func targetCampaign(args []string) {
 	repeat := fs.Int("repeat", 1, "number of repetitions per target candidate")
 	candidateLimit := fs.Int("candidate-limit", 0, "candidate budget for feedback-ranked rounds; 0 means all")
 	feedbackFrom := fs.String("feedback-from", "", "optional seed target-matrix-result.json for the first round")
+	minCoverageGainScore := fs.Int("min-coverage-gain-score", 0, "minimum round coverage gain weighted score before a round counts as stagnant")
+	maxStagnantRounds := fs.Int("max-stagnant-rounds", 0, "stop early after this many consecutive stagnant rounds; 0 disables early stop")
+	autoPivot := fs.Bool("auto-pivot", false, "when stagnation is detected, expand into a recommended missing dimension instead of stopping early")
 	timeout := fs.Duration("timeout", 2*time.Minute, "target command timeout")
 	observeDelay := fs.Duration("observe-delay", 0, "delay after target command return before final observation; 0 uses the adapter default")
 	lateObserveDelay := fs.Duration("late-observe-delay", 0, "optional delay after immediate observation for delayed target effects")
@@ -920,30 +932,33 @@ func targetCampaign(args []string) {
 		profileIDs = []string{*promptProfile}
 	}
 	result, err := scheduler.RunTargetCampaign(context.Background(), scheduler.TargetCampaignOptions{
-		AdapterID:        *adapterID,
-		TargetID:         *targetID,
-		Tasks:            tasks,
-		TaskGroups:       groups,
-		SeedIDs:          seeds,
-		Objective:        *objective,
-		PromptProfileID:  *promptProfile,
-		PromptProfileIDs: profileIDs,
-		Prompt:           *prompt,
-		PromptFile:       *promptFile,
-		Command:          *command,
-		CommandFile:      *commandFile,
-		OutDir:           *outDir,
-		CorpusDir:        *corpusDir,
-		Rounds:           *rounds,
-		Repeat:           *repeat,
-		CandidateLimit:   *candidateLimit,
-		FeedbackFrom:     *feedbackFrom,
-		Timeout:          *timeout,
-		ObserveDelay:     *observeDelay,
-		LateObserveDelay: *lateObserveDelay,
-		EnvKind:          *envKind,
-		ContainerImage:   *containerImage,
-		ExpectedFiles:    splitCSV(*expectFiles),
+		AdapterID:            *adapterID,
+		TargetID:             *targetID,
+		Tasks:                tasks,
+		TaskGroups:           groups,
+		SeedIDs:              seeds,
+		Objective:            *objective,
+		PromptProfileID:      *promptProfile,
+		PromptProfileIDs:     profileIDs,
+		Prompt:               *prompt,
+		PromptFile:           *promptFile,
+		Command:              *command,
+		CommandFile:          *commandFile,
+		OutDir:               *outDir,
+		CorpusDir:            *corpusDir,
+		Rounds:               *rounds,
+		Repeat:               *repeat,
+		CandidateLimit:       *candidateLimit,
+		FeedbackFrom:         *feedbackFrom,
+		MinCoverageGainScore: *minCoverageGainScore,
+		MaxStagnantRounds:    *maxStagnantRounds,
+		AutoPivot:            *autoPivot,
+		Timeout:              *timeout,
+		ObserveDelay:         *observeDelay,
+		LateObserveDelay:     *lateObserveDelay,
+		EnvKind:              *envKind,
+		ContainerImage:       *containerImage,
+		ExpectedFiles:        splitCSV(*expectFiles),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz target campaign failed: %v\n", err)
@@ -963,6 +978,11 @@ func targetCampaign(args []string) {
 		fmt.Printf("seed_ids: %s\n", strings.Join(result.SeedIDs, ","))
 	}
 	fmt.Printf("candidate_limit: %d\n", result.CandidateLimit)
+	if result.MaxStagnantRounds > 0 {
+		fmt.Printf("min_coverage_gain_score: %d\n", result.MinCoverageGainScore)
+		fmt.Printf("max_stagnant_rounds: %d\n", result.MaxStagnantRounds)
+		fmt.Printf("auto_pivot: %t\n", result.AutoPivot)
+	}
 	fmt.Printf("total_suites: %d\n", result.TotalSuites)
 	fmt.Printf("total_runs: %d\n", result.TotalRuns)
 	fmt.Printf("confirmed: %d\n", result.Confirmed)
@@ -971,6 +991,36 @@ func targetCampaign(args []string) {
 	fmt.Printf("corpus_entries: %d\n", result.CorpusEntries)
 	fmt.Printf("unique_candidates: %d\n", result.UniqueCandidates)
 	fmt.Printf("repeated_candidates: %d\n", result.RepeatedCandidates)
+	if result.StoppedEarly {
+		fmt.Printf("stopped_early: true\n")
+		fmt.Printf("stop_reason: %s\n", result.StopReason)
+	}
+	if result.CatalogExhausted {
+		fmt.Printf("catalog_exhausted: true\n")
+	}
+	for _, pivot := range result.PivotHistory {
+		fmt.Printf("pivot_round_%d: dimension=%s values=%s\n",
+			pivot.AfterRound,
+			pivot.Dimension,
+			strings.Join(pivot.Values, ","),
+		)
+	}
+	for _, recommendation := range result.PivotRecommendations {
+		fmt.Printf("pivot[%s]: %s", recommendation.Dimension, strings.Join(recommendation.Values, ","))
+		if recommendation.Reason != "" {
+			fmt.Printf(" reason=%s", recommendation.Reason)
+		}
+		fmt.Println()
+	}
+	for _, frontier := range result.FrontierCandidates {
+		fmt.Printf("frontier_%d: candidate=%s mode=%s gap_score=%d novelty_score=%d\n",
+			frontier.Rank,
+			frontier.CandidateID,
+			frontier.SelectionMode,
+			frontier.GapScore,
+			frontier.NoveltyScore,
+		)
+	}
 	for _, round := range result.RoundResults {
 		fmt.Printf("round_%d: scheduler=%s candidates=%d runs=%d confirmed=%d errors=%d matrix_result=%s\n",
 			round.Round,

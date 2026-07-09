@@ -15,6 +15,21 @@ type TargetFeedbackSelectionOptions struct {
 	ExcludeCandidateIDs []string
 }
 
+type targetDimensionGapSet map[string]map[string]struct{}
+
+type targetExplorationState struct {
+	seenSeeds        map[string]struct{}
+	seenPrimitives   map[string]struct{}
+	seenTasks        map[string]struct{}
+	seenRules        map[string]struct{}
+	seenSurfaces     map[string]struct{}
+	seenEdges        map[string]struct{}
+	seenLifecycleOps map[string]struct{}
+	seenActivations  map[string]struct{}
+	seenOracles      map[string]struct{}
+	seenMutations    map[string]struct{}
+}
+
 func selectTargetMatrixCandidates(matrix *TargetScheduleMatrix, opts TargetFeedbackSelectionOptions) (*TargetScheduleMatrix, error) {
 	if matrix == nil {
 		return nil, fmt.Errorf("target schedule matrix is required")
@@ -25,6 +40,7 @@ func selectTargetMatrixCandidates(matrix *TargetScheduleMatrix, opts TargetFeedb
 
 	candidates := append([]TargetScheduleCandidate{}, matrix.Candidates...)
 	var summaryByCandidate map[string]TargetCandidateSummary
+	var dimensionCoverage []TargetDimensionCoverageSummary
 	if opts.FeedbackFrom != "" {
 		feedback, err := readTargetMatrixFeedback(opts.FeedbackFrom)
 		if err != nil {
@@ -34,6 +50,7 @@ func selectTargetMatrixCandidates(matrix *TargetScheduleMatrix, opts TargetFeedb
 		for _, summary := range feedback.CandidateSummaries {
 			summaryByCandidate[summary.CandidateID] = summary
 		}
+		dimensionCoverage = append([]TargetDimensionCoverageSummary{}, feedback.DimensionCoverage...)
 	}
 	if len(opts.ExcludeCandidateIDs) > 0 {
 		filtered := filterExcludedTargetCandidates(candidates, opts.ExcludeCandidateIDs)
@@ -42,7 +59,7 @@ func selectTargetMatrixCandidates(matrix *TargetScheduleMatrix, opts TargetFeedb
 		}
 	}
 	if len(summaryByCandidate) > 0 {
-		candidates = orderTargetFeedbackCandidates(candidates, summaryByCandidate)
+		candidates = orderTargetFeedbackCandidates(candidates, summaryByCandidate, dimensionCoverage)
 	} else {
 		candidates = orderTargetExplorationCandidates(candidates)
 	}
@@ -99,6 +116,9 @@ func targetFeedbackSummaryLess(left TargetCandidateSummary, right TargetCandidat
 	if left.ContractViolations != right.ContractViolations {
 		return left.ContractViolations > right.ContractViolations
 	}
+	if left.ActivationReached != right.ActivationReached {
+		return left.ActivationReached > right.ActivationReached
+	}
 	if left.Confirmed != right.Confirmed {
 		return left.Confirmed > right.Confirmed
 	}
@@ -120,7 +140,7 @@ func targetFeedbackSummaryLess(left TargetCandidateSummary, right TargetCandidat
 	return left.CandidateID < right.CandidateID
 }
 
-func orderTargetFeedbackCandidates(candidates []TargetScheduleCandidate, summaryByCandidate map[string]TargetCandidateSummary) []TargetScheduleCandidate {
+func orderTargetFeedbackCandidates(candidates []TargetScheduleCandidate, summaryByCandidate map[string]TargetCandidateSummary, dimensionCoverage []TargetDimensionCoverageSummary) []TargetScheduleCandidate {
 	ranked := make([]TargetScheduleCandidate, 0, len(candidates))
 	unranked := make([]TargetScheduleCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -134,8 +154,137 @@ func orderTargetFeedbackCandidates(candidates []TargetScheduleCandidate, summary
 	sort.SliceStable(ranked, func(i, j int) bool {
 		return targetFeedbackSummaryLess(summaryByCandidate[ranked[i].CandidateID], summaryByCandidate[ranked[j].CandidateID])
 	})
-	unranked = orderTargetExplorationCandidates(unranked)
+	gaps := targetMissingDimensionValues(dimensionCoverage)
+	if len(gaps) > 0 {
+		unranked = orderTargetGapCandidates(unranked, gaps)
+	} else {
+		unranked = orderTargetExplorationCandidates(unranked)
+	}
 	return append(ranked, unranked...)
+}
+
+func targetMissingDimensionValues(summaries []TargetDimensionCoverageSummary) targetDimensionGapSet {
+	gaps := make(targetDimensionGapSet, len(summaries))
+	for _, summary := range summaries {
+		if len(summary.MissingValues) == 0 {
+			continue
+		}
+		values := make(map[string]struct{}, len(summary.MissingValues))
+		for _, value := range summary.MissingValues {
+			if value == "" {
+				continue
+			}
+			values[value] = struct{}{}
+		}
+		if len(values) > 0 {
+			gaps[summary.Dimension] = values
+		}
+	}
+	return gaps
+}
+
+func orderTargetGapCandidates(candidates []TargetScheduleCandidate, gaps targetDimensionGapSet) []TargetScheduleCandidate {
+	if len(candidates) <= 1 {
+		return append([]TargetScheduleCandidate{}, candidates...)
+	}
+
+	remaining := append([]TargetScheduleCandidate{}, candidates...)
+	sort.SliceStable(remaining, func(i, j int) bool {
+		return targetExplorationBaseLess(remaining[i], remaining[j])
+	})
+
+	selected := make([]TargetScheduleCandidate, 0, len(remaining))
+	state := newTargetExplorationState(len(remaining))
+
+	for len(remaining) > 0 {
+		bestIdx := 0
+		bestGapScore := targetGapCoverageScore(remaining[0], gaps)
+		bestNovelty := state.noveltyScore(remaining[0])
+		for i := 1; i < len(remaining); i++ {
+			gapScore := targetGapCoverageScore(remaining[i], gaps)
+			novelty := state.noveltyScore(remaining[i])
+			if gapScore > bestGapScore ||
+				(gapScore == bestGapScore && (novelty > bestNovelty ||
+					(novelty == bestNovelty && targetExplorationBaseLess(remaining[i], remaining[bestIdx])))) {
+				bestIdx = i
+				bestGapScore = gapScore
+				bestNovelty = novelty
+			}
+		}
+
+		pick := remaining[bestIdx]
+		selected = append(selected, pick)
+		targetConsumeGapCoverage(gaps, pick)
+		state.record(pick)
+		remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)
+	}
+
+	return selected
+}
+
+func targetGapCoverageScore(candidate TargetScheduleCandidate, gaps targetDimensionGapSet) int {
+	if len(gaps) == 0 {
+		return 0
+	}
+	score := 0
+	for _, descriptor := range targetDimensionCoverageDescriptors() {
+		values, ok := gaps[descriptor.name]
+		if !ok || len(values) == 0 {
+			continue
+		}
+		for _, value := range descriptor.values(candidate) {
+			if _, ok := values[value]; ok {
+				score += targetDimensionGapWeight(descriptor.name)
+			}
+		}
+	}
+	return score
+}
+
+func targetConsumeGapCoverage(gaps targetDimensionGapSet, candidate TargetScheduleCandidate) {
+	for _, descriptor := range targetDimensionCoverageDescriptors() {
+		values, ok := gaps[descriptor.name]
+		if !ok || len(values) == 0 {
+			continue
+		}
+		for _, value := range descriptor.values(candidate) {
+			delete(values, value)
+		}
+		if len(values) == 0 {
+			delete(gaps, descriptor.name)
+		}
+	}
+}
+
+func targetDimensionGapWeight(dimension string) int {
+	switch dimension {
+	case "seed_id":
+		return 32
+	case "plant_primitive_id":
+		return 16
+	case "scenario_id":
+		return 12
+	case "task_id":
+		return 8
+	case "lifecycle_operation_id":
+		return 8
+	case "activation_kind_id":
+		return 6
+	case "mutation_id":
+		return 6
+	case "state_surface":
+		return 4
+	case "contract_rule_id":
+		return 4
+	case "prompt_profile_id":
+		return 3
+	case "oracle_kind_id":
+		return 3
+	case "lifecycle_edge":
+		return 2
+	default:
+		return 1
+	}
 }
 
 func orderTargetExplorationCandidates(candidates []TargetScheduleCandidate) []TargetScheduleCandidate {
@@ -149,22 +298,13 @@ func orderTargetExplorationCandidates(candidates []TargetScheduleCandidate) []Ta
 	})
 
 	selected := make([]TargetScheduleCandidate, 0, len(remaining))
-	seenSeeds := make(map[string]struct{}, len(remaining))
-	seenPrimitives := make(map[string]struct{}, len(remaining))
-	seenTasks := make(map[string]struct{}, len(remaining))
-	seenRules := make(map[string]struct{}, len(remaining))
-	seenSurfaces := make(map[string]struct{}, len(remaining))
-	seenEdges := make(map[string]struct{}, len(remaining))
-	seenLifecycleOps := make(map[string]struct{}, len(remaining))
-	seenActivations := make(map[string]struct{}, len(remaining))
-	seenOracles := make(map[string]struct{}, len(remaining))
-	seenMutations := make(map[string]struct{}, len(remaining))
+	state := newTargetExplorationState(len(remaining))
 
 	for len(remaining) > 0 {
 		bestIdx := 0
-		bestScore := targetExplorationNoveltyScore(remaining[0], seenSeeds, seenPrimitives, seenTasks, seenRules, seenSurfaces, seenEdges, seenLifecycleOps, seenActivations, seenOracles, seenMutations)
+		bestScore := state.noveltyScore(remaining[0])
 		for i := 1; i < len(remaining); i++ {
-			score := targetExplorationNoveltyScore(remaining[i], seenSeeds, seenPrimitives, seenTasks, seenRules, seenSurfaces, seenEdges, seenLifecycleOps, seenActivations, seenOracles, seenMutations)
+			score := state.noveltyScore(remaining[i])
 			if score > bestScore || (score == bestScore && targetExplorationBaseLess(remaining[i], remaining[bestIdx])) {
 				bestIdx = i
 				bestScore = score
@@ -173,11 +313,66 @@ func orderTargetExplorationCandidates(candidates []TargetScheduleCandidate) []Ta
 
 		pick := remaining[bestIdx]
 		selected = append(selected, pick)
-		targetRecordExplorationCandidate(pick, seenSeeds, seenPrimitives, seenTasks, seenRules, seenSurfaces, seenEdges, seenLifecycleOps, seenActivations, seenOracles, seenMutations)
+		state.record(pick)
 		remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)
 	}
 
 	return selected
+}
+
+func newTargetExplorationState(capacity int) *targetExplorationState {
+	return &targetExplorationState{
+		seenSeeds:        make(map[string]struct{}, capacity),
+		seenPrimitives:   make(map[string]struct{}, capacity),
+		seenTasks:        make(map[string]struct{}, capacity),
+		seenRules:        make(map[string]struct{}, capacity),
+		seenSurfaces:     make(map[string]struct{}, capacity),
+		seenEdges:        make(map[string]struct{}, capacity),
+		seenLifecycleOps: make(map[string]struct{}, capacity),
+		seenActivations:  make(map[string]struct{}, capacity),
+		seenOracles:      make(map[string]struct{}, capacity),
+		seenMutations:    make(map[string]struct{}, capacity),
+	}
+}
+
+func newTargetExplorationStateFromCandidates(candidates []TargetScheduleCandidate) *targetExplorationState {
+	state := newTargetExplorationState(len(candidates))
+	for _, candidate := range candidates {
+		state.record(candidate)
+	}
+	return state
+}
+
+func (s *targetExplorationState) noveltyScore(candidate TargetScheduleCandidate) int {
+	return targetExplorationNoveltyScore(
+		candidate,
+		s.seenSeeds,
+		s.seenPrimitives,
+		s.seenTasks,
+		s.seenRules,
+		s.seenSurfaces,
+		s.seenEdges,
+		s.seenLifecycleOps,
+		s.seenActivations,
+		s.seenOracles,
+		s.seenMutations,
+	)
+}
+
+func (s *targetExplorationState) record(candidate TargetScheduleCandidate) {
+	targetRecordExplorationCandidate(
+		candidate,
+		s.seenSeeds,
+		s.seenPrimitives,
+		s.seenTasks,
+		s.seenRules,
+		s.seenSurfaces,
+		s.seenEdges,
+		s.seenLifecycleOps,
+		s.seenActivations,
+		s.seenOracles,
+		s.seenMutations,
+	)
 }
 
 func targetExplorationNoveltyScore(

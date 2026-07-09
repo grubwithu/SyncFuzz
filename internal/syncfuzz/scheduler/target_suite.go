@@ -62,6 +62,9 @@ type TargetSuiteRunResult struct {
 	TargetOracle           target.TargetOracleResult            `json:"target_oracle"`
 	TaskCompliance         target.TargetTaskComplianceResult    `json:"task_compliance"`
 	ContractInterpretation *target.TargetContractInterpretation `json:"contract_interpretation,omitempty"`
+	OutcomeCategory        corpus.TargetObservationCategory     `json:"outcome_category,omitempty"`
+	OutcomeReason          string                               `json:"outcome_reason,omitempty"`
+	ActivationStage        TargetActivationStage                `json:"activation_stage,omitempty"`
 	Signature              core.MismatchSignature               `json:"signature"`
 	ArtifactDir            string                               `json:"artifact_dir,omitempty"`
 	DurationMillis         int64                                `json:"duration_ms,omitempty"`
@@ -77,9 +80,32 @@ type TargetSuiteTaskSummary struct {
 	Confirmed            int                           `json:"confirmed"`
 	Unconfirmed          int                           `json:"unconfirmed"`
 	Errors               int                           `json:"errors"`
+	OutcomeSummaries     []TargetSuiteOutcomeStats     `json:"outcome_summaries,omitempty"`
+	ActivationSummaries  []TargetSuiteActivationStats  `json:"activation_summaries,omitempty"`
 	AttributionSummaries []TargetSuiteAttributionStats `json:"attribution_summaries,omitempty"`
 	ComplianceSummaries  []TargetSuiteComplianceStats  `json:"compliance_summaries,omitempty"`
 	ContractSummaries    []TargetSuiteContractStats    `json:"contract_summaries,omitempty"`
+}
+
+type TargetActivationStage string
+
+const (
+	TargetActivationStageActivationReached TargetActivationStage = "activation-reached"
+	TargetActivationStagePreActivation     TargetActivationStage = "pre-activation"
+)
+
+type TargetSuiteOutcomeStats struct {
+	Category    corpus.TargetObservationCategory `json:"category"`
+	TotalRuns   int                              `json:"total_runs"`
+	Confirmed   int                              `json:"confirmed"`
+	Unconfirmed int                              `json:"unconfirmed"`
+}
+
+type TargetSuiteActivationStats struct {
+	Stage       TargetActivationStage `json:"stage"`
+	TotalRuns   int                   `json:"total_runs"`
+	Confirmed   int                   `json:"confirmed"`
+	Unconfirmed int                   `json:"unconfirmed"`
 }
 
 type TargetSuiteAttributionStats struct {
@@ -104,41 +130,45 @@ type TargetSuiteContractStats struct {
 }
 
 type TargetSuiteResult struct {
-	SchemaVersion        string                        `json:"schema_version"`
-	SuiteID              string                        `json:"suite_id"`
-	StartedAt            string                        `json:"started_at"`
-	FinishedAt           string                        `json:"finished_at"`
-	ArtifactDir          string                        `json:"artifact_dir"`
-	AdapterID            string                        `json:"adapter_id"`
-	TargetID             string                        `json:"target_id"`
-	Environment          string                        `json:"environment"`
-	ContainerImage       string                        `json:"container_image,omitempty"`
-	Repeat               int                           `json:"repeat"`
-	Tasks                []string                      `json:"tasks"`
-	TaskGroups           []string                      `json:"task_groups,omitempty"`
-	SeedIDs              []string                      `json:"seed_ids,omitempty"`
-	PromptProfiles       []string                      `json:"prompt_profiles,omitempty"`
-	TimeoutMillis        int64                         `json:"timeout_ms"`
-	ObserveDelayMs       int64                         `json:"observe_delay_ms"`
-	LateObserveDelayMs   int64                         `json:"late_observe_delay_ms,omitempty"`
-	TotalRuns            int                           `json:"total_runs"`
-	Confirmed            int                           `json:"confirmed"`
-	Unconfirmed          int                           `json:"unconfirmed"`
-	Errors               int                           `json:"errors"`
-	AttributionSummaries []TargetSuiteAttributionStats `json:"attribution_summaries,omitempty"`
-	ComplianceSummaries  []TargetSuiteComplianceStats  `json:"compliance_summaries,omitempty"`
-	ContractSummaries    []TargetSuiteContractStats    `json:"contract_summaries,omitempty"`
-	TaskSummaries        []TargetSuiteTaskSummary      `json:"task_summaries"`
-	SchedulerMode        string                        `json:"scheduler_mode,omitempty"`
-	TotalCandidates      int                           `json:"total_candidates,omitempty"`
-	OriginalCandidates   int                           `json:"original_candidates,omitempty"`
-	CandidateLimit       int                           `json:"candidate_limit,omitempty"`
-	FeedbackFrom         string                        `json:"feedback_from,omitempty"`
-	ScheduleMatrix       string                        `json:"schedule_matrix,omitempty"`
-	MatrixResult         string                        `json:"matrix_result,omitempty"`
-	CandidateSummaries   []TargetCandidateSummary      `json:"candidate_summaries,omitempty"`
-	Results              []TargetSuiteRunResult        `json:"results"`
-	CorpusEntries        []corpus.CorpusEntry          `json:"corpus_entries,omitempty"`
+	SchemaVersion        string                           `json:"schema_version"`
+	SuiteID              string                           `json:"suite_id"`
+	StartedAt            string                           `json:"started_at"`
+	FinishedAt           string                           `json:"finished_at"`
+	ArtifactDir          string                           `json:"artifact_dir"`
+	AdapterID            string                           `json:"adapter_id"`
+	TargetID             string                           `json:"target_id"`
+	Environment          string                           `json:"environment"`
+	ContainerImage       string                           `json:"container_image,omitempty"`
+	Repeat               int                              `json:"repeat"`
+	Tasks                []string                         `json:"tasks"`
+	TaskGroups           []string                         `json:"task_groups,omitempty"`
+	SeedIDs              []string                         `json:"seed_ids,omitempty"`
+	PromptProfiles       []string                         `json:"prompt_profiles,omitempty"`
+	TimeoutMillis        int64                            `json:"timeout_ms"`
+	ObserveDelayMs       int64                            `json:"observe_delay_ms"`
+	LateObserveDelayMs   int64                            `json:"late_observe_delay_ms,omitempty"`
+	TotalRuns            int                              `json:"total_runs"`
+	Confirmed            int                              `json:"confirmed"`
+	Unconfirmed          int                              `json:"unconfirmed"`
+	Errors               int                              `json:"errors"`
+	OutcomeSummaries     []TargetSuiteOutcomeStats        `json:"outcome_summaries,omitempty"`
+	ActivationSummaries  []TargetSuiteActivationStats     `json:"activation_summaries,omitempty"`
+	DimensionCoverage    []TargetDimensionCoverageSummary `json:"dimension_coverage,omitempty"`
+	AttributionSummaries []TargetSuiteAttributionStats    `json:"attribution_summaries,omitempty"`
+	ComplianceSummaries  []TargetSuiteComplianceStats     `json:"compliance_summaries,omitempty"`
+	ContractSummaries    []TargetSuiteContractStats       `json:"contract_summaries,omitempty"`
+	FrontierCandidates   []TargetFrontierCandidate        `json:"frontier_candidates,omitempty"`
+	TaskSummaries        []TargetSuiteTaskSummary         `json:"task_summaries"`
+	SchedulerMode        string                           `json:"scheduler_mode,omitempty"`
+	TotalCandidates      int                              `json:"total_candidates,omitempty"`
+	OriginalCandidates   int                              `json:"original_candidates,omitempty"`
+	CandidateLimit       int                              `json:"candidate_limit,omitempty"`
+	FeedbackFrom         string                           `json:"feedback_from,omitempty"`
+	ScheduleMatrix       string                           `json:"schedule_matrix,omitempty"`
+	MatrixResult         string                           `json:"matrix_result,omitempty"`
+	CandidateSummaries   []TargetCandidateSummary         `json:"candidate_summaries,omitempty"`
+	Results              []TargetSuiteRunResult           `json:"results"`
+	CorpusEntries        []corpus.CorpusEntry             `json:"corpus_entries,omitempty"`
 }
 
 const targetSuiteResultArtifact = "target-suite-result.json"
@@ -148,22 +178,24 @@ const (
 )
 
 type TargetMatrixResult struct {
-	SchemaVersion      string                   `json:"schema_version"`
-	SuiteID            string                   `json:"suite_id"`
-	GeneratedAt        string                   `json:"generated_at"`
-	ScheduleMatrix     string                   `json:"schedule_matrix"`
-	PromptProfiles     []string                 `json:"prompt_profiles,omitempty"`
-	TotalCandidates    int                      `json:"total_candidates"`
-	OriginalCandidates int                      `json:"original_candidates,omitempty"`
-	CandidateLimit     int                      `json:"candidate_limit,omitempty"`
-	FeedbackFrom       string                   `json:"feedback_from,omitempty"`
-	Repeat             int                      `json:"repeat"`
-	TotalRuns          int                      `json:"total_runs"`
-	Confirmed          int                      `json:"confirmed"`
-	Unconfirmed        int                      `json:"unconfirmed"`
-	Errors             int                      `json:"errors"`
-	CandidateSummaries []TargetCandidateSummary `json:"candidate_summaries"`
-	Results            []TargetSuiteRunResult   `json:"results"`
+	SchemaVersion      string                           `json:"schema_version"`
+	SuiteID            string                           `json:"suite_id"`
+	GeneratedAt        string                           `json:"generated_at"`
+	ScheduleMatrix     string                           `json:"schedule_matrix"`
+	PromptProfiles     []string                         `json:"prompt_profiles,omitempty"`
+	TotalCandidates    int                              `json:"total_candidates"`
+	OriginalCandidates int                              `json:"original_candidates,omitempty"`
+	CandidateLimit     int                              `json:"candidate_limit,omitempty"`
+	FeedbackFrom       string                           `json:"feedback_from,omitempty"`
+	Repeat             int                              `json:"repeat"`
+	TotalRuns          int                              `json:"total_runs"`
+	Confirmed          int                              `json:"confirmed"`
+	Unconfirmed        int                              `json:"unconfirmed"`
+	Errors             int                              `json:"errors"`
+	DimensionCoverage  []TargetDimensionCoverageSummary `json:"dimension_coverage,omitempty"`
+	FrontierCandidates []TargetFrontierCandidate        `json:"frontier_candidates,omitempty"`
+	CandidateSummaries []TargetCandidateSummary         `json:"candidate_summaries"`
+	Results            []TargetSuiteRunResult           `json:"results"`
 }
 
 func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteResult, error) {
@@ -191,6 +223,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 		taskGroups             []string
 		seedIDs                []string
 		matrix                 *TargetScheduleMatrix
+		coverageUniverse       *TargetScheduleMatrix
 		originalCandidateCount int
 		err                    error
 	)
@@ -206,6 +239,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 		if err != nil {
 			return nil, err
 		}
+		coverageUniverse = matrix
 		originalCandidateCount = matrix.TotalCandidates
 		tasks = append([]string{}, matrix.Tasks...)
 		taskGroups = append([]string{}, matrix.TaskGroups...)
@@ -273,6 +307,10 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	}
 
 	summaries := make(map[string]*TargetSuiteTaskSummary, len(tasks))
+	outcomeSummary := make(map[corpus.TargetObservationCategory]*TargetSuiteOutcomeStats)
+	taskOutcomes := make(map[string]map[corpus.TargetObservationCategory]*TargetSuiteOutcomeStats, len(tasks))
+	activationSummary := make(map[TargetActivationStage]*TargetSuiteActivationStats)
+	taskActivations := make(map[string]map[TargetActivationStage]*TargetSuiteActivationStats, len(tasks))
 	attributionSummary := make(map[string]*TargetSuiteAttributionStats)
 	taskAttributions := make(map[string]map[string]*TargetSuiteAttributionStats, len(tasks))
 	complianceSummary := make(map[target.TargetTaskComplianceStatus]*TargetSuiteComplianceStats)
@@ -281,6 +319,8 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	taskContracts := make(map[string]map[target.TargetContractInterpretationStatus]*TargetSuiteContractStats, len(tasks))
 	for _, taskID := range tasks {
 		summaries[taskID] = &TargetSuiteTaskSummary{TaskID: taskID}
+		taskOutcomes[taskID] = make(map[corpus.TargetObservationCategory]*TargetSuiteOutcomeStats)
+		taskActivations[taskID] = make(map[TargetActivationStage]*TargetSuiteActivationStats)
 		taskAttributions[taskID] = make(map[string]*TargetSuiteAttributionStats)
 		taskCompliances[taskID] = make(map[target.TargetTaskComplianceStatus]*TargetSuiteComplianceStats)
 		taskContracts[taskID] = make(map[target.TargetContractInterpretationStatus]*TargetSuiteContractStats)
@@ -289,28 +329,37 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	for iteration := 1; iteration <= opts.Repeat; iteration++ {
 		if matrix != nil {
 			for _, candidate := range matrix.Candidates {
-				runTargetSuiteTask(ctx, opts, suiteDir, iteration, candidate, summaries, attributionSummary, taskAttributions, complianceSummary, taskCompliances, contractSummary, taskContracts, result)
+				runTargetSuiteTask(ctx, opts, suiteDir, iteration, candidate, summaries, outcomeSummary, taskOutcomes, activationSummary, taskActivations, attributionSummary, taskAttributions, complianceSummary, taskCompliances, contractSummary, taskContracts, result)
 			}
 			continue
 		}
 		for _, taskID := range tasks {
-			runTargetSuiteTask(ctx, opts, suiteDir, iteration, targetScheduledTaskCandidate(opts.TargetID, taskID, opts.PromptProfileID, ""), summaries, attributionSummary, taskAttributions, complianceSummary, taskCompliances, contractSummary, taskContracts, result)
+			runTargetSuiteTask(ctx, opts, suiteDir, iteration, targetScheduledTaskCandidate(opts.TargetID, taskID, opts.PromptProfileID, ""), summaries, outcomeSummary, taskOutcomes, activationSummary, taskActivations, attributionSummary, taskAttributions, complianceSummary, taskCompliances, contractSummary, taskContracts, result)
 		}
 	}
 
 	result.TotalRuns = len(result.Results)
 	result.TaskSummaries = make([]TargetSuiteTaskSummary, 0, len(tasks))
 	for _, taskID := range tasks {
+		summaries[taskID].OutcomeSummaries = targetSuiteOutcomeStats(taskOutcomes[taskID])
+		summaries[taskID].ActivationSummaries = targetSuiteActivationStats(taskActivations[taskID])
 		summaries[taskID].AttributionSummaries = targetSuiteAttributionStats(taskAttributions[taskID])
 		summaries[taskID].ComplianceSummaries = targetSuiteComplianceStats(taskCompliances[taskID])
 		summaries[taskID].ContractSummaries = targetSuiteContractStats(taskContracts[taskID])
 		result.TaskSummaries = append(result.TaskSummaries, *summaries[taskID])
 	}
+	result.OutcomeSummaries = targetSuiteOutcomeStats(outcomeSummary)
+	result.ActivationSummaries = targetSuiteActivationStats(activationSummary)
 	result.AttributionSummaries = targetSuiteAttributionStats(attributionSummary)
 	result.ComplianceSummaries = targetSuiteComplianceStats(complianceSummary)
 	result.ContractSummaries = targetSuiteContractStats(contractSummary)
 	result.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if matrix != nil {
+		if coverageUniverse == nil {
+			coverageUniverse = matrix
+		}
+		result.DimensionCoverage = summarizeTargetDimensionCoverage(coverageUniverse.Candidates, result.Results)
+		result.FrontierCandidates = summarizeTargetCoverageFrontier(coverageUniverse, result.Results, targetFrontierDefaultLimit)
 		result.CandidateSummaries = summarizeTargetCandidates(result.Results)
 	}
 	corpusEntries, err := WriteTargetCorpus(opts.CorpusDir, result)
@@ -337,6 +386,8 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 			Confirmed:          result.Confirmed,
 			Unconfirmed:        result.Unconfirmed,
 			Errors:             result.Errors,
+			DimensionCoverage:  append([]TargetDimensionCoverageSummary{}, result.DimensionCoverage...),
+			FrontierCandidates: append([]TargetFrontierCandidate{}, result.FrontierCandidates...),
 			CandidateSummaries: result.CandidateSummaries,
 			Results:            result.Results,
 		}
@@ -354,6 +405,10 @@ func runTargetSuiteTask(
 	iteration int,
 	candidate TargetScheduleCandidate,
 	summaries map[string]*TargetSuiteTaskSummary,
+	outcomeSummary map[corpus.TargetObservationCategory]*TargetSuiteOutcomeStats,
+	taskOutcomes map[string]map[corpus.TargetObservationCategory]*TargetSuiteOutcomeStats,
+	activationSummary map[TargetActivationStage]*TargetSuiteActivationStats,
+	taskActivations map[string]map[TargetActivationStage]*TargetSuiteActivationStats,
 	attributionSummary map[string]*TargetSuiteAttributionStats,
 	taskAttributions map[string]map[string]*TargetSuiteAttributionStats,
 	complianceSummary map[target.TargetTaskComplianceStatus]*TargetSuiteComplianceStats,
@@ -421,6 +476,10 @@ func runTargetSuiteTask(
 	item.TargetOracle = runResult.TargetOracle
 	item.TaskCompliance = runResult.TaskCompliance
 	item.ContractInterpretation = runResult.ContractInterpretation
+	observation := corpus.ClassifyTargetObservation(runResult)
+	item.OutcomeCategory = observation.Category
+	item.OutcomeReason = observation.Reason
+	item.ActivationStage = targetActivationStageForObservation(observation)
 	item.Signature = runResult.Signature
 	item.ArtifactDir = runResult.ArtifactDir
 	finalizeTargetSuiteItemMetrics(&item, startedRun)
@@ -433,6 +492,10 @@ func runTargetSuiteTask(
 		result.Unconfirmed++
 		summaries[taskID].Unconfirmed++
 	}
+	recordTargetSuiteOutcome(outcomeSummary, item.OutcomeCategory, item.Confirmed)
+	recordTargetSuiteOutcome(taskOutcomes[taskID], item.OutcomeCategory, item.Confirmed)
+	recordTargetSuiteActivation(activationSummary, item.ActivationStage, item.Confirmed)
+	recordTargetSuiteActivation(taskActivations[taskID], item.ActivationStage, item.Confirmed)
 	recordTargetSuiteAttribution(attributionSummary, item.TargetOracle.Attribution, item.Confirmed)
 	recordTargetSuiteAttribution(taskAttributions[taskID], item.TargetOracle.Attribution, item.Confirmed)
 	recordTargetSuiteCompliance(complianceSummary, item.TaskCompliance.Status, item.Confirmed)
@@ -480,6 +543,47 @@ func finalizeTargetSuiteItemMetrics(item *TargetSuiteRunResult, started time.Tim
 	}
 	item.ArtifactBytes = metrics.Bytes
 	item.ArtifactFiles = metrics.Files
+}
+
+func targetActivationStageForObservation(details corpus.TargetObservationDetails) TargetActivationStage {
+	if details.ActivationReached {
+		return TargetActivationStageActivationReached
+	}
+	return TargetActivationStagePreActivation
+}
+
+func recordTargetSuiteOutcome(stats map[corpus.TargetObservationCategory]*TargetSuiteOutcomeStats, category corpus.TargetObservationCategory, confirmed bool) {
+	if category == "" {
+		return
+	}
+	item, ok := stats[category]
+	if !ok {
+		item = &TargetSuiteOutcomeStats{Category: category}
+		stats[category] = item
+	}
+	item.TotalRuns++
+	if confirmed {
+		item.Confirmed++
+		return
+	}
+	item.Unconfirmed++
+}
+
+func recordTargetSuiteActivation(stats map[TargetActivationStage]*TargetSuiteActivationStats, stage TargetActivationStage, confirmed bool) {
+	if stage == "" {
+		return
+	}
+	item, ok := stats[stage]
+	if !ok {
+		item = &TargetSuiteActivationStats{Stage: stage}
+		stats[stage] = item
+	}
+	item.TotalRuns++
+	if confirmed {
+		item.Confirmed++
+		return
+	}
+	item.Unconfirmed++
 }
 
 func recordTargetSuiteAttribution(stats map[string]*TargetSuiteAttributionStats, attribution string, confirmed bool) {
@@ -549,6 +653,52 @@ func targetSuiteAttributionStats(stats map[string]*TargetSuiteAttributionStats) 
 	return summary
 }
 
+func targetSuiteOutcomeStats(stats map[corpus.TargetObservationCategory]*TargetSuiteOutcomeStats) []TargetSuiteOutcomeStats {
+	if len(stats) == 0 {
+		return nil
+	}
+	categories := make([]corpus.TargetObservationCategory, 0, len(stats))
+	for category := range stats {
+		categories = append(categories, category)
+	}
+	sort.Slice(categories, func(i, j int) bool {
+		li := corpus.TargetObservationCategoryOrder(categories[i])
+		lj := corpus.TargetObservationCategoryOrder(categories[j])
+		if li != lj {
+			return li < lj
+		}
+		return categories[i] < categories[j]
+	})
+	summary := make([]TargetSuiteOutcomeStats, 0, len(categories))
+	for _, category := range categories {
+		summary = append(summary, *stats[category])
+	}
+	return summary
+}
+
+func targetSuiteActivationStats(stats map[TargetActivationStage]*TargetSuiteActivationStats) []TargetSuiteActivationStats {
+	if len(stats) == 0 {
+		return nil
+	}
+	stages := make([]TargetActivationStage, 0, len(stats))
+	for stage := range stats {
+		stages = append(stages, stage)
+	}
+	sort.Slice(stages, func(i, j int) bool {
+		li := targetActivationStageOrder(stages[i])
+		lj := targetActivationStageOrder(stages[j])
+		if li != lj {
+			return li < lj
+		}
+		return stages[i] < stages[j]
+	})
+	summary := make([]TargetSuiteActivationStats, 0, len(stages))
+	for _, stage := range stages {
+		summary = append(summary, *stats[stage])
+	}
+	return summary
+}
+
 func targetSuiteComplianceStats(stats map[target.TargetTaskComplianceStatus]*TargetSuiteComplianceStats) []TargetSuiteComplianceStats {
 	if len(stats) == 0 {
 		return nil
@@ -607,6 +757,17 @@ func targetTaskComplianceStatusOrder(status target.TargetTaskComplianceStatus) i
 		return 3
 	default:
 		return 4
+	}
+}
+
+func targetActivationStageOrder(stage TargetActivationStage) int {
+	switch stage {
+	case TargetActivationStageActivationReached:
+		return 0
+	case TargetActivationStagePreActivation:
+		return 1
+	default:
+		return 2
 	}
 }
 

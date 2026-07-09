@@ -27,6 +27,8 @@ type CorpusAnalysisSubjectStats struct {
 	TaskID                string                     `json:"task_id,omitempty"`
 	TotalEntries          int                        `json:"total_entries"`
 	TargetOracleSummaries []CorpusAnalysisFieldStats `json:"target_oracle_summaries,omitempty"`
+	TargetOutcomeSummaries []CorpusAnalysisFieldStats `json:"target_outcome_summaries,omitempty"`
+	ActivationSummaries   []CorpusAnalysisFieldStats `json:"activation_summaries,omitempty"`
 	AttributionSummaries  []CorpusAnalysisFieldStats `json:"attribution_summaries,omitempty"`
 	ComplianceSummaries   []CorpusAnalysisFieldStats `json:"compliance_summaries,omitempty"`
 	ContractSummaries     []CorpusAnalysisFieldStats `json:"contract_summaries,omitempty"`
@@ -40,6 +42,8 @@ type CorpusAnalysisResult struct {
 	ExecutionSummaries           []CorpusAnalysisFieldStats   `json:"execution_summaries,omitempty"`
 	SubjectSummaries             []CorpusAnalysisSubjectStats `json:"subject_summaries,omitempty"`
 	TargetOracleSummaries        []CorpusAnalysisFieldStats   `json:"target_oracle_summaries,omitempty"`
+	TargetOutcomeSummaries       []CorpusAnalysisFieldStats   `json:"target_outcome_summaries,omitempty"`
+	ActivationSummaries          []CorpusAnalysisFieldStats   `json:"activation_summaries,omitempty"`
 	AttributionSummaries         []CorpusAnalysisFieldStats   `json:"attribution_summaries,omitempty"`
 	TaskComplianceSummaries      []CorpusAnalysisFieldStats   `json:"task_compliance_summaries,omitempty"`
 	ContractSummaries            []CorpusAnalysisFieldStats   `json:"contract_summaries,omitempty"`
@@ -51,6 +55,8 @@ type CorpusAnalysisResult struct {
 type corpusAnalysisSubjectBuilder struct {
 	stats        CorpusAnalysisSubjectStats
 	oracles      map[string]*CorpusAnalysisFieldStats
+	outcomes     map[string]*CorpusAnalysisFieldStats
+	activations  map[string]*CorpusAnalysisFieldStats
 	attributions map[string]*CorpusAnalysisFieldStats
 	compliances  map[string]*CorpusAnalysisFieldStats
 	contracts    map[string]*CorpusAnalysisFieldStats
@@ -67,6 +73,8 @@ func AnalyzeCorpus(opts CorpusAnalyzeOptions) (*CorpusAnalysisResult, error) {
 
 	executions := make(map[string]*CorpusAnalysisFieldStats)
 	oracles := make(map[string]*CorpusAnalysisFieldStats)
+	outcomes := make(map[string]*CorpusAnalysisFieldStats)
+	activations := make(map[string]*CorpusAnalysisFieldStats)
 	attributions := make(map[string]*CorpusAnalysisFieldStats)
 	compliances := make(map[string]*CorpusAnalysisFieldStats)
 	contracts := make(map[string]*CorpusAnalysisFieldStats)
@@ -75,6 +83,8 @@ func AnalyzeCorpus(opts CorpusAnalyzeOptions) (*CorpusAnalysisResult, error) {
 	for _, entry := range entries {
 		recordCorpusAnalysisField(executions, entry.EffectiveExecutionKind())
 		recordCorpusAnalysisField(oracles, string(entry.TargetOracleStatus))
+		recordCorpusAnalysisField(outcomes, string(entry.TargetOutcomeCategory))
+		recordCorpusAnalysisField(activations, corpusActivationKey(entry.ActivationReached, entry.EffectiveExecutionKind()))
 		recordCorpusAnalysisField(attributions, entry.TargetAttribution)
 		recordCorpusAnalysisField(compliances, string(entry.TaskComplianceStatus))
 		recordCorpusAnalysisField(contracts, string(entry.ContractStatus))
@@ -82,6 +92,8 @@ func AnalyzeCorpus(opts CorpusAnalyzeOptions) (*CorpusAnalysisResult, error) {
 		subject := corpusAnalysisSubject(subjects, entry)
 		subject.stats.TotalEntries++
 		recordCorpusAnalysisField(subject.oracles, string(entry.TargetOracleStatus))
+		recordCorpusAnalysisField(subject.outcomes, string(entry.TargetOutcomeCategory))
+		recordCorpusAnalysisField(subject.activations, corpusActivationKey(entry.ActivationReached, entry.EffectiveExecutionKind()))
 		recordCorpusAnalysisField(subject.attributions, entry.TargetAttribution)
 		recordCorpusAnalysisField(subject.compliances, string(entry.TaskComplianceStatus))
 		recordCorpusAnalysisField(subject.contracts, string(entry.ContractStatus))
@@ -95,6 +107,8 @@ func AnalyzeCorpus(opts CorpusAnalyzeOptions) (*CorpusAnalysisResult, error) {
 		ExecutionSummaries:      corpusAnalysisFieldStats(executions),
 		SubjectSummaries:        corpusAnalysisSubjectStats(subjects),
 		TargetOracleSummaries:   corpusAnalysisFieldStats(oracles),
+		TargetOutcomeSummaries:  corpusAnalysisFieldStats(outcomes),
+		ActivationSummaries:     corpusAnalysisFieldStats(activations),
 		AttributionSummaries:    corpusAnalysisFieldStats(attributions),
 		TaskComplianceSummaries: corpusAnalysisFieldStats(compliances),
 		ContractSummaries:       corpusAnalysisFieldStats(contracts),
@@ -143,6 +157,8 @@ func corpusAnalysisSubject(subjects map[string]*corpusAnalysisSubjectBuilder, en
 	item = &corpusAnalysisSubjectBuilder{
 		stats:        stats,
 		oracles:      make(map[string]*CorpusAnalysisFieldStats),
+		outcomes:     make(map[string]*CorpusAnalysisFieldStats),
+		activations:  make(map[string]*CorpusAnalysisFieldStats),
 		attributions: make(map[string]*CorpusAnalysisFieldStats),
 		compliances:  make(map[string]*CorpusAnalysisFieldStats),
 		contracts:    make(map[string]*CorpusAnalysisFieldStats),
@@ -223,10 +239,22 @@ func corpusAnalysisSubjectStats(subjects map[string]*corpusAnalysisSubjectBuilde
 		builder := subjects[key]
 		item := builder.stats
 		item.TargetOracleSummaries = corpusAnalysisFieldStats(builder.oracles)
+		item.TargetOutcomeSummaries = corpusAnalysisFieldStats(builder.outcomes)
+		item.ActivationSummaries = corpusAnalysisFieldStats(builder.activations)
 		item.AttributionSummaries = corpusAnalysisFieldStats(builder.attributions)
 		item.ComplianceSummaries = corpusAnalysisFieldStats(builder.compliances)
 		item.ContractSummaries = corpusAnalysisFieldStats(builder.contracts)
 		result = append(result, item)
 	}
 	return result
+}
+
+func corpusActivationKey(reached bool, executionKind string) string {
+	if executionKind != CorpusExecutionTarget {
+		return ""
+	}
+	if reached {
+		return "activation-reached"
+	}
+	return "pre-activation"
 }

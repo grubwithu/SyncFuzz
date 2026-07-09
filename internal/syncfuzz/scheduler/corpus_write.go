@@ -74,6 +74,8 @@ func WriteTargetCorpus(corpusDir string, suite *TargetSuiteResult) ([]corpus.Cor
 			PromptProfileID:      item.PromptProfileID,
 			TargetOracleStatus:   item.TargetOracle.Status,
 			TargetAttribution:    item.TargetOracle.Attribution,
+			TargetOutcomeCategory: item.OutcomeCategory,
+			ActivationReached:    item.ActivationStage == TargetActivationStageActivationReached,
 			TaskComplianceStatus: item.TaskCompliance.Status,
 			ContractStatus:       target.TargetContractInterpretationStatusValue(item.ContractInterpretation),
 			ContractProfileID:    target.TargetContractInterpretationProfileIDValue(item.ContractInterpretation),

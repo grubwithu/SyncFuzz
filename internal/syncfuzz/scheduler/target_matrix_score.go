@@ -3,6 +3,7 @@ package scheduler
 import (
 	"sort"
 
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
@@ -26,6 +27,8 @@ type TargetCandidateSummary struct {
 	OracleConfirmed         int                                         `json:"oracle_confirmed"`
 	OracleNegative          int                                         `json:"oracle_negative"`
 	OracleInconclusive      int                                         `json:"oracle_inconclusive"`
+	ActivationReached       int                                         `json:"activation_reached"`
+	ActivationNotReached    int                                         `json:"activation_not_reached"`
 	ComplianceCompliant     int                                         `json:"compliance_compliant"`
 	ComplianceViolated      int                                         `json:"compliance_violated"`
 	ComplianceUnknown       int                                         `json:"compliance_unknown"`
@@ -33,6 +36,8 @@ type TargetCandidateSummary struct {
 	ContractViolations      int                                         `json:"contract_violations"`
 	ContractConsistent      int                                         `json:"contract_consistent"`
 	ContractUnknown         int                                         `json:"contract_unknown"`
+	OutcomeSummaries        []TargetSuiteOutcomeStats                    `json:"outcome_summaries,omitempty"`
+	ActivationSummaries     []TargetSuiteActivationStats                 `json:"activation_summaries,omitempty"`
 	Score                   int                                         `json:"score"`
 	CostPenalty             int                                         `json:"cost_penalty"`
 	ReproducibilityRate     float64                                     `json:"reproducibility_rate"`
@@ -56,6 +61,8 @@ type targetCandidateAccumulator struct {
 	oracleStatuses     map[target.TargetOracleStatus]struct{}
 	complianceStatuses map[target.TargetTaskComplianceStatus]struct{}
 	contractStatuses   map[target.TargetContractInterpretationStatus]struct{}
+	outcomeStats       map[corpus.TargetObservationCategory]*TargetSuiteOutcomeStats
+	activationStats    map[TargetActivationStage]*TargetSuiteActivationStats
 }
 
 func summarizeTargetCandidates(results []TargetSuiteRunResult) []TargetCandidateSummary {
@@ -84,6 +91,8 @@ func summarizeTargetCandidates(results []TargetSuiteRunResult) []TargetCandidate
 				oracleStatuses:     make(map[target.TargetOracleStatus]struct{}),
 				complianceStatuses: make(map[target.TargetTaskComplianceStatus]struct{}),
 				contractStatuses:   make(map[target.TargetContractInterpretationStatus]struct{}),
+				outcomeStats:       make(map[corpus.TargetObservationCategory]*TargetSuiteOutcomeStats),
+				activationStats:    make(map[TargetActivationStage]*TargetSuiteActivationStats),
 			}
 			accumulators[result.CandidateID] = accumulator
 		}
@@ -99,6 +108,8 @@ func summarizeTargetCandidates(results []TargetSuiteRunResult) []TargetCandidate
 			summary.AvgArtifactBytes = summary.TotalArtifactBytes / int64(summary.Runs)
 			summary.AvgArtifactFiles = summary.TotalArtifactFiles / summary.Runs
 		}
+		summary.OutcomeSummaries = targetSuiteOutcomeStats(accumulator.outcomeStats)
+		summary.ActivationSummaries = targetSuiteActivationStats(accumulator.activationStats)
 		summary.Score = targetCandidateScore(summary)
 		summary.CostPenalty = targetCandidateCostPenalty(summary)
 		summary.Status = targetCandidateStatus(summary)
@@ -174,6 +185,13 @@ func (a *targetCandidateAccumulator) observe(result TargetSuiteRunResult) {
 	if result.TargetOracle.Attribution != "" {
 		a.attributions[result.TargetOracle.Attribution] = struct{}{}
 	}
+	recordTargetSuiteOutcome(a.outcomeStats, result.OutcomeCategory, result.Confirmed)
+	recordTargetSuiteActivation(a.activationStats, result.ActivationStage, result.Confirmed)
+	if result.ActivationStage == TargetActivationStageActivationReached {
+		a.summary.ActivationReached++
+	} else if result.ActivationStage != "" {
+		a.summary.ActivationNotReached++
+	}
 
 	switch result.TaskCompliance.Status {
 	case target.TargetTaskComplianceStatusCompliant:
@@ -206,7 +224,10 @@ func (a *targetCandidateAccumulator) observe(result TargetSuiteRunResult) {
 func targetCandidateScore(summary TargetCandidateSummary) int {
 	return summary.ContractViolations*4 +
 		summary.Confirmed*2 +
+		summary.ActivationReached +
 		summary.OracleInconclusive -
+		targetCandidateOutcomeCount(summary, corpus.TargetObservationTaskNoncompliant)*2 -
+		targetCandidateOutcomeCount(summary, corpus.TargetObservationExecutionNotReached)*2 -
 		summary.ComplianceViolated*2 -
 		summary.Errors*5
 }
@@ -228,6 +249,8 @@ func targetCandidateStatus(summary TargetCandidateSummary) string {
 		return "contract-violation"
 	case summary.Confirmed > 0:
 		return "confirmed"
+	case summary.ActivationReached > 0:
+		return "activation-reached"
 	case summary.OracleInconclusive > 0:
 		return "inconclusive"
 	case summary.OracleNegative > 0:
@@ -235,6 +258,15 @@ func targetCandidateStatus(summary TargetCandidateSummary) string {
 	default:
 		return "unknown"
 	}
+}
+
+func targetCandidateOutcomeCount(summary TargetCandidateSummary, category corpus.TargetObservationCategory) int {
+	for _, item := range summary.OutcomeSummaries {
+		if item.Category == category {
+			return item.TotalRuns
+		}
+	}
+	return 0
 }
 
 func sortedTargetOracleStatuses(values map[target.TargetOracleStatus]struct{}) []target.TargetOracleStatus {
