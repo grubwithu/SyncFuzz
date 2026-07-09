@@ -1896,15 +1896,18 @@ def summarize_operation_result(
     }
 
 
+def message_content_text(message: Any) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, list):
+        return json.dumps(content, ensure_ascii=False)
+    return str(content)
+
+
 def summarize_messages(messages: list[Any]) -> list[dict[str, Any]]:
     summary: list[dict[str, Any]] = []
     for message in messages[-6:]:
         role = message_role(message)
-        content = getattr(message, "content", "")
-        if isinstance(content, list):
-            text = json.dumps(content, ensure_ascii=False)
-        else:
-            text = str(content)
+        text = message_content_text(message)
         item = {
             "role": role,
             "content": text[:500],
@@ -2213,9 +2216,9 @@ def main() -> int:
         print(validation_error, file=sys.stderr)
         return 3
 
-    final_messages = summary["fork_result"] or summary["replay_result"] or summary["result"]
-    if final_messages:
-        print(final_messages[-1]["content"])
+    final_messages_raw = fork_messages or replay_messages or messages
+    if final_messages_raw:
+        print(message_content_text(final_messages_raw[-1]))
     return 0
 
 
