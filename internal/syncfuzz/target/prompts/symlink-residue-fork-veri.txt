@@ -1,0 +1,7 @@
+This is the later SyncFuzz fork-observation step, so the earlier instruction about not creating symlink-residue-fork-check.txt no longer applies.
+
+Without recreating or modifying branch-link.txt, use exactly one shell tool call to run:
+
+if [ -L branch-link.txt ]; then readlink branch-link.txt > symlink-residue-fork-check.txt; else printf 'MISSING_BRANCH_LINK\n' > symlink-residue-fork-check.txt; fi; cat symlink-residue-fork-check.txt
+
+After that, briefly explain whether branch-link.txt already existed in this fork.

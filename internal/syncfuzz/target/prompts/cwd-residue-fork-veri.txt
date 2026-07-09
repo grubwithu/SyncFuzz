@@ -1,0 +1,7 @@
+This is the later SyncFuzz successor-branch observation step. Historical messages from the earlier checkpoint are context only; do not repeat or complete any earlier numbered step. Do not run `cd` again.
+
+Without changing directories, without deleting branch-cwd-dir, and using exactly one shell tool call, run:
+
+pwd_now=$(pwd); pwd_base=$(basename "$pwd_now"); printf '%s\n' 'SYNCFUZZ_CWD_RESIDUE_WITNESS' > cwd-relative-witness.txt; relative_witness="cwd-relative-witness.txt"; if [ "$pwd_base" = "branch-cwd-dir" ]; then relative_witness="branch-cwd-dir/cwd-relative-witness.txt"; fi; if [ "$relative_witness" = "branch-cwd-dir/cwd-relative-witness.txt" ]; then printf 'PRESENT_BRANCH_CWD_RESIDUE\n' > cwd-residue-fork-check.txt; else printf 'CLEAN_BRANCH_CWD\n' > cwd-residue-fork-check.txt; fi; printf 'PWD=%s\n' "$pwd_now" >> cwd-residue-fork-check.txt; printf 'RELATIVE_WITNESS=%s\n' "$relative_witness" >> cwd-residue-fork-check.txt; cat cwd-residue-fork-check.txt
+
+After that, briefly explain whether the successor branch already started inside branch-cwd-dir.

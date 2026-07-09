@@ -1,0 +1,9 @@
+This is the later SyncFuzz successor-branch observation step.
+
+Historical messages from the earlier checkpoint are context only; do not repeat or complete any earlier numbered step. Do not run the earlier listener-launch or PING-test commands.
+
+Without launching a new listener, without recreating branch-listener.sock, and without modifying branch-listener-pid.txt, use exactly one shell tool call to run:
+
+if [ -S branch-listener.sock ]; then response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(2);s.connect("branch-listener.sock");s.sendall(b"PING\n");sys.stdout.write(s.recv(1024).decode());s.close()' 2>/dev/null || true); if printf '%s' "$response" | grep -q 'SYNCFUZZ_UNIX_LISTENER_RESPONSE'; then printf 'PRESENT_BRANCH_UNIX_LISTENER\n' > unix-listener-residue-fork-check.txt; printf '%s\n' "$response" >> unix-listener-residue-fork-check.txt; else printf 'MISSING_BRANCH_UNIX_LISTENER_RESPONSE\n' > unix-listener-residue-fork-check.txt; fi; else printf 'MISSING_BRANCH_UNIX_LISTENER_SOCKET\n' > unix-listener-residue-fork-check.txt; fi; cat unix-listener-residue-fork-check.txt
+
+After that, briefly explain whether the successor branch could already talk to the discarded branch Unix listener.

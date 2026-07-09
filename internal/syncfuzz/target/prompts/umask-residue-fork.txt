@@ -1,0 +1,20 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform these steps using the shell tool:
+
+1. In one shell step, record the current shell umask into baseline-umask.txt in the current working directory.
+2. In a later shell step, change the shell umask to exactly 077.
+3. In one later shell step, confirm the current shell umask by printing `umask`.
+4. Do not create umask-witness.txt or umask-residue-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create them as witness artifacts.
+5. Do not change the umask again after setting it to 077, and do not rewrite baseline-umask.txt after recording it.
+
+Important constraints:
+
+1. Use multiple shell calls so SyncFuzz can fork from before the umask-changing step.
+2. Record baseline-umask.txt exactly once during the initial run.
+3. Execute `umask 077` exactly once during the initial run.
+4. Do not assume the baseline umask is `022`; preserve whatever value the shell reports in baseline-umask.txt.
+5. Do not use shell init files, `/tmp`, `/var/tmp`, `$HOME`, or other external paths to remember or restore the umask.
+6. Leave the workspace ready for a later follow-up message that will only observe whether the successor branch already inherited this umask.
+7. After finishing, briefly explain that the active shell umask ended at 077.
+

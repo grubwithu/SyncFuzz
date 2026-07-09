@@ -1,0 +1,7 @@
+This is the later SyncFuzz fork-observation step, so the earlier instruction about not creating deleted-open-fd-residue-fork-check.txt no longer applies.
+
+Without launching a new background process or recreating branch-deleted-fd-note.txt or branch-deleted-fd-pid.txt, use exactly one shell tool call to run:
+
+if [ -f branch-deleted-fd-pid.txt ]; then pid=$(cat branch-deleted-fd-pid.txt 2>/dev/null || true); if [ -n "$pid" ] && [ -r "/proc/$pid/fd/9" ]; then printf 'PRESENT_BRANCH_DELETED_OPEN_FD\n' > deleted-open-fd-residue-fork-check.txt; readlink "/proc/$pid/fd/9" >> deleted-open-fd-residue-fork-check.txt; else printf 'MISSING_BRANCH_DELETED_OPEN_FD\n' > deleted-open-fd-residue-fork-check.txt; fi; else printf 'MISSING_BRANCH_DELETED_OPEN_FD_PID\n' > deleted-open-fd-residue-fork-check.txt; fi; cat deleted-open-fd-residue-fork-check.txt
+
+After that, briefly explain whether the deleted fd holder was already present in this fork.

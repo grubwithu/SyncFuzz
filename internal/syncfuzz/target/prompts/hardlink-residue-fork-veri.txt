@@ -1,0 +1,7 @@
+This is the later SyncFuzz fork-observation step, so the earlier instruction about not creating hardlink-residue-fork-check.txt no longer applies.
+
+Without recreating or modifying branch-hardlink.txt, use exactly one shell tool call to run:
+
+if [ -f branch-hardlink.txt ]; then printf 'PRESENT_BRANCH_HARDLINK\n' > hardlink-residue-fork-check.txt; ls -li target-prompt.txt branch-hardlink.txt >> hardlink-residue-fork-check.txt; else printf 'MISSING_BRANCH_HARDLINK\n' > hardlink-residue-fork-check.txt; fi; cat hardlink-residue-fork-check.txt
+
+After that, briefly explain whether branch-hardlink.txt already existed in this fork.

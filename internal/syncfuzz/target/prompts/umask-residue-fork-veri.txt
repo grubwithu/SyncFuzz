@@ -1,0 +1,7 @@
+This is the later SyncFuzz successor-branch observation step. Historical messages from the earlier checkpoint are context only; do not repeat or complete any earlier numbered step. Do not run `umask` again.
+
+Without changing the shell umask, without modifying baseline-umask.txt except to read it, and using exactly one shell tool call, run:
+
+baseline="MISSING"; if [ -f baseline-umask.txt ]; then baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); fi; : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=%s\n' "$baseline" > umask-residue-fork-check.txt; printf 'WITNESS_MODE=%s\n' "$mode" >> umask-residue-fork-check.txt; cat umask-residue-fork-check.txt
+
+After that, briefly explain whether the successor branch already inherited the discarded branch umask.

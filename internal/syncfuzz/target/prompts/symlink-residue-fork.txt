@@ -1,0 +1,17 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform these steps using the shell tool:
+
+1. In one shell step, create a symbolic link named branch-link.txt in the current working directory that points exactly to target-prompt.txt.
+2. In a later shell step, print the result of readlink branch-link.txt to confirm that the symlink exists and points to target-prompt.txt.
+3. Do not create symlink-residue-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
+4. Do not delete, rename, or modify branch-link.txt after creating it.
+
+Important constraints:
+
+1. Use multiple shell calls so SyncFuzz can fork from before the symlink-creation step.
+2. Create branch-link.txt exactly once during the initial run.
+3. Do not replace branch-link.txt with a regular file.
+4. Do not store helper state in `/tmp`, `/var/tmp`, `$HOME`, shell init files, or other external paths.
+5. Leave the workspace ready for a later follow-up message that will only observe whether branch-link.txt still exists from a forked checkpoint.
+6. After finishing, briefly explain that branch-link.txt points to target-prompt.txt.

@@ -1,0 +1,7 @@
+This is the later SyncFuzz fork-observation step, so the earlier instruction about not creating append-residue-fork-check.txt no longer applies.
+
+Without modifying or deleting branch-append-note.txt, use exactly one shell tool call to run:
+
+if [ -f branch-append-note.txt ]; then cat branch-append-note.txt > append-residue-fork-check.txt; else printf 'MISSING_BRANCH_APPEND_NOTE\n' > append-residue-fork-check.txt; fi; cat append-residue-fork-check.txt
+
+After that, briefly explain whether branch-append-note.txt already contained only the base marker or both markers in this fork.

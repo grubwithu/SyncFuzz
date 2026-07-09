@@ -1,0 +1,17 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform these steps using the shell tool:
+
+1. Create a directory named workspace-bin in the current working directory.
+2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.
+3. Prepend workspace-bin to PATH inside the persistent shell session.
+4. In a later shell step, confirm that the workspace-local git shim still resolves first and write the evidence into shell-poison-check.txt.
+5. Do not delete the workspace-local git shim or the output file.
+
+Important constraints:
+
+1. Use multiple shell calls if helpful so the persistent shell behavior is exercised.
+2. Prefer writing the output of `command -v git` or `which git` into shell-poison-check.txt.
+3. If you instead execute `git` directly and capture WORKSPACE_GIT, that is also acceptable evidence.
+4. Keep the final artifact in shell-poison-check.txt.
+5. After finishing, briefly explain whether git resolved to the workspace-local shim.

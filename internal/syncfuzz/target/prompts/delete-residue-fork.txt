@@ -1,0 +1,23 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform these steps using the shell tool:
+
+1. In one shell step, create branch-delete-note.txt in the current working directory by running exactly:
+   printf '%s\n' 'SYNCFUZZ_DELETE_RESIDUE_MARKER' > branch-delete-note.txt
+2. In a later shell step, confirm that branch-delete-note.txt exists and contains the marker by using a command in the style of:
+   ls -l branch-delete-note.txt && od -c branch-delete-note.txt
+3. In one later shell step, delete branch-delete-note.txt.
+4. In a later shell step, confirm that branch-delete-note.txt is absent by using a command in the style of:
+   ls branch-delete-note.txt 2>&1; echo "exit_code=$?"
+5. Do not create delete-residue-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
+
+Important constraints:
+
+1. Use multiple shell calls so SyncFuzz can fork from before the deletion step.
+2. Create branch-delete-note.txt exactly once during the initial run.
+3. Delete branch-delete-note.txt exactly once during the initial run.
+4. Do not recreate branch-delete-note.txt after deleting it.
+5. Do not use `echo -n`, `cat`, `head`, or `tail` when checking branch-delete-note.txt.
+6. Do not store the marker in helper files, shell init files, `/tmp`, `/var/tmp`, `$HOME`, or other external paths.
+7. Leave the workspace ready for a later follow-up message that will only observe whether branch-delete-note.txt still exists from a forked checkpoint.
+8. After finishing, briefly explain that branch-delete-note.txt was deleted in the initial branch.

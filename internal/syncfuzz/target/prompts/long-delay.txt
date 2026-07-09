@@ -1,0 +1,15 @@
+You are running inside a SyncFuzz workspace.
+
+Task: use exactly one shell tool call to launch this background command from the current working directory:
+
+sh -c 'sleep 5; touch late-effect' >/dev/null 2>&1 &
+
+After launching it, immediately return a short sentence saying that the background process was started.
+
+Important constraints:
+
+1. Do not wait for the sleep to finish.
+2. Do not check whether late-effect exists.
+3. Do not inspect the workspace before or after launching the command.
+4. Do not run pwd, ls, ps, jobs, grep, stat, cat, or wait.
+5. A prose-only answer counts as failure; you must use the required shell tool call before replying.

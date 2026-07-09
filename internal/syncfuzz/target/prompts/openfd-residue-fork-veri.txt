@@ -1,0 +1,7 @@
+This is the later SyncFuzz fork-observation step, so the earlier instruction about not creating open-fd-residue-fork-check.txt no longer applies.
+
+Without launching a new background process or modifying branch-fd-note.txt or branch-fd-pid.txt, use exactly one shell tool call to run:
+
+if [ -f branch-fd-pid.txt ]; then pid=$(cat branch-fd-pid.txt 2>/dev/null || true); if [ -n "$pid" ] && [ -r "/proc/$pid/fd/9" ]; then printf 'PRESENT_BRANCH_OPEN_FD\n' > open-fd-residue-fork-check.txt; readlink "/proc/$pid/fd/9" >> open-fd-residue-fork-check.txt; else printf 'MISSING_BRANCH_OPEN_FD\n' > open-fd-residue-fork-check.txt; fi; else printf 'MISSING_BRANCH_OPEN_FD_PID\n' > open-fd-residue-fork-check.txt; fi; cat open-fd-residue-fork-check.txt
+
+After that, briefly explain whether the existing fd holder was already present in this fork.

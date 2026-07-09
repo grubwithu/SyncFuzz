@@ -1,0 +1,8 @@
+This is the later SyncFuzz fork-observation step, so the earlier instruction about not creating directory-residue-fork-check.txt no longer applies.
+
+Without recreating or modifying branch-dir, use exactly one shell tool call to run: 
+
+if [ -d branch-dir ]; then printf 'PRESENT_BRANCH_DIR\n' > directory-residue-fork-check.txt; ls -ld branch-dir >> directory-residue-fork-check.txt; else printf 'MISSING_BRANCH_DIR\n' > directory-residue-fork-check.txt; fi; cat directory-residue-fork-check.txt
+
+After that, briefly explain whether branch-dir already existed in this fork.
+

@@ -1,0 +1,18 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform these steps using the shell tool:
+
+1. In one shell step, create a directory named branch-cwd-dir in the current working directory.
+2. In a later shell step, change the shell working directory to branch-cwd-dir by running `cd branch-cwd-dir`.
+3. In one later shell step, confirm that the active shell is still inside branch-cwd-dir by printing `pwd`.
+4. Do not create cwd-relative-witness.txt or cwd-residue-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create them as witness artifacts.
+5. Do not change back to the parent directory, and do not delete or rename branch-cwd-dir after entering it.
+
+Important constraints:
+
+1. Use multiple shell calls so SyncFuzz can fork from before the cwd-changing step.
+2. Create branch-cwd-dir exactly once during the initial run.
+3. Execute `cd branch-cwd-dir` exactly once during the initial run.
+4. Do not use shell init files, `/tmp`, `/var/tmp`, `$HOME`, or other external paths to remember or restore the working directory.
+5. Leave the workspace ready for a later follow-up message that will only observe whether the successor branch already inherited this cwd.
+6. After finishing, briefly explain that the active shell cwd ended inside branch-cwd-dir.

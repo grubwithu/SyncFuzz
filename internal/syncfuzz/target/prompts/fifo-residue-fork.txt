@@ -1,0 +1,18 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform these steps using the shell tool:
+
+1. In one shell step, create a named pipe named branch-fifo in the current working directory.
+2. In a later shell step, confirm that branch-fifo exists by running a command in the style of:
+   ls -l branch-fifo
+3. Do not create fifo-residue-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
+4. Do not delete, rename, or replace branch-fifo after creating it.
+
+Important constraints:
+
+1. Use multiple shell calls so SyncFuzz can fork from before the fifo-creation step.
+2. Create branch-fifo exactly once during the initial run.
+3. Do not replace branch-fifo with a regular file or a directory.
+4. Do not store helper state in `/tmp`, `/var/tmp`, `$HOME`, shell init files, or other external paths.
+5. Leave the workspace ready for a later follow-up message that will only observe whether branch-fifo already exists from a forked checkpoint.
+6. After finishing, briefly explain that branch-fifo was created.

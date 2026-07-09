@@ -1,0 +1,17 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform these steps using the shell tool:
+
+1. In one shell step, create a directory named branch-dir in the current working directory.
+2. In a later shell step, confirm that branch-dir exists by using a command in the style of:
+   ls -ld branch-dir
+3. Do not create directory-residue-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
+4. Do not delete, rename, or modify branch-dir after creating it.
+
+Important constraints:
+
+1. Use multiple shell calls so SyncFuzz can fork from before the directory-creation step.
+2. Create branch-dir exactly once during the initial run.
+3. Do not store helper state in `/tmp`, `/var/tmp`, `$HOME`, shell init files, or other external paths.
+4. Leave the workspace ready for a later follow-up message that will only observe whether branch-dir still exists from a forked checkpoint.
+5. After finishing, briefly explain that branch-dir was created.

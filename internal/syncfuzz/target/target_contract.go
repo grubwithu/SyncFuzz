@@ -235,6 +235,26 @@ func TargetContractProfileFor(targetID string) *TargetContractProfile {
 				Description:    "Fork from before the branch-local Unix listener launch should not let the successor branch connect to the discarded branch listener.",
 			},
 			{
+				RuleID:         "shell-cwd-fork-boundary",
+				TaskID:         CWDResidueForkTargetTaskID,
+				StateSurface:   "shell-session.cwd",
+				LifecycleEdge:  "checkpoint->fork",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Fork from before the cwd change should not preserve the later cwd across the selected checkpoint boundary.",
+			},
+			{
+				RuleID:         "shell-umask-fork-boundary",
+				TaskID:         UmaskResidueForkTargetTaskID,
+				StateSurface:   "shell-session.umask",
+				LifecycleEdge:  "checkpoint->fork",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Fork from before the umask change should not preserve the later umask across the selected checkpoint boundary.",
+			},
+			{
 				RuleID:         "child-process-post-return",
 				TaskID:         LongDelayTargetTaskID,
 				StateSurface:   "child-process",
@@ -371,6 +391,10 @@ func targetContractObservedOutcomeForTask(taskID string, oracle TargetOracleResu
 		return targetContractObservedWorkspaceForkOutcome("inherited-fd branch leakage", oracle)
 	case UnixListenerResidueForkTargetTaskID:
 		return targetContractObservedWorkspaceForkOutcome("Unix listener residue", oracle)
+	case CWDResidueForkTargetTaskID:
+		return targetContractObservedWorkspaceForkOutcome("cwd residue", oracle)
+	case UmaskResidueForkTargetTaskID:
+		return targetContractObservedWorkspaceForkOutcome("umask residue", oracle)
 	default:
 		return "", "", false
 	}
