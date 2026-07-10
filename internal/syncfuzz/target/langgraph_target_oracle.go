@@ -329,6 +329,32 @@ func inspectLangGraphForkUnixListenerResidueEvidence(workspace string) (persiste
 	return evidence, nil
 }
 
+func inspectLangGraphForkDiscardedServerTrustedClientEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, LanggraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkDiscardedServerTrustedClientCalls(operationShellCallsWithLifecycle(workspace, summary))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkSocketResponsePoisoningEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, LanggraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkSocketResponsePoisoningCalls(operationShellCallsWithLifecycle(workspace, summary))
+	evidence.Available = true
+	return evidence, nil
+}
+
 func inspectLangGraphForkCWDResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
 	summary, err := loadLangGraphOperationSummary(workspace, LanggraphForkArtifact)
 	if err != nil {
@@ -2102,6 +2128,164 @@ func evaluateLangGraphForkUnixListenerResidueCalls(calls []langgraphShellCall) p
 	}
 }
 
+func evaluateLangGraphForkDiscardedServerTrustedClientCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawWitnessMarker bool
+	var sawMissingMarker bool
+	var sawUnexpectedMutation bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandLaunchesUnixListener(command) ||
+			commandWritesWorkspaceFile(command, TargetUnixListenerPIDArtifact) ||
+			commandDeletesWorkspaceFile(command, TargetUnixListenerSocketArtifact) {
+			sawUnexpectedMutation = true
+		}
+		if !looksLikeDiscardedServerTrustedClientVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsDiscardedServerTrustedClientMarker(output) {
+			sawWitnessMarker = true
+		}
+		if outputShowsMissingDiscardedServerTrustedClient(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawUnexpectedMutation {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: TargetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up relaunched or recreated the branch Unix listener instead of only running the trusted-client observation",
+			},
+		}
+	}
+	if sawObservation && sawWitnessMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: TargetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up ran the trusted-client observation without relaunching the branch Unix listener",
+				"forked observation still consumed the discarded branch service response",
+			},
+		}
+	}
+	if sawObservation && sawMissingMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: TargetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed that the trusted-client step could not consume the discarded branch service response",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted a trusted-client observation against branch-listener.sock")
+	}
+	if sawWitnessMarker {
+		details = append(details, "fork follow-up output reported PRESENT_DISCARDED_SERVER_TRUSTED_CLIENT")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported MISSING_DISCARDED_SERVER_TRUSTED_CLIENT")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: TargetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
+func evaluateLangGraphForkSocketResponsePoisoningCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawWitnessMarker bool
+	var sawMissingMarker bool
+	var sawUnexpectedMutation bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		output := strings.TrimSpace(call.Output)
+		if command == "" {
+			continue
+		}
+		if commandLaunchesUnixListener(command) ||
+			commandWritesWorkspaceFile(command, TargetUnixListenerPIDArtifact) ||
+			commandDeletesWorkspaceFile(command, TargetUnixListenerSocketArtifact) {
+			sawUnexpectedMutation = true
+		}
+		if !looksLikeSocketResponsePoisoningVerification(command) {
+			continue
+		}
+		sawObservation = true
+		if outputShowsSocketResponsePoisoningMarker(output) {
+			sawWitnessMarker = true
+		}
+		if outputShowsMissingSocketResponsePoisoning(output) {
+			sawMissingMarker = true
+		}
+	}
+
+	if sawUnexpectedMutation {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: TargetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up relaunched or recreated the branch Unix listener instead of only running the cache observation",
+			},
+		}
+	}
+	if sawObservation && sawWitnessMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   true,
+			Attribution: TargetOracleAttributionRuntimeResidue,
+			Details: []string{
+				"langgraph fork follow-up ran the cache observation without relaunching the branch Unix listener",
+				"forked observation still cached the discarded branch service response",
+			},
+		}
+	}
+	if sawObservation && sawMissingMarker {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: TargetOracleAttributionCleanFork,
+			Details: []string{
+				"langgraph fork follow-up observed that the cache step could not recover the discarded branch service response",
+			},
+		}
+	}
+
+	var details []string
+	if sawObservation {
+		details = append(details, "langgraph fork follow-up attempted a cache observation against branch-listener.sock")
+	}
+	if sawWitnessMarker {
+		details = append(details, "fork follow-up output reported PRESENT_SOCKET_RESPONSE_POISONING")
+	}
+	if sawMissingMarker {
+		details = append(details, "fork follow-up output reported MISSING_SOCKET_RESPONSE_POISONING")
+	}
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: TargetOracleAttributionUnknown,
+		Details:     details,
+	}
+}
+
 func evaluateLangGraphForkCWDResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
 	var sawObservation bool
 	var sawDirectoryChange bool
@@ -2295,6 +2479,24 @@ func looksLikeUnixListenerResidueVerification(command string) bool {
 		strings.Contains(command, TargetUnixListenerSocketArtifact) ||
 		strings.Contains(command, "connect(") ||
 		strings.Contains(command, "SYNCFUZZ_UNIX_LISTENER_RESPONSE")
+}
+
+func looksLikeDiscardedServerTrustedClientVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, TargetDiscardedServerTrustedClientArtifact) ||
+		strings.Contains(command, TargetTrustedClientResponseArtifact) ||
+		strings.Contains(command, TargetUnixListenerSocketArtifact) ||
+		strings.Contains(command, "connect(") ||
+		strings.Contains(command, "SYNCFUZZ_TRUSTED_CLIENT_MESSAGE")
+}
+
+func looksLikeSocketResponsePoisoningVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, TargetSocketResponsePoisoningArtifact) ||
+		strings.Contains(command, TargetTrustedClientCacheArtifact) ||
+		strings.Contains(command, TargetUnixListenerSocketArtifact) ||
+		strings.Contains(command, "connect(") ||
+		strings.Contains(command, "SYNCFUZZ_SOCKET_POISON_PAYLOAD")
 }
 
 func looksLikeCWDResidueVerification(command string) bool {
@@ -2794,6 +2996,24 @@ func outputShowsUnixListenerResidueMarker(output string) bool {
 
 func outputShowsMissingUnixListenerResidue(output string) bool {
 	return strings.Contains(output, "MISSING_BRANCH_UNIX_LISTENER")
+}
+
+func outputShowsDiscardedServerTrustedClientMarker(output string) bool {
+	return strings.Contains(output, "PRESENT_DISCARDED_SERVER_TRUSTED_CLIENT") &&
+		strings.Contains(output, "SYNCFUZZ_TRUSTED_CLIENT_MESSAGE")
+}
+
+func outputShowsMissingDiscardedServerTrustedClient(output string) bool {
+	return strings.Contains(output, "MISSING_DISCARDED_SERVER_TRUSTED_CLIENT")
+}
+
+func outputShowsSocketResponsePoisoningMarker(output string) bool {
+	return strings.Contains(output, "PRESENT_SOCKET_RESPONSE_POISONING") &&
+		strings.Contains(output, "SYNCFUZZ_SOCKET_POISON_PAYLOAD")
+}
+
+func outputShowsMissingSocketResponsePoisoning(output string) bool {
+	return strings.Contains(output, "MISSING_SOCKET_RESPONSE_POISONING")
 }
 
 func outputShowsCWDResidueMarker(output string) bool {

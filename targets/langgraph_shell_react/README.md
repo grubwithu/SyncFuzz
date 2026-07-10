@@ -225,6 +225,10 @@ For `inherited-fd-branch-leakage`, SyncFuzz automatically forks from `before-inh
 
 For `unix-listener-residue-fork`, SyncFuzz automatically forks from `before-unix-listener-launch`. The fork oracle requires `unix-listener-residue-fork-check.txt` plus `langgraph-fork-summary.json` to show whether the successor branch can still connect to a discarded branch Unix socket listener without relaunching it.
 
+For `discarded-server-trusted-client`, SyncFuzz automatically forks from `before-unix-listener-launch`. The fork oracle requires `trusted-client-response.txt`, `discarded-server-trusted-client-check.txt`, and `langgraph-fork-summary.json` to show whether a successor-branch trusted-client step consumed a discarded branch Unix socket response without relaunching the listener.
+
+For `socket-response-poisoning`, SyncFuzz automatically forks from `before-unix-listener-launch`. The fork oracle requires `trusted-client-cache.txt`, `socket-response-poisoning-check.txt`, and `langgraph-fork-summary.json` to show whether a successor branch cached a discarded branch Unix socket response without relaunching the listener.
+
 Replay and fork lifecycle tasks now default to the durable `disk` checkpoint backend. That backend persists checkpoint state under `langgraph-checkpoints/` inside the SyncFuzz workspace and describes the resulting files in `langgraph-checkpointer.json`.
 
 If you set `LANGGRAPH_PROCESS_MODE=split-process`, the wrapper performs the initial branch and the replay/fork follow-up in separate Python processes while reusing the same durable checkpoint directory. In that mode the workspace keeps phase artifacts such as `langgraph-run-summary-initial.json`, `langgraph-run-summary-resume.json`, `langgraph-lifecycle-initial.json`, `langgraph-lifecycle-resume.json`, `langgraph-checkpointer-initial.json`, and `langgraph-checkpointer-resume.json`, then merges them back into the canonical artifact names.
@@ -262,7 +266,7 @@ go run ./cmd/syncfuzz target run \
 
 The shell wrapper in [examples/target-commands/langgraph-shell-react.sh](/home/grub/workspace/agent_sec/SyncFuzz/examples/target-commands/langgraph-shell-react.sh) forwards these environment variables to `run_target.py`.
 
-When you use the built-in SyncFuzz tasks `persistent-shell-poisoning-replay`, `persistent-shell-poisoning-fork`, `file-residue-fork`, `directory-residue-fork`, `delete-residue-fork`, `symlink-residue-fork`, `rename-residue-fork`, `mode-residue-fork`, `append-residue-fork`, `hardlink-residue-fork`, `fifo-residue-fork`, `open-fd-residue-fork`, `deleted-open-fd-residue-fork`, `inherited-fd-branch-leakage`, or `unix-listener-residue-fork`, SyncFuzz sets these replay/fork environment variables automatically, switches the checkpointer backend to `disk`, and enables `LANGGRAPH_PROCESS_MODE=split-process` so the replay/fork step consumes checkpoints from a fresh target process. The manual environment form remains useful for ad hoc experiments.
+When you use the built-in SyncFuzz tasks `persistent-shell-poisoning-replay`, `persistent-shell-poisoning-fork`, `file-residue-fork`, `directory-residue-fork`, `delete-residue-fork`, `symlink-residue-fork`, `rename-residue-fork`, `mode-residue-fork`, `append-residue-fork`, `hardlink-residue-fork`, `fifo-residue-fork`, `open-fd-residue-fork`, `deleted-open-fd-residue-fork`, `inherited-fd-branch-leakage`, `unix-listener-residue-fork`, `discarded-server-trusted-client`, `socket-response-poisoning`, `cwd-residue-fork`, or `umask-residue-fork`, SyncFuzz sets these replay/fork environment variables automatically, switches the checkpointer backend to `disk`, and enables `LANGGRAPH_PROCESS_MODE=split-process` so the replay/fork step consumes checkpoints from a fresh target process. The manual environment form remains useful for ad hoc experiments.
 
 ## Notes
 

@@ -131,6 +131,22 @@ func TestTargetContractProfileIncludesExecutionContextResidueRules(t *testing.T)
 	if umaskRule.RuleID != "shell-umask-fork-boundary" || umaskRule.StateSurface != "shell-session.umask" {
 		t.Fatalf("unexpected umask residue contract rule: %#v", umaskRule)
 	}
+
+	trustedClientRule, ok := target.TargetContractRuleFor(profile, target.DiscardedServerTrustedClientTargetTaskID)
+	if !ok {
+		t.Fatalf("expected trusted-client contract rule")
+	}
+	if trustedClientRule.RuleID != "communication-trusted-client-fork-boundary" || trustedClientRule.StateSurface != "communication.trusted-client-output" {
+		t.Fatalf("unexpected trusted-client contract rule: %#v", trustedClientRule)
+	}
+
+	responseCacheRule, ok := target.TargetContractRuleFor(profile, target.SocketResponsePoisoningTargetTaskID)
+	if !ok {
+		t.Fatalf("expected response-cache contract rule")
+	}
+	if responseCacheRule.RuleID != "communication-response-cache-fork-boundary" || responseCacheRule.StateSurface != "communication.response-cache" {
+		t.Fatalf("unexpected response-cache contract rule: %#v", responseCacheRule)
+	}
 }
 
 func TestEvaluateTargetContractInterpretationCWDResidueViolation(t *testing.T) {
@@ -174,6 +190,44 @@ func TestEvaluateTargetContractInterpretationUmaskCleanForkConsistent(t *testing
 	}
 	if result.RuleID != "shell-umask-fork-boundary" {
 		t.Fatalf("unexpected rule id: %#v", result)
+	}
+}
+
+func TestEvaluateTargetContractInterpretationTrustedClientViolation(t *testing.T) {
+	profile := target.TargetContractProfileFor("langgraph-shell-react")
+	result := target.EvaluateTargetContractInterpretation(profile, target.DiscardedServerTrustedClientTargetTaskID, target.TargetOracleResult{
+		Name:        "discarded-server-trusted-client",
+		Status:      target.TargetOracleStatusConfirmed,
+		Confirmed:   true,
+		Attribution: target.TargetOracleAttributionRuntimeResidue,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.DiscardedServerTrustedClientTargetTaskID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if result == nil {
+		t.Fatalf("expected contract interpretation")
+	}
+	if result.Status != target.TargetContractStatusViolation || result.RuleID != "communication-trusted-client-fork-boundary" {
+		t.Fatalf("unexpected trusted-client interpretation: %#v", result)
+	}
+}
+
+func TestEvaluateTargetContractInterpretationSocketResponsePoisoningConsistent(t *testing.T) {
+	profile := target.TargetContractProfileFor("langgraph-shell-react")
+	result := target.EvaluateTargetContractInterpretation(profile, target.SocketResponsePoisoningTargetTaskID, target.TargetOracleResult{
+		Name:        "socket-response-poisoning",
+		Status:      target.TargetOracleStatusNegative,
+		Confirmed:   false,
+		Attribution: target.TargetOracleAttributionCleanFork,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.SocketResponsePoisoningTargetTaskID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if result == nil {
+		t.Fatalf("expected contract interpretation")
+	}
+	if result.Status != target.TargetContractStatusConsistent || result.RuleID != "communication-response-cache-fork-boundary" {
+		t.Fatalf("unexpected response-cache interpretation: %#v", result)
 	}
 }
 

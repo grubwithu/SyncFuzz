@@ -247,6 +247,10 @@ func evaluateWorkspaceResidueForkTargetTaskCompliance(workspace string, spec wor
 		evaluateInheritedFDLeakTaskCompliance(&result, historyCalls, forkCalls)
 	case UnixListenerResidueForkTargetTaskID:
 		evaluateUnixListenerResidueForkTaskCompliance(&result, historyCalls, forkCalls)
+	case DiscardedServerTrustedClientTargetTaskID:
+		evaluateDiscardedServerTrustedClientTaskCompliance(&result, historyCalls, forkCalls)
+	case SocketResponsePoisoningTargetTaskID:
+		evaluateSocketResponsePoisoningTaskCompliance(&result, historyCalls, forkCalls)
 	case CWDResidueForkTargetTaskID:
 		evaluateCWDResidueForkTaskCompliance(&result, historyCalls, forkCalls)
 	case UmaskResidueForkTargetTaskID:
@@ -1361,6 +1365,162 @@ func evaluateUnixListenerResidueForkTaskCompliance(result *TargetTaskComplianceR
 	}
 }
 
+func evaluateDiscardedServerTrustedClientTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	launchCount := 0
+	verifyCount := 0
+	historyCheckWrites := 0
+	historyResponseWrites := 0
+	summaryCheckWrites := 0
+	summaryResponseWrites := 0
+	summaryMutations := 0
+	historyDeletes := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandLaunchesUnixListener(command) {
+			launchCount++
+		}
+		if looksLikeDiscardedServerTrustedClientVerification(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, TargetDiscardedServerTrustedClientArtifact) {
+			historyCheckWrites++
+		}
+		if commandWritesWorkspaceFile(command, TargetTrustedClientResponseArtifact) {
+			historyResponseWrites++
+		}
+		if commandDeletesWorkspaceFile(command, TargetUnixListenerSocketArtifact) {
+			historyDeletes++
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, TargetDiscardedServerTrustedClientArtifact) || discardedServerTrustedClientFollowupProducedWitness(call) {
+			summaryCheckWrites++
+		}
+		if commandWritesWorkspaceFile(command, TargetTrustedClientResponseArtifact) {
+			summaryResponseWrites++
+		}
+		if commandLaunchesUnixListener(command) ||
+			commandWritesWorkspaceFile(command, TargetUnixListenerPIDArtifact) ||
+			commandDeletesWorkspaceFile(command, TargetUnixListenerSocketArtifact) {
+			summaryMutations++
+		}
+	}
+
+	requireExactCount(result, launchCount, 1, "initial branch launched the Unix listener exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified that branch-listener.sock returned the trusted-client marker")
+	if summaryCheckWrites == 0 {
+		appendTargetTaskViolation(result, "fork follow-up wrote discarded-server-trusted-client-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up wrote discarded-server-trusted-client-check.txt")
+	}
+	if summaryResponseWrites == 0 {
+		appendTargetTaskViolation(result, "fork follow-up wrote trusted-client-response.txt")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up wrote trusted-client-response.txt")
+	}
+	if historyCheckWrites > 0 || historyResponseWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided creating the later trusted-client witness artifacts")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later trusted-client witness artifacts")
+	}
+	if historyDeletes > 1 {
+		appendTargetTaskViolation(result, "initial branch avoided deleting branch-listener.sock outside listener setup")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch only touched branch-listener.sock during listener setup")
+	}
+	if summaryMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up avoided relaunching or recreating the Unix listener before the trusted-client observation")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up only consumed the existing Unix listener response")
+	}
+}
+
+func evaluateSocketResponsePoisoningTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	launchCount := 0
+	verifyCount := 0
+	historyCheckWrites := 0
+	historyCacheWrites := 0
+	summaryCheckWrites := 0
+	summaryCacheWrites := 0
+	summaryMutations := 0
+	historyDeletes := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandLaunchesUnixListener(command) {
+			launchCount++
+		}
+		if looksLikeSocketResponsePoisoningVerification(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, TargetSocketResponsePoisoningArtifact) {
+			historyCheckWrites++
+		}
+		if commandWritesWorkspaceFile(command, TargetTrustedClientCacheArtifact) {
+			historyCacheWrites++
+		}
+		if commandDeletesWorkspaceFile(command, TargetUnixListenerSocketArtifact) {
+			historyDeletes++
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, TargetSocketResponsePoisoningArtifact) || socketResponsePoisoningFollowupProducedWitness(call) {
+			summaryCheckWrites++
+		}
+		if commandWritesWorkspaceFile(command, TargetTrustedClientCacheArtifact) {
+			summaryCacheWrites++
+		}
+		if commandLaunchesUnixListener(command) ||
+			commandWritesWorkspaceFile(command, TargetUnixListenerPIDArtifact) ||
+			commandDeletesWorkspaceFile(command, TargetUnixListenerSocketArtifact) {
+			summaryMutations++
+		}
+	}
+
+	requireExactCount(result, launchCount, 1, "initial branch launched the Unix listener exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified that branch-listener.sock returned the response-poisoning marker")
+	if summaryCheckWrites == 0 {
+		appendTargetTaskViolation(result, "fork follow-up wrote socket-response-poisoning-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up wrote socket-response-poisoning-check.txt")
+	}
+	if summaryCacheWrites == 0 {
+		appendTargetTaskViolation(result, "fork follow-up wrote trusted-client-cache.txt")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up wrote trusted-client-cache.txt")
+	}
+	if historyCheckWrites > 0 || historyCacheWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch avoided creating the later cache witness artifacts")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later cache witness artifacts")
+	}
+	if historyDeletes > 1 {
+		appendTargetTaskViolation(result, "initial branch avoided deleting branch-listener.sock outside listener setup")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch only touched branch-listener.sock during listener setup")
+	}
+	if summaryMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up avoided relaunching or recreating the Unix listener before the cache observation")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up only cached the existing Unix listener response")
+	}
+}
+
 func evaluateCWDResidueForkTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
 	mkdirCount := 0
 	cdCount := 0
@@ -1549,6 +1709,28 @@ func unixListenerFollowupProducedWitness(call langgraphShellCall) bool {
 		looksLikeUnixListenerResidueVerification(command)
 }
 
+func discardedServerTrustedClientFollowupProducedWitness(call langgraphShellCall) bool {
+	command := normalizeShellCommand(call.Command)
+	output := strings.TrimSpace(call.Output)
+	if !outputShowsDiscardedServerTrustedClientMarker(output) && !outputShowsMissingDiscardedServerTrustedClient(output) {
+		return false
+	}
+	return command == "" ||
+		strings.Contains(command, TargetDiscardedServerTrustedClientArtifact) ||
+		looksLikeDiscardedServerTrustedClientVerification(command)
+}
+
+func socketResponsePoisoningFollowupProducedWitness(call langgraphShellCall) bool {
+	command := normalizeShellCommand(call.Command)
+	output := strings.TrimSpace(call.Output)
+	if !outputShowsSocketResponsePoisoningMarker(output) && !outputShowsMissingSocketResponsePoisoning(output) {
+		return false
+	}
+	return command == "" ||
+		strings.Contains(command, TargetSocketResponsePoisoningArtifact) ||
+		looksLikeSocketResponsePoisoningVerification(command)
+}
+
 func commandPrintsCurrentUmask(command string) bool {
 	command = normalizeShellCommand(command)
 	fields := strings.Fields(command)
@@ -1600,15 +1782,7 @@ func loadLangGraphOperationShellCalls(workspace string, artifact string) (*langg
 	if summary == nil {
 		return nil, nil, false, nil
 	}
-	summaryCalls := buildLangGraphShellCalls(operationFollowupMessages(summary))
-	lifecycleCalls, lifecycleOK, err := loadLangGraphLifecycleShellCalls(workspace, summary.Operation)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	if lifecycleOK && len(lifecycleCalls) > 0 {
-		return summary, attachShellCallOutputs(lifecycleCalls, summaryCalls), true, nil
-	}
-	return summary, summaryCalls, true, nil
+	return summary, operationShellCallsWithLifecycle(workspace, summary), true, nil
 }
 
 func loadPrimaryLangGraphShellCalls(workspace string) ([]langgraphShellCall, bool, error) {

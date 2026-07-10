@@ -36,6 +36,8 @@ SHELL_REQUIRED_TASKS = {
     "deleted-open-fd-residue-fork",
     "inherited-fd-branch-leakage",
     "unix-listener-residue-fork",
+    "discarded-server-trusted-client",
+    "socket-response-poisoning",
     "cwd-residue-fork",
     "umask-residue-fork"
 }
@@ -1992,13 +1994,21 @@ def summarize_messages(messages: list[Any]) -> list[dict[str, Any]]:
         text = message_content_text(message)
         item = {
             "role": role,
-            "content": text[:500],
+            "content": summarize_message_content(role, text),
         }
         tool_calls = summarize_tool_calls(message)
         if tool_calls:
             item["tool_calls"] = tool_calls
         summary.append(item)
     return summary
+
+
+def summarize_message_content(role: str, text: str) -> str:
+    if role == "tool":
+        return text
+    if len(text) <= 2000:
+        return text
+    return text[:2000]
 
 
 def summarize_tool_calls(message: Any) -> list[dict[str, str]]:
@@ -2021,9 +2031,9 @@ def summarize_tool_calls(message: Any) -> list[dict[str, str]]:
         summary.append(
             {
                 "name": name,
-                "args": json.dumps(args, ensure_ascii=False)[:500]
+                "args": json.dumps(args, ensure_ascii=False)
                 if not isinstance(args, str)
-                else args[:500],
+                else args,
             }
         )
     return summary
@@ -2205,11 +2215,17 @@ def main() -> int:
     )
     tool_messages = tool_message_count(observed_messages)
     ai_tool_calls = ai_tool_call_count(observed_messages)
+    tool_use_observed = tool_messages > 0 or ai_tool_calls > 0
     validation_error = ""
-    if require_tool_use and tool_messages == 0:
+    if require_tool_use and ai_tool_calls == 0:
         validation_error = (
             "required shell tool use was not observed; the model returned without "
             "executing ShellToolMiddleware"
+        )
+    elif require_tool_use and tool_messages == 0:
+        validation_error = (
+            "shell tool use was requested but no tool response was recorded; "
+            "the model emitted a tool call without an observed ShellToolMiddleware result"
         )
 
     summary = {
@@ -2230,7 +2246,7 @@ def main() -> int:
         "task_id": str(task_contract.get("task_id", "")),
         "prompt_file": args.prompt_file or os.environ.get("SYNCFUZZ_PROMPT_FILE", ""),
         "require_tool_use": require_tool_use,
-        "tool_use_observed": tool_messages > 0,
+        "tool_use_observed": tool_use_observed,
         "tool_message_count": tool_messages,
         "ai_tool_call_count": ai_tool_calls,
         "validation_error": validation_error,

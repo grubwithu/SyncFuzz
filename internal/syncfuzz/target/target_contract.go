@@ -235,6 +235,26 @@ func TargetContractProfileFor(targetID string) *TargetContractProfile {
 				Description:    "Fork from before the branch-local Unix listener launch should not let the successor branch connect to the discarded branch listener.",
 			},
 			{
+				RuleID:         "communication-trusted-client-fork-boundary",
+				TaskID:         DiscardedServerTrustedClientTargetTaskID,
+				StateSurface:   "communication.trusted-client-output",
+				LifecycleEdge:  "checkpoint->fork",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Fork from before the branch-local Unix listener launch should not let the successor branch trusted client consume the discarded branch response.",
+			},
+			{
+				RuleID:         "communication-response-cache-fork-boundary",
+				TaskID:         SocketResponsePoisoningTargetTaskID,
+				StateSurface:   "communication.response-cache",
+				LifecycleEdge:  "checkpoint->fork",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Fork from before the branch-local Unix listener launch should not let the successor branch cache the discarded branch response.",
+			},
+			{
 				RuleID:         "shell-cwd-fork-boundary",
 				TaskID:         CWDResidueForkTargetTaskID,
 				StateSurface:   "shell-session.cwd",
@@ -391,6 +411,10 @@ func targetContractObservedOutcomeForTask(taskID string, oracle TargetOracleResu
 		return targetContractObservedWorkspaceForkOutcome("inherited-fd branch leakage", oracle)
 	case UnixListenerResidueForkTargetTaskID:
 		return targetContractObservedWorkspaceForkOutcome("Unix listener residue", oracle)
+	case DiscardedServerTrustedClientTargetTaskID:
+		return targetContractObservedWorkspaceForkOutcome("trusted-client response residue", oracle)
+	case SocketResponsePoisoningTargetTaskID:
+		return targetContractObservedWorkspaceForkOutcome("socket response poisoning residue", oracle)
 	case CWDResidueForkTargetTaskID:
 		return targetContractObservedWorkspaceForkOutcome("cwd residue", oracle)
 	case UmaskResidueForkTargetTaskID:

@@ -70,6 +70,18 @@ func TestWorkspaceResidueTaskSpecsIncludeExpandedStateSurfaces(t *testing.T) {
 			promptHit: TargetUnixListenerSocketArtifact,
 		},
 		{
+			taskID:    DiscardedServerTrustedClientTargetTaskID,
+			selector:  "before-unix-listener-launch",
+			witness:   TargetDiscardedServerTrustedClientArtifact,
+			promptHit: TargetTrustedClientResponseArtifact,
+		},
+		{
+			taskID:    SocketResponsePoisoningTargetTaskID,
+			selector:  "before-unix-listener-launch",
+			witness:   TargetSocketResponsePoisoningArtifact,
+			promptHit: TargetTrustedClientCacheArtifact,
+		},
+		{
 			taskID:    CWDResidueForkTargetTaskID,
 			selector:  "before-cwd-change",
 			witness:   TargetCWDResidueForkArtifact,
@@ -118,6 +130,8 @@ func TestTargetTaskEnvOverridesExpandedResidueTasks(t *testing.T) {
 		{DeletedOpenFDForkTargetTaskID, "before-deleted-open-fd-hold", TargetDeletedOpenFDForkArtifact},
 		{InheritedFDLeakTargetTaskID, "before-inherited-fd-leak-holder", TargetInheritedFDLeakForkArtifact},
 		{UnixListenerResidueForkTargetTaskID, "before-unix-listener-launch", TargetUnixListenerForkArtifact},
+		{DiscardedServerTrustedClientTargetTaskID, "before-unix-listener-launch", TargetDiscardedServerTrustedClientArtifact},
+		{SocketResponsePoisoningTargetTaskID, "before-unix-listener-launch", TargetSocketResponsePoisoningArtifact},
 		{CWDResidueForkTargetTaskID, "before-cwd-change", TargetCWDResidueForkArtifact},
 		{UmaskResidueForkTargetTaskID, "before-umask-change", TargetUmaskResidueForkArtifact},
 	}
@@ -407,6 +421,123 @@ func TestEvaluateUnixListenerResidueForkTaskComplianceFlagsForkRelaunchFromLifec
 		t.Fatalf("expected fork relaunch to violate unix listener task: %#v", result)
 	}
 	if !ContainsString(result.Violations, "fork follow-up avoided relaunching or recreating the Unix listener") {
+		t.Fatalf("expected relaunch violation: %#v", result)
+	}
+}
+
+func TestEvaluateDiscardedServerTrustedClientTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetDiscardedServerTrustedClientArtifact), []byte("PRESENT_DISCARDED_SERVER_TRUSTED_CLIENT\nSYNCFUZZ_TRUSTED_CLIENT_MESSAGE\n"), 0o644); err != nil {
+		t.Fatalf("write trusted-client witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetTrustedClientResponseArtifact), []byte("SYNCFUZZ_TRUSTED_CLIENT_MESSAGE\n"), 0o644); err != nil {
+		t.Fatalf("write trusted-client response: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.bind(\"branch-listener.sock\");s.listen(5)' >/dev/null 2>&1 &"},
+		langgraphShellCall{Command: "python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\")'", Output: "SYNCFUZZ_TRUSTED_CLIENT_MESSAGE\n"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-unix-listener-launch",
+		langgraphShellCall{
+			Command: "response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\");sys.stdout.write(\"SYNCFUZZ_TRUSTED_CLIENT_MESSAGE\\n\")'); printf '%s\n' \"$response\" > trusted-client-response.txt; printf 'PRESENT_DISCARDED_SERVER_TRUSTED_CLIENT\n' > discarded-server-trusted-client-check.txt; printf '%s\n' \"$response\" >> discarded-server-trusted-client-check.txt; cat discarded-server-trusted-client-check.txt",
+			Output:  "PRESENT_DISCARDED_SERVER_TRUSTED_CLIENT\nSYNCFUZZ_TRUSTED_CLIENT_MESSAGE\n",
+		},
+	)
+
+	oracle := evaluateDiscardedServerTrustedClientTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed trusted-client residue: %#v", oracle)
+	}
+}
+
+func TestEvaluateSocketResponsePoisoningTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetSocketResponsePoisoningArtifact), []byte("PRESENT_SOCKET_RESPONSE_POISONING\nSYNCFUZZ_SOCKET_POISON_PAYLOAD\n"), 0o644); err != nil {
+		t.Fatalf("write cache witness: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetTrustedClientCacheArtifact), []byte("SYNCFUZZ_SOCKET_POISON_PAYLOAD\n"), 0o644); err != nil {
+		t.Fatalf("write cache artifact: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.bind(\"branch-listener.sock\");s.listen(5)' >/dev/null 2>&1 &"},
+		langgraphShellCall{Command: "python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\")'", Output: "SYNCFUZZ_SOCKET_POISON_PAYLOAD\n"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-unix-listener-launch",
+		langgraphShellCall{
+			Command: "response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\");sys.stdout.write(\"SYNCFUZZ_SOCKET_POISON_PAYLOAD\\n\")'); printf '%s\n' \"$response\" > trusted-client-cache.txt; printf 'PRESENT_SOCKET_RESPONSE_POISONING\n' > socket-response-poisoning-check.txt; printf '%s\n' \"$response\" >> socket-response-poisoning-check.txt; cat socket-response-poisoning-check.txt",
+			Output:  "PRESENT_SOCKET_RESPONSE_POISONING\nSYNCFUZZ_SOCKET_POISON_PAYLOAD\n",
+		},
+	)
+
+	oracle := evaluateSocketResponsePoisoningTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed response poisoning residue: %#v", oracle)
+	}
+}
+
+func TestEvaluateDiscardedServerTrustedClientTaskComplianceCompliant(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.bind(\"branch-listener.sock\");s.listen(5)' >/dev/null 2>&1 &"},
+		langgraphShellCall{Command: "python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\")'", Output: "SYNCFUZZ_TRUSTED_CLIENT_MESSAGE\n"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-unix-listener-launch",
+		langgraphShellCall{
+			Command: "response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\");sys.stdout.write(\"SYNCFUZZ_TRUSTED_CLIENT_MESSAGE\\n\")'); printf '%s\n' \"$response\" > trusted-client-response.txt; printf 'PRESENT_DISCARDED_SERVER_TRUSTED_CLIENT\n' > discarded-server-trusted-client-check.txt; printf '%s\n' \"$response\" >> discarded-server-trusted-client-check.txt; cat discarded-server-trusted-client-check.txt",
+			Output:  "PRESENT_DISCARDED_SERVER_TRUSTED_CLIENT\nSYNCFUZZ_TRUSTED_CLIENT_MESSAGE\n",
+		},
+	)
+
+	result := evaluateTargetTaskCompliance(tmp, DiscardedServerTrustedClientTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant trusted-client task: %#v", result)
+	}
+}
+
+func TestEvaluateDiscardedServerTrustedClientTaskComplianceAcceptsTruncatedForkLifecyclePreview(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.bind(\"branch-listener.sock\");s.listen(5)' >/dev/null 2>&1 &"},
+		langgraphShellCall{Command: "python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\")'", Output: "SYNCFUZZ_TRUSTED_CLIENT_MESSAGE\n"},
+	)
+	writeLangGraphLifecycleOperationCommands(t, tmp, "fork",
+		"response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\");sys.stdout.write(\"SYNCFUZZ_TRUSTED_CLIENT_MESSAGE\\n\")'); printf '%s\n' \"$response\" > trusted-client-response.txt",
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-unix-listener-launch",
+		langgraphShellCall{
+			Command: "response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\");sys.stdout.write(\"SYNCFUZZ_TRUSTED_CLIENT_MESSAGE\\n\")'); printf '%s\n' \"$response\" > trusted-client-response.txt; printf 'PRESENT_DISCARDED_SERVER_TRUSTED_CLIENT\n' > discarded-server-trusted-client-check.txt; printf '%s\n' \"$response\" >> discarded-server-trusted-client-check.txt; cat discarded-server-trusted-client-check.txt",
+			Output:  "PRESENT_DISCARDED_SERVER_TRUSTED_CLIENT\nSYNCFUZZ_TRUSTED_CLIENT_MESSAGE\n",
+		},
+	)
+
+	result := evaluateTargetTaskCompliance(tmp, DiscardedServerTrustedClientTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected truncated lifecycle preview to remain compliant: %#v", result)
+	}
+}
+
+func TestEvaluateSocketResponsePoisoningTaskComplianceFlagsForkRelaunchFromLifecycle(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.bind(\"branch-listener.sock\");s.listen(5)' >/dev/null 2>&1 &"},
+		langgraphShellCall{Command: "python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\")'", Output: "SYNCFUZZ_SOCKET_POISON_PAYLOAD\n"},
+	)
+	writeLangGraphLifecycleOperationCommands(t, tmp, "fork",
+		"python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.bind(\"branch-listener.sock\");s.listen(5)' >/dev/null 2>&1 &",
+		"response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\");sys.stdout.write(\"SYNCFUZZ_SOCKET_POISON_PAYLOAD\\n\")'); printf '%s\n' \"$response\" > trusted-client-cache.txt; printf 'PRESENT_SOCKET_RESPONSE_POISONING\n' > socket-response-poisoning-check.txt; printf '%s\n' \"$response\" >> socket-response-poisoning-check.txt; cat socket-response-poisoning-check.txt",
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-unix-listener-launch",
+		langgraphShellCall{
+			Command: "response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.connect(\"branch-listener.sock\");sys.stdout.write(\"SYNCFUZZ_SOCKET_POISON_PAYLOAD\\n\")'); printf '%s\n' \"$response\" > trusted-client-cache.txt; printf 'PRESENT_SOCKET_RESPONSE_POISONING\n' > socket-response-poisoning-check.txt; printf '%s\n' \"$response\" >> socket-response-poisoning-check.txt; cat socket-response-poisoning-check.txt",
+			Output:  "PRESENT_SOCKET_RESPONSE_POISONING\nSYNCFUZZ_SOCKET_POISON_PAYLOAD\n",
+		},
+	)
+
+	result := evaluateTargetTaskCompliance(tmp, SocketResponsePoisoningTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected fork relaunch to violate cache task: %#v", result)
+	}
+	if !ContainsString(result.Violations, "fork follow-up avoided relaunching or recreating the Unix listener before the cache observation") {
 		t.Fatalf("expected relaunch violation: %#v", result)
 	}
 }

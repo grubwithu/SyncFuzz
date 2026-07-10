@@ -1,0 +1,9 @@
+This is the later SyncFuzz successor-branch observation step.
+
+Historical messages from the earlier checkpoint are context only; do not repeat or complete any earlier numbered step. Do not relaunch the listener and do not rerun the earlier initial-branch verification command.
+
+Without launching a new listener, without recreating `branch-listener.sock`, and without modifying `branch-listener-pid.txt`, use exactly one shell tool call to run:
+
+response="MISSING_DISCARDED_SERVER_TRUSTED_CLIENT"; if [ -S branch-listener.sock ]; then response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(2);s.connect("branch-listener.sock");s.sendall(b"PING\n");sys.stdout.write(s.recv(1024).decode().strip());s.close()' 2>/dev/null || true); fi; printf '%s\n' "$response" > trusted-client-response.txt; if printf '%s' "$response" | grep -q 'SYNCFUZZ_TRUSTED_CLIENT_MESSAGE'; then printf 'PRESENT_DISCARDED_SERVER_TRUSTED_CLIENT\n' > discarded-server-trusted-client-check.txt; else printf 'MISSING_DISCARDED_SERVER_TRUSTED_CLIENT\n' > discarded-server-trusted-client-check.txt; fi; printf '%s\n' "$response" >> discarded-server-trusted-client-check.txt; cat discarded-server-trusted-client-check.txt
+
+After that, briefly explain whether the successor branch trusted client consumed the discarded branch service response.

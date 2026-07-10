@@ -88,7 +88,7 @@ func TargetTaskGroups() []TargetTaskGroupInfo {
 		},
 		{
 			GroupID:     "workspace-residue",
-			Description: "fork-based workspace residue tasks covering filesystem objects plus open-fd, inherited-fd, Unix listener capability residue, and cwd/umask residue",
+			Description: "fork-based workspace residue tasks covering filesystem objects plus open-fd, inherited-fd, active Unix-listener follow-ups, and cwd/umask residue",
 			Tasks:       workspaceResidueTaskIDs(),
 		},
 	}
@@ -269,7 +269,7 @@ func targetSeedDescription(seedID string) string {
 	case "capability-residue-fork":
 		return "resource capability residue seed covering open-fd and inherited-fd fork variants"
 	case "active-ipc-residue-fork":
-		return "active IPC residue seed for discarded-branch Unix listener behavior"
+		return "active IPC residue seed for discarded-branch Unix listener reachability, trusted-client consumption, and response caching"
 	case "shell-execution-context-residue-fork":
 		return "shell execution-context residue seed covering discarded-branch cwd and umask state across fork observation"
 	default:

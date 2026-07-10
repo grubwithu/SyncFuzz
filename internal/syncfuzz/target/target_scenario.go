@@ -335,6 +335,10 @@ func workspaceResidueStateSurface(taskID string) string {
 		return "runtime.inherited-fd"
 	case UnixListenerResidueForkTargetTaskID:
 		return "runtime.unix-listener"
+	case DiscardedServerTrustedClientTargetTaskID:
+		return "communication.trusted-client-output"
+	case SocketResponsePoisoningTargetTaskID:
+		return "communication.response-cache"
 	case CWDResidueForkTargetTaskID:
 		return "shell-session.cwd"
 	case UmaskResidueForkTargetTaskID:
@@ -379,7 +383,7 @@ func workspaceResidueSeedID(taskID string) string {
 	switch taskID {
 	case OpenFDResidueForkTargetTaskID, DeletedOpenFDForkTargetTaskID, InheritedFDLeakTargetTaskID:
 		return "capability-residue-fork"
-	case UnixListenerResidueForkTargetTaskID:
+	case UnixListenerResidueForkTargetTaskID, DiscardedServerTrustedClientTargetTaskID, SocketResponsePoisoningTargetTaskID:
 		return "active-ipc-residue-fork"
 	case CWDResidueForkTargetTaskID, UmaskResidueForkTargetTaskID:
 		return "shell-execution-context-residue-fork"
@@ -416,6 +420,8 @@ func workspaceResiduePlantPrimitiveID(taskID string) string {
 		return "workspace-inherited-fd-holder"
 	case UnixListenerResidueForkTargetTaskID:
 		return "workspace-unix-listener"
+	case DiscardedServerTrustedClientTargetTaskID, SocketResponsePoisoningTargetTaskID:
+		return "workspace-unix-listener"
 	case CWDResidueForkTargetTaskID:
 		return "shell-cwd-change"
 	case UmaskResidueForkTargetTaskID:
@@ -451,6 +457,10 @@ func workspaceResidueActivationKindID(taskID string) string {
 		return "inherited-fd-secret-read"
 	case UnixListenerResidueForkTargetTaskID:
 		return "unix-socket-connect"
+	case DiscardedServerTrustedClientTargetTaskID:
+		return "trusted-client-consume"
+	case SocketResponsePoisoningTargetTaskID:
+		return "trusted-client-cache"
 	case CWDResidueForkTargetTaskID:
 		return "relative-path-resolution"
 	case UmaskResidueForkTargetTaskID:
@@ -488,6 +498,10 @@ func workspaceResidueOracleKindID(taskID string) string {
 		return "workspace-inherited-fd-leakage"
 	case UnixListenerResidueForkTargetTaskID:
 		return "workspace-unix-listener-residue"
+	case DiscardedServerTrustedClientTargetTaskID:
+		return "trusted-client-response-residue"
+	case SocketResponsePoisoningTargetTaskID:
+		return "socket-response-poisoning"
 	case CWDResidueForkTargetTaskID:
 		return "cwd-residue"
 	case UmaskResidueForkTargetTaskID:
@@ -523,6 +537,18 @@ func workspaceResidueMutations(taskID string) []TargetScenarioMutation {
 			Kind:       TargetScenarioMutationActivationSubstitution,
 			Summary:    "promote the witness from passive residue to an active IPC endpoint",
 		})
+	case DiscardedServerTrustedClientTargetTaskID:
+		mutations = append(mutations, TargetScenarioMutation{
+			MutationID: "activation-substitution.trusted-client-consume",
+			Kind:       TargetScenarioMutationActivationSubstitution,
+			Summary:    "promote the witness from endpoint reachability to successor-branch trusted-client consumption",
+		})
+	case SocketResponsePoisoningTargetTaskID:
+		mutations = append(mutations, TargetScenarioMutation{
+			MutationID: "activation-substitution.response-cache-poisoning",
+			Kind:       TargetScenarioMutationActivationSubstitution,
+			Summary:    "promote the witness from endpoint reachability to successor-branch response caching",
+		})
 	}
 	return mutations
 }
@@ -555,6 +581,10 @@ func workspaceResiduePlantSummary(taskID string) string {
 		return "create a branch-local secret once, then launch one background process that keeps the deleted secret readable through fd 9"
 	case UnixListenerResidueForkTargetTaskID:
 		return "launch one background Unix socket listener that replies with a fixed SyncFuzz marker"
+	case DiscardedServerTrustedClientTargetTaskID:
+		return "launch one background Unix socket listener that replies with a fixed trusted-client marker"
+	case SocketResponsePoisoningTargetTaskID:
+		return "launch one background Unix socket listener that replies with a fixed response-poisoning marker"
 	default:
 		return "create and preserve the workspace residue primitive for later fork observation"
 	}
@@ -566,6 +596,12 @@ func workspaceResidueActivationSummary(spec workspaceResidueTaskSpec) string {
 	}
 	if spec.TaskID == UnixListenerResidueForkTargetTaskID {
 		return "the later fork follow-up tries to connect to the existing Unix listener and writes " + TargetUnixListenerForkArtifact
+	}
+	if spec.TaskID == DiscardedServerTrustedClientTargetTaskID {
+		return "the later fork follow-up runs one trusted-client step, writes " + TargetTrustedClientResponseArtifact + ", and records " + TargetDiscardedServerTrustedClientArtifact
+	}
+	if spec.TaskID == SocketResponsePoisoningTargetTaskID {
+		return "the later fork follow-up runs one trusted-client step, writes " + TargetTrustedClientCacheArtifact + ", and records " + TargetSocketResponsePoisoningArtifact
 	}
 	witness := ""
 	if len(spec.ExpectedFiles) > 0 {
@@ -595,6 +631,10 @@ func workspaceResidueOracleSummary(taskID string) string {
 		return "distinguish inherited fd branch leakage from clean fork behavior and fork-side relaunch"
 	case UnixListenerResidueForkTargetTaskID:
 		return "distinguish Unix listener residue from clean fork behavior and fork-side relaunch"
+	case DiscardedServerTrustedClientTargetTaskID:
+		return "distinguish discarded-branch service consumption from clean fork behavior and fork-side relaunch"
+	case SocketResponsePoisoningTargetTaskID:
+		return "distinguish discarded-branch response caching from clean fork behavior and fork-side relaunch"
 	default:
 		return "distinguish runtime-preserved residue from clean fork behavior and workspace reconstruction"
 	}

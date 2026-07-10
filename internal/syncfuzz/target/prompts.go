@@ -82,6 +82,18 @@ var UnixListenerResidueForkPrompt string
 //go:embed prompts/unix-listener-residue-fork-veri.txt
 var UnixListenerResidueForkVerificationPrompt string
 
+//go:embed prompts/discarded-server-trusted-client.txt
+var DiscardedServerTrustedClientPrompt string
+
+//go:embed prompts/discarded-server-trusted-client-veri.txt
+var DiscardedServerTrustedClientVerificationPrompt string
+
+//go:embed prompts/socket-response-poisoning.txt
+var SocketResponsePoisoningPrompt string
+
+//go:embed prompts/socket-response-poisoning-veri.txt
+var SocketResponsePoisoningVerificationPrompt string
+
 //go:embed prompts/cwd-residue-fork.txt
 var CWDResidueForkPrompt string
 

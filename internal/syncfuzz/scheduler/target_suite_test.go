@@ -120,6 +120,8 @@ func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 	foundDeletedOpenFDFork := false
 	foundInheritedFDLeak := false
 	foundUnixListenerFork := false
+	foundTrustedClientFork := false
+	foundSocketResponsePoisoning := false
 	foundCWDFork := false
 	foundUmaskFork := false
 	for _, task := range tasks {
@@ -213,6 +215,18 @@ func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 				t.Fatalf("unexpected unix listener fork task metadata: %#v", task)
 			}
 		}
+		if task.TaskID == target.DiscardedServerTrustedClientTargetTaskID {
+			foundTrustedClientFork = true
+			if !target.ContainsString(task.DefaultExpectedFiles, target.TargetDiscardedServerTrustedClientArtifact) || !target.ContainsString(task.DefaultExpectedFiles, target.TargetTrustedClientResponseArtifact) || !target.ContainsString(task.DefaultExpectedFiles, target.LanggraphForkArtifact) {
+				t.Fatalf("unexpected trusted-client task metadata: %#v", task)
+			}
+		}
+		if task.TaskID == target.SocketResponsePoisoningTargetTaskID {
+			foundSocketResponsePoisoning = true
+			if !target.ContainsString(task.DefaultExpectedFiles, target.TargetSocketResponsePoisoningArtifact) || !target.ContainsString(task.DefaultExpectedFiles, target.TargetTrustedClientCacheArtifact) || !target.ContainsString(task.DefaultExpectedFiles, target.LanggraphForkArtifact) {
+				t.Fatalf("unexpected socket response poisoning task metadata: %#v", task)
+			}
+		}
 		if task.TaskID == target.CWDResidueForkTargetTaskID {
 			foundCWDFork = true
 			if !target.ContainsString(task.DefaultExpectedFiles, target.TargetCWDResidueForkArtifact) || !target.ContainsString(task.DefaultExpectedFiles, target.LanggraphForkArtifact) {
@@ -226,7 +240,7 @@ func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 			}
 		}
 	}
-	if !foundPersistent || !foundReplay || !foundFork || !foundDirectoryFork || !foundDeleteFork || !foundSymlinkFork || !foundRenameFork || !foundModeFork || !foundAppendFork || !foundHardlinkFork || !foundFIFOFork || !foundOpenFDFork || !foundDeletedOpenFDFork || !foundInheritedFDLeak || !foundUnixListenerFork || !foundCWDFork || !foundUmaskFork {
+	if !foundPersistent || !foundReplay || !foundFork || !foundDirectoryFork || !foundDeleteFork || !foundSymlinkFork || !foundRenameFork || !foundModeFork || !foundAppendFork || !foundHardlinkFork || !foundFIFOFork || !foundOpenFDFork || !foundDeletedOpenFDFork || !foundInheritedFDLeak || !foundUnixListenerFork || !foundTrustedClientFork || !foundSocketResponsePoisoning || !foundCWDFork || !foundUmaskFork {
 		t.Fatalf("expected persistent shell replay/fork tasks plus workspace residue fork tasks in catalog: %#v", tasks)
 	}
 }
@@ -256,6 +270,8 @@ func TestExpandTargetTasksIncludesGroupsAndDeduplicates(t *testing.T) {
 		target.DeletedOpenFDForkTargetTaskID,
 		target.InheritedFDLeakTargetTaskID,
 		target.UnixListenerResidueForkTargetTaskID,
+		target.DiscardedServerTrustedClientTargetTaskID,
+		target.SocketResponsePoisoningTargetTaskID,
 		target.CWDResidueForkTargetTaskID,
 		target.UmaskResidueForkTargetTaskID,
 	}
@@ -331,6 +347,46 @@ func TestTargetScenarioSeedsExposeExecutionContextResidueFamily(t *testing.T) {
 	}
 	if !target.ContainsString(executionContextSeed.OracleKinds, "cwd-residue") || !target.ContainsString(executionContextSeed.OracleKinds, "umask-residue") {
 		t.Fatalf("expected execution-context oracle kinds in seed: %#v", executionContextSeed)
+	}
+}
+
+func TestTargetScenarioSeedsExposeActiveIPCResidueFamily(t *testing.T) {
+	seeds := target.TargetScenarioSeeds()
+	var activeIPCSeed target.TargetScenarioSeedInfo
+	found := false
+	for _, seed := range seeds {
+		if seed.SeedID == "active-ipc-residue-fork" {
+			activeIPCSeed = seed
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected active-ipc-residue-fork seed in catalog: %#v", seeds)
+	}
+	if len(activeIPCSeed.Tasks) != 3 {
+		t.Fatalf("expected three active IPC residue tasks, got %#v", activeIPCSeed)
+	}
+	if !target.ContainsString(activeIPCSeed.Tasks, target.UnixListenerResidueForkTargetTaskID) ||
+		!target.ContainsString(activeIPCSeed.Tasks, target.DiscardedServerTrustedClientTargetTaskID) ||
+		!target.ContainsString(activeIPCSeed.Tasks, target.SocketResponsePoisoningTargetTaskID) {
+		t.Fatalf("expected active IPC tasks in seed: %#v", activeIPCSeed)
+	}
+	if len(activeIPCSeed.LifecycleOperations) != 1 || activeIPCSeed.LifecycleOperations[0] != "checkpoint-fork" {
+		t.Fatalf("expected checkpoint-fork lifecycle in active IPC seed: %#v", activeIPCSeed)
+	}
+	if !target.ContainsString(activeIPCSeed.PlantPrimitives, "workspace-unix-listener") {
+		t.Fatalf("expected Unix-listener plant primitive in active IPC seed: %#v", activeIPCSeed)
+	}
+	if !target.ContainsString(activeIPCSeed.ActivationKinds, "unix-socket-connect") ||
+		!target.ContainsString(activeIPCSeed.ActivationKinds, "trusted-client-consume") ||
+		!target.ContainsString(activeIPCSeed.ActivationKinds, "trusted-client-cache") {
+		t.Fatalf("expected active IPC activation kinds in seed: %#v", activeIPCSeed)
+	}
+	if !target.ContainsString(activeIPCSeed.OracleKinds, "workspace-unix-listener-residue") ||
+		!target.ContainsString(activeIPCSeed.OracleKinds, "trusted-client-response-residue") ||
+		!target.ContainsString(activeIPCSeed.OracleKinds, "socket-response-poisoning") {
+		t.Fatalf("expected active IPC oracle kinds in seed: %#v", activeIPCSeed)
 	}
 }
 

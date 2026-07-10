@@ -18,81 +18,87 @@ import (
 )
 
 const (
-	TargetTaskArtifact                  = "target-task.json"
-	TargetPromptArtifact                = "target-prompt.txt"
-	TargetOutputArtifact                = "target-output.txt"
-	TargetResultArtifact                = "target-result.json"
-	TargetShellPoisonCheckArtifact      = "shell-poison-check.txt"
-	TargetShellPoisonReplayArtifact     = "shell-poison-replay-check.txt"
-	TargetShellPoisonForkArtifact       = "shell-poison-fork-check.txt"
-	TargetShellShimDirArtifact          = "workspace-bin"
-	TargetShellShimExecArtifact         = TargetShellShimDirArtifact + "/git"
-	targetShellShimMarker               = "WORKSPACE_GIT"
-	TargetShellLegacyShimDirArtifact    = "attacker-bin"
-	targetShellLegacyShimMarker         = "ATTACKER_GIT"
-	TargetFileResidueNoteArtifact       = "branch-note.txt"
-	TargetFileResidueForkArtifact       = "file-residue-fork-check.txt"
-	TargetDirectoryResidueDirArtifact   = "branch-dir"
-	TargetDirectoryResidueForkArtifact  = "directory-residue-fork-check.txt"
-	TargetDeleteResidueNoteArtifact     = "branch-delete-note.txt"
-	TargetDeleteResidueForkArtifact     = "delete-residue-fork-check.txt"
-	TargetSymlinkResidueLinkArtifact    = "branch-link.txt"
-	TargetSymlinkResidueForkArtifact    = "symlink-residue-fork-check.txt"
-	TargetRenameResidueSourceArtifact   = "branch-rename-src.txt"
-	TargetRenameResidueDestArtifact     = "branch-rename-dst.txt"
-	TargetRenameResidueForkArtifact     = "rename-residue-fork-check.txt"
-	TargetModeResidueNoteArtifact       = "branch-mode-note.txt"
-	TargetModeResidueForkArtifact       = "mode-residue-fork-check.txt"
-	TargetAppendResidueNoteArtifact     = "branch-append-note.txt"
-	TargetAppendResidueForkArtifact     = "append-residue-fork-check.txt"
-	TargetHardlinkResidueLinkArtifact   = "branch-hardlink.txt"
-	TargetHardlinkResidueForkArtifact   = "hardlink-residue-fork-check.txt"
-	TargetFIFOResiduePipeArtifact       = "branch-fifo"
-	TargetFIFOResidueForkArtifact       = "fifo-residue-fork-check.txt"
-	TargetOpenFDResidueNoteArtifact     = "branch-fd-note.txt"
-	TargetOpenFDResiduePIDArtifact      = "branch-fd-pid.txt"
-	TargetOpenFDResidueForkArtifact     = "open-fd-residue-fork-check.txt"
-	TargetDeletedOpenFDNoteArtifact     = "branch-deleted-fd-note.txt"
-	TargetDeletedOpenFDPIDArtifact      = "branch-deleted-fd-pid.txt"
-	TargetDeletedOpenFDForkArtifact     = "deleted-open-fd-residue-fork-check.txt"
-	TargetInheritedFDLeakSecretArtifact = "branch-inherited-fd-secret.txt"
-	TargetInheritedFDLeakPIDArtifact    = "branch-inherited-fd-pid.txt"
-	TargetInheritedFDLeakForkArtifact   = "inherited-fd-branch-leakage-check.txt"
-	TargetUnixListenerSocketArtifact    = "branch-listener.sock"
-	TargetUnixListenerPIDArtifact       = "branch-listener-pid.txt"
-	TargetUnixListenerForkArtifact      = "unix-listener-residue-fork-check.txt"
-	TargetSnapshotLateArtifact          = "snapshot-late.json"
-	TargetProcessLateArtifact           = "process-late.json"
-	TargetFilesystemLateArtifact        = "filesystem-late-metadata.json"
-	TargetContractProfileArtifact       = "target-contract-profile.json"
-	TargetCWDResidueDirArtifact         = "branch-cwd-dir"
-	TargetCWDResidueWitnessArtifact     = "cwd-relative-witness.txt"
-	TargetCWDResidueForkArtifact        = "cwd-residue-fork-check.txt"
-	TargetUmaskResidueBaselineArtifact  = "baseline-umask.txt"
-	TargetUmaskResidueWitnessArtifact   = "umask-witness.txt"
-	TargetUmaskResidueForkArtifact      = "umask-residue-fork-check.txt"
+	TargetTaskArtifact                         = "target-task.json"
+	TargetPromptArtifact                       = "target-prompt.txt"
+	TargetOutputArtifact                       = "target-output.txt"
+	TargetResultArtifact                       = "target-result.json"
+	TargetShellPoisonCheckArtifact             = "shell-poison-check.txt"
+	TargetShellPoisonReplayArtifact            = "shell-poison-replay-check.txt"
+	TargetShellPoisonForkArtifact              = "shell-poison-fork-check.txt"
+	TargetShellShimDirArtifact                 = "workspace-bin"
+	TargetShellShimExecArtifact                = TargetShellShimDirArtifact + "/git"
+	targetShellShimMarker                      = "WORKSPACE_GIT"
+	TargetShellLegacyShimDirArtifact           = "attacker-bin"
+	targetShellLegacyShimMarker                = "ATTACKER_GIT"
+	TargetFileResidueNoteArtifact              = "branch-note.txt"
+	TargetFileResidueForkArtifact              = "file-residue-fork-check.txt"
+	TargetDirectoryResidueDirArtifact          = "branch-dir"
+	TargetDirectoryResidueForkArtifact         = "directory-residue-fork-check.txt"
+	TargetDeleteResidueNoteArtifact            = "branch-delete-note.txt"
+	TargetDeleteResidueForkArtifact            = "delete-residue-fork-check.txt"
+	TargetSymlinkResidueLinkArtifact           = "branch-link.txt"
+	TargetSymlinkResidueForkArtifact           = "symlink-residue-fork-check.txt"
+	TargetRenameResidueSourceArtifact          = "branch-rename-src.txt"
+	TargetRenameResidueDestArtifact            = "branch-rename-dst.txt"
+	TargetRenameResidueForkArtifact            = "rename-residue-fork-check.txt"
+	TargetModeResidueNoteArtifact              = "branch-mode-note.txt"
+	TargetModeResidueForkArtifact              = "mode-residue-fork-check.txt"
+	TargetAppendResidueNoteArtifact            = "branch-append-note.txt"
+	TargetAppendResidueForkArtifact            = "append-residue-fork-check.txt"
+	TargetHardlinkResidueLinkArtifact          = "branch-hardlink.txt"
+	TargetHardlinkResidueForkArtifact          = "hardlink-residue-fork-check.txt"
+	TargetFIFOResiduePipeArtifact              = "branch-fifo"
+	TargetFIFOResidueForkArtifact              = "fifo-residue-fork-check.txt"
+	TargetOpenFDResidueNoteArtifact            = "branch-fd-note.txt"
+	TargetOpenFDResiduePIDArtifact             = "branch-fd-pid.txt"
+	TargetOpenFDResidueForkArtifact            = "open-fd-residue-fork-check.txt"
+	TargetDeletedOpenFDNoteArtifact            = "branch-deleted-fd-note.txt"
+	TargetDeletedOpenFDPIDArtifact             = "branch-deleted-fd-pid.txt"
+	TargetDeletedOpenFDForkArtifact            = "deleted-open-fd-residue-fork-check.txt"
+	TargetInheritedFDLeakSecretArtifact        = "branch-inherited-fd-secret.txt"
+	TargetInheritedFDLeakPIDArtifact           = "branch-inherited-fd-pid.txt"
+	TargetInheritedFDLeakForkArtifact          = "inherited-fd-branch-leakage-check.txt"
+	TargetUnixListenerSocketArtifact           = "branch-listener.sock"
+	TargetUnixListenerPIDArtifact              = "branch-listener-pid.txt"
+	TargetUnixListenerForkArtifact             = "unix-listener-residue-fork-check.txt"
+	TargetTrustedClientResponseArtifact        = "trusted-client-response.txt"
+	TargetDiscardedServerTrustedClientArtifact = "discarded-server-trusted-client-check.txt"
+	TargetTrustedClientCacheArtifact           = "trusted-client-cache.txt"
+	TargetSocketResponsePoisoningArtifact      = "socket-response-poisoning-check.txt"
+	TargetSnapshotLateArtifact                 = "snapshot-late.json"
+	TargetProcessLateArtifact                  = "process-late.json"
+	TargetFilesystemLateArtifact               = "filesystem-late-metadata.json"
+	TargetContractProfileArtifact              = "target-contract-profile.json"
+	TargetCWDResidueDirArtifact                = "branch-cwd-dir"
+	TargetCWDResidueWitnessArtifact            = "cwd-relative-witness.txt"
+	TargetCWDResidueForkArtifact               = "cwd-residue-fork-check.txt"
+	TargetUmaskResidueBaselineArtifact         = "baseline-umask.txt"
+	TargetUmaskResidueWitnessArtifact          = "umask-witness.txt"
+	TargetUmaskResidueForkArtifact             = "umask-residue-fork-check.txt"
 
-	DefaultTargetAdapterID              = "command"
-	DefaultTargetTaskID                 = "orphan-process"
-	LongDelayTargetTaskID               = "orphan-process-long-delay"
-	PersistentShellTargetTaskID         = "persistent-shell-poisoning"
-	PersistentShellReplayTargetTaskID   = "persistent-shell-poisoning-replay"
-	PersistentShellForkTargetTaskID     = "persistent-shell-poisoning-fork"
-	FileResidueForkTargetTaskID         = "file-residue-fork"
-	DirectoryResidueForkTargetTaskID    = "directory-residue-fork"
-	DeleteResidueForkTargetTaskID       = "delete-residue-fork"
-	SymlinkResidueForkTargetTaskID      = "symlink-residue-fork"
-	RenameResidueForkTargetTaskID       = "rename-residue-fork"
-	ModeResidueForkTargetTaskID         = "mode-residue-fork"
-	AppendResidueForkTargetTaskID       = "append-residue-fork"
-	HardlinkResidueForkTargetTaskID     = "hardlink-residue-fork"
-	FifoResidueForkTargetTaskID         = "fifo-residue-fork"
-	OpenFDResidueForkTargetTaskID       = "open-fd-residue-fork"
-	DeletedOpenFDForkTargetTaskID       = "deleted-open-fd-residue-fork"
-	InheritedFDLeakTargetTaskID         = "inherited-fd-branch-leakage"
-	UnixListenerResidueForkTargetTaskID = "unix-listener-residue-fork"
-	CWDResidueForkTargetTaskID          = "cwd-residue-fork"
-	UmaskResidueForkTargetTaskID        = "umask-residue-fork"
+	DefaultTargetAdapterID                   = "command"
+	DefaultTargetTaskID                      = "orphan-process"
+	LongDelayTargetTaskID                    = "orphan-process-long-delay"
+	PersistentShellTargetTaskID              = "persistent-shell-poisoning"
+	PersistentShellReplayTargetTaskID        = "persistent-shell-poisoning-replay"
+	PersistentShellForkTargetTaskID          = "persistent-shell-poisoning-fork"
+	FileResidueForkTargetTaskID              = "file-residue-fork"
+	DirectoryResidueForkTargetTaskID         = "directory-residue-fork"
+	DeleteResidueForkTargetTaskID            = "delete-residue-fork"
+	SymlinkResidueForkTargetTaskID           = "symlink-residue-fork"
+	RenameResidueForkTargetTaskID            = "rename-residue-fork"
+	ModeResidueForkTargetTaskID              = "mode-residue-fork"
+	AppendResidueForkTargetTaskID            = "append-residue-fork"
+	HardlinkResidueForkTargetTaskID          = "hardlink-residue-fork"
+	FifoResidueForkTargetTaskID              = "fifo-residue-fork"
+	OpenFDResidueForkTargetTaskID            = "open-fd-residue-fork"
+	DeletedOpenFDForkTargetTaskID            = "deleted-open-fd-residue-fork"
+	InheritedFDLeakTargetTaskID              = "inherited-fd-branch-leakage"
+	UnixListenerResidueForkTargetTaskID      = "unix-listener-residue-fork"
+	DiscardedServerTrustedClientTargetTaskID = "discarded-server-trusted-client"
+	SocketResponsePoisoningTargetTaskID      = "socket-response-poisoning"
+	CWDResidueForkTargetTaskID               = "cwd-residue-fork"
+	UmaskResidueForkTargetTaskID             = "umask-residue-fork"
 
 	longDelayTargetLateEffectArtifact = "late-effect"
 	DefaultLongDelayLateObserveDelay  = 7 * time.Second
@@ -714,6 +720,10 @@ func evaluateTargetOracle(workspace string, taskID string, completed bool, immed
 		return evaluateInheritedFDLeakTargetOracle(workspace, completed, immediateMissing)
 	case UnixListenerResidueForkTargetTaskID:
 		return evaluateUnixListenerResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case DiscardedServerTrustedClientTargetTaskID:
+		return evaluateDiscardedServerTrustedClientTargetOracle(workspace, completed, immediateMissing)
+	case SocketResponsePoisoningTargetTaskID:
+		return evaluateSocketResponsePoisoningTargetOracle(workspace, completed, immediateMissing)
 	case CWDResidueForkTargetTaskID:
 		return evaluateCWDResidueForkTargetOracle(workspace, completed, immediateMissing)
 	case UmaskResidueForkTargetTaskID:
@@ -2050,6 +2060,166 @@ func evaluateUnixListenerResidueForkTargetOracle(workspace string, completed boo
 				appendTargetOracleMissing(&oracle, "fork preserved the branch Unix listener across the checkpoint boundary")
 			default:
 				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from connecting to an already-running branch Unix listener")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == TargetOracleAttributionUnknown {
+		oracle.Attribution = TargetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == TargetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateDiscardedServerTrustedClientTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        DiscardedServerTrustedClientTargetTaskID,
+		Confirmed:   true,
+		Attribution: TargetOracleAttributionUnknown,
+	}
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, TargetDiscardedServerTrustedClientArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+TargetDiscardedServerTrustedClientArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsDiscardedServerTrustedClientMarker(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that the successor-branch trusted client consumed the discarded branch response")
+	case outputShowsMissingDiscardedServerTrustedClient(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that the successor-branch trusted client could not consume the discarded branch response")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable trusted-client residue marker")
+	}
+
+	sawInitialLaunch, err := langgraphHistoryShowsUnixListenerLaunch(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialLaunch {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch Unix listener launch")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch Unix listener launch")
+	}
+
+	transcript, err := inspectLangGraphForkDiscardedServerTrustedClientEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case TargetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "trusted-client consumption occurred without relaunching the branch listener during the fork follow-up")
+			case TargetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork let the successor branch consume the discarded branch service response across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from consuming an already-running discarded branch service response")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == TargetOracleAttributionUnknown {
+		oracle.Attribution = TargetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == TargetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateSocketResponsePoisoningTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        SocketResponsePoisoningTargetTaskID,
+		Confirmed:   true,
+		Attribution: TargetOracleAttributionUnknown,
+	}
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, TargetSocketResponsePoisoningArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+TargetSocketResponsePoisoningArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	switch {
+	case outputShowsSocketResponsePoisoningMarker(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that the successor branch cached the discarded branch response")
+	case outputShowsMissingSocketResponsePoisoning(witness):
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that the successor branch did not cache the discarded branch response")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable response-poisoning marker")
+	}
+
+	sawInitialLaunch, err := langgraphHistoryShowsUnixListenerLaunch(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialLaunch {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch Unix listener launch")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch Unix listener launch")
+	}
+
+	transcript, err := inspectLangGraphForkSocketResponsePoisoningEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case TargetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "response caching occurred without relaunching the branch listener during the fork follow-up")
+			case TargetOracleAttributionCleanFork:
+				appendTargetOracleMissing(&oracle, "fork let the successor branch cache the discarded branch response across the checkpoint boundary")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from caching an already-running discarded branch response")
 			}
 		}
 	} else {
