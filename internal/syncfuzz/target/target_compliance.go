@@ -247,6 +247,10 @@ func evaluateWorkspaceResidueForkTargetTaskCompliance(workspace string, spec wor
 		evaluateInheritedFDLeakTaskCompliance(&result, historyCalls, forkCalls)
 	case UnixListenerResidueForkTargetTaskID:
 		evaluateUnixListenerResidueForkTaskCompliance(&result, historyCalls, forkCalls)
+	case CWDResidueForkTargetTaskID:
+		evaluateCWDResidueForkTaskCompliance(&result, historyCalls, forkCalls)
+	case UmaskResidueForkTargetTaskID:
+		evaluateUmaskResidueForkTaskCompliance(&result, historyCalls, forkCalls)
 	}
 
 	return finalizeTargetTaskCompliance(result)
@@ -1357,6 +1361,183 @@ func evaluateUnixListenerResidueForkTaskCompliance(result *TargetTaskComplianceR
 	}
 }
 
+func evaluateCWDResidueForkTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	mkdirCount := 0
+	cdCount := 0
+	verifyCount := 0
+	checkWriteCount := 0
+	witnessWriteCount := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandCreatesWorkspaceDirectory(command, TargetCWDResidueDirArtifact) {
+			mkdirCount++
+		}
+		if commandChangesWorkingDirectory(command, TargetCWDResidueDirArtifact) {
+			cdCount++
+		}
+		if looksLikeCWDResidueVerification(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, TargetCWDResidueForkArtifact) {
+			checkWriteCount++
+		}
+		if commandWritesWorkspaceFile(command, TargetCWDResidueWitnessArtifact) {
+			witnessWriteCount++
+		}
+
+	}
+
+	requireExactCount(result, mkdirCount, 1, "initial branch created branch-cwd-dir exactly once")
+	requireExactCount(result, cdCount, 1, "initial branch changed to branch-cwd-dir exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified that branch-cwd-dir returned the expected response")
+	if checkWriteCount > 0 {
+		appendTargetTaskViolation(result, "initial branch wrote cwd-residue-fork-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create cwd-residue-fork-check.txt")
+	}
+
+	if witnessWriteCount > 0 {
+		appendTargetTaskViolation(result, "initial branch wrote cwd-relative-witness.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create cwd-relative-witness.txt")
+	}
+
+	cdCount = 0 // reuse cdCount to count fork follow-up changes
+	checkWriteCount = 0
+	witnessWriteCount = 0
+
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandChangesWorkingDirectory(command, "") {
+			cdCount++
+		}
+		if commandWritesWorkspaceFile(command, TargetCWDResidueForkArtifact) {
+			checkWriteCount++
+		}
+		if commandWritesWorkspaceFile(command, TargetCWDResidueWitnessArtifact) {
+			witnessWriteCount++
+		}
+
+	}
+
+	requireExactCount(result, cdCount, 0, "fork follow-up did not change cwd")
+
+	if checkWriteCount == 0 {
+		appendTargetTaskViolation(result, "fork follow-up did not create cwd-residue-fork-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up wrote cwd-residue-fork-check.txt")
+	}
+
+	if witnessWriteCount == 0 {
+		appendTargetTaskViolation(result, "fork follow-up did not create cwd-relative-witness.txt")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up wrote cwd-relative-witness.txt")
+	}
+
+}
+
+func evaluateUmaskResidueForkTaskCompliance(result *TargetTaskComplianceResult, historyCalls []langgraphShellCall, forkCalls []langgraphShellCall) {
+	baselineWriteCount := 0
+	umaskChangeCount := 0
+	umask077Count := 0
+	verifyCount := 0
+	historyForkCheckWrites := 0
+	historyWitnessWrites := 0
+	historyBaselineDeletes := 0
+	forkForkCheckWrites := 0
+	forkWitnessWrites := 0
+	forkUmaskMutations := 0
+	forkBaselineMutations := 0
+
+	for _, call := range historyCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, TargetUmaskResidueBaselineArtifact) {
+			baselineWriteCount++
+		}
+		if commandChangesUmask(command, "") {
+			umaskChangeCount++
+		}
+		if commandChangesUmask(command, "077") {
+			umask077Count++
+		}
+		if commandPrintsCurrentUmask(command) {
+			verifyCount++
+		}
+		if commandWritesWorkspaceFile(command, TargetUmaskResidueForkArtifact) {
+			historyForkCheckWrites++
+		}
+		if commandWritesWorkspaceFile(command, TargetUmaskResidueWitnessArtifact) {
+			historyWitnessWrites++
+		}
+		if commandDeletesWorkspaceFile(command, TargetUmaskResidueBaselineArtifact) {
+			historyBaselineDeletes++
+		}
+	}
+
+	requireExactCount(result, baselineWriteCount, 1, "initial branch recorded baseline-umask.txt exactly once")
+	requireExactCount(result, umaskChangeCount, 1, "initial branch changed the shell umask exactly once")
+	requireExactCount(result, umask077Count, 1, "initial branch changed the shell umask to 077 exactly once")
+	requireAtLeastOne(result, verifyCount, "initial branch verified the current shell umask by printing umask")
+	if historyForkCheckWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch created umask-residue-fork-check.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later umask residue fork check")
+	}
+	if historyWitnessWrites > 0 {
+		appendTargetTaskViolation(result, "initial branch created umask-witness.txt")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch did not create the later umask witness")
+	}
+	if historyBaselineDeletes > 0 {
+		appendTargetTaskViolation(result, "initial branch deleted baseline-umask.txt after recording it")
+	} else {
+		appendTargetTaskEvidence(result, "initial branch preserved baseline-umask.txt after recording it")
+	}
+
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandWritesWorkspaceFile(command, TargetUmaskResidueForkArtifact) {
+			forkForkCheckWrites++
+		}
+		if commandWritesWorkspaceFile(command, TargetUmaskResidueWitnessArtifact) {
+			forkWitnessWrites++
+		}
+		if commandChangesUmask(command, "") {
+			forkUmaskMutations++
+		}
+		if commandWritesWorkspaceFile(command, TargetUmaskResidueBaselineArtifact) ||
+			commandDeletesWorkspaceFile(command, TargetUmaskResidueBaselineArtifact) {
+			forkBaselineMutations++
+		}
+	}
+
+	requireExactCount(result, forkForkCheckWrites, 1, "fork follow-up wrote umask-residue-fork-check.txt exactly once")
+	requireExactCount(result, forkWitnessWrites, 1, "fork follow-up wrote umask-witness.txt exactly once")
+	if forkUmaskMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up changed the shell umask")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up did not change the shell umask")
+	}
+	if forkBaselineMutations > 0 {
+		appendTargetTaskViolation(result, "fork follow-up modified baseline-umask.txt")
+	} else {
+		appendTargetTaskEvidence(result, "fork follow-up only read baseline-umask.txt")
+	}
+}
+
 func unixListenerFollowupProducedWitness(call langgraphShellCall) bool {
 	command := normalizeShellCommand(call.Command)
 	output := strings.TrimSpace(call.Output)
@@ -1366,6 +1547,23 @@ func unixListenerFollowupProducedWitness(call langgraphShellCall) bool {
 	return command == "" ||
 		strings.Contains(command, "unix-listener-residue-fork-check") ||
 		looksLikeUnixListenerResidueVerification(command)
+}
+
+func commandPrintsCurrentUmask(command string) bool {
+	command = normalizeShellCommand(command)
+	fields := strings.Fields(command)
+	for i := 0; i < len(fields); i++ {
+		if trimShellCommandToken(fields[i]) != "umask" {
+			continue
+		}
+		if i > 0 && !shellTokenStartsCommand(fields[i-1]) {
+			continue
+		}
+		if i == len(fields)-1 || shellTokenStartsCommand(fields[i+1]) {
+			return true
+		}
+	}
+	return false
 }
 
 func finalizeTargetTaskCompliance(result TargetTaskComplianceResult) TargetTaskComplianceResult {

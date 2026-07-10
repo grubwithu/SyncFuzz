@@ -36,6 +36,8 @@ SHELL_REQUIRED_TASKS = {
     "deleted-open-fd-residue-fork",
     "inherited-fd-branch-leakage",
     "unix-listener-residue-fork",
+    "cwd-residue-fork",
+    "umask-residue-fork"
 }
 
 
@@ -1267,6 +1269,10 @@ def resolve_checkpoint_selector(history: list[Any], selector: str) -> int:
         return checkpoint_before_inherited_fd_leak_holder(history)
     if selector == "before-unix-listener-launch":
         return checkpoint_before_unix_listener_launch(history)
+    if selector == "before-cwd-change":
+        return checkpoint_before_cwd_change(history)
+    if selector == "before-umask-change":
+        return checkpoint_before_umask_change(history)
     raise SystemExit(f"unsupported checkpoint selector: {selector}")
 
 
@@ -1463,7 +1469,33 @@ def checkpoint_before_unix_listener_launch(history: list[Any]) -> int:
         )
     return -1
 
+def checkpoint_before_cwd_change(history: list[Any]) -> int:
+    saw_cwd_change_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_cwd_change = state_has_cwd_change(history[index])
+        if not saw_cwd_change_in_newer_state and has_cwd_change:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_cwd_change_in_newer_state = (
+            saw_cwd_change_in_newer_state or has_cwd_change
+        )
+    return -1
 
+def checkpoint_before_umask_change(history: list[Any]) -> int:
+    saw_umask_change_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_umask_change = state_has_umask_change(history[index])
+        if not saw_umask_change_in_newer_state and has_umask_change:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_umask_change_in_newer_state = saw_umask_change_in_newer_state or has_umask_change
+    return -1
+
+        
 def state_has_path_export(state: Any) -> bool:
     values = getattr(state, "values", {}) or {}
     messages = values.get("messages", []) or []
@@ -1628,6 +1660,25 @@ def state_has_unix_listener_launch(state: Any) -> bool:
                 return True
     return False
 
+def state_has_cwd_change(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_changes_working_directory(normalized, "branch-cwd-dir"):
+                return True
+    return False
+
+def state_has_umask_change(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_sets_umask(normalized, "077"):
+                return True
+    return False
 
 def normalize_shell_command(command: str) -> str:
     return " ".join(command.strip().lower().replace("\\", "/").split())
@@ -1756,6 +1807,37 @@ def command_launches_unix_listener(command: str) -> bool:
         and (".bind(" in command or "bind(" in command)
         and (".listen(" in command or "listen(" in command)
     )
+
+def command_changes_working_directory(command: str, dirname: str) -> bool:
+    dirname = dirname.lower()
+    variants = (
+        f"cd {dirname}",
+        f"cd ./{dirname}",
+        f"cd {dirname}/",
+        f"cd ./{dirname}/",
+    )
+    return any(variant in command for variant in variants)
+
+def command_sets_umask(command: str, mode: str) -> bool:
+    mode = mode.lower().strip()
+    variants = {mode}
+    if mode.startswith("0"):
+        variants.add(mode.lstrip("0") or "0")
+    else:
+        variants.add("0" + mode)
+
+    for variant in variants:
+        token = f"umask {variant}"
+        if (
+            command == token
+            or command.endswith(" " + token)
+            or (token + " ") in command
+            or (token + ";") in command
+            or (token + " &&") in command
+            or (token + " ||") in command
+        ):
+            return True
+    return False
 
 
 def shell_commands_from_message(message: Any) -> list[str]:

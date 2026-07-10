@@ -113,6 +113,70 @@ func TestEvaluateTargetContractInterpretationUnixListenerViolation(t *testing.T)
 	}
 }
 
+func TestTargetContractProfileIncludesExecutionContextResidueRules(t *testing.T) {
+	profile := target.TargetContractProfileFor("langgraph-shell-react")
+
+	cwdRule, ok := target.TargetContractRuleFor(profile, target.CWDResidueForkTargetTaskID)
+	if !ok {
+		t.Fatalf("expected cwd residue contract rule")
+	}
+	if cwdRule.RuleID != "shell-cwd-fork-boundary" || cwdRule.StateSurface != "shell-session.cwd" {
+		t.Fatalf("unexpected cwd residue contract rule: %#v", cwdRule)
+	}
+
+	umaskRule, ok := target.TargetContractRuleFor(profile, target.UmaskResidueForkTargetTaskID)
+	if !ok {
+		t.Fatalf("expected umask residue contract rule")
+	}
+	if umaskRule.RuleID != "shell-umask-fork-boundary" || umaskRule.StateSurface != "shell-session.umask" {
+		t.Fatalf("unexpected umask residue contract rule: %#v", umaskRule)
+	}
+}
+
+func TestEvaluateTargetContractInterpretationCWDResidueViolation(t *testing.T) {
+	profile := target.TargetContractProfileFor("langgraph-shell-react")
+	result := target.EvaluateTargetContractInterpretation(profile, target.CWDResidueForkTargetTaskID, target.TargetOracleResult{
+		Name:        "cwd-residue-fork",
+		Status:      target.TargetOracleStatusConfirmed,
+		Confirmed:   true,
+		Attribution: target.TargetOracleAttributionRuntimeResidue,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.CWDResidueForkTargetTaskID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if result == nil {
+		t.Fatalf("expected contract interpretation")
+	}
+	if result.Status != target.TargetContractStatusViolation {
+		t.Fatalf("expected contract-violation, got %#v", result)
+	}
+	if result.RuleID != "shell-cwd-fork-boundary" {
+		t.Fatalf("unexpected rule id: %#v", result)
+	}
+}
+
+func TestEvaluateTargetContractInterpretationUmaskCleanForkConsistent(t *testing.T) {
+	profile := target.TargetContractProfileFor("langgraph-shell-react")
+	result := target.EvaluateTargetContractInterpretation(profile, target.UmaskResidueForkTargetTaskID, target.TargetOracleResult{
+		Name:        "umask-residue-fork",
+		Status:      target.TargetOracleStatusNegative,
+		Confirmed:   false,
+		Attribution: target.TargetOracleAttributionCleanFork,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.UmaskResidueForkTargetTaskID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if result == nil {
+		t.Fatalf("expected contract interpretation")
+	}
+	if result.Status != target.TargetContractStatusConsistent {
+		t.Fatalf("expected contract-consistent, got %#v", result)
+	}
+	if result.RuleID != "shell-umask-fork-boundary" {
+		t.Fatalf("unexpected rule id: %#v", result)
+	}
+}
+
 func TestRunTargetWritesContractProfileForLangGraphTarget(t *testing.T) {
 	tmp := t.TempDir()
 	result, err := target.RunTarget(context.Background(), target.TargetRunOptions{

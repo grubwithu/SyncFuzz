@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,6 +65,13 @@ const (
 	TargetProcessLateArtifact           = "process-late.json"
 	TargetFilesystemLateArtifact        = "filesystem-late-metadata.json"
 	TargetContractProfileArtifact       = "target-contract-profile.json"
+	TargetCWDResidueDirArtifact         = "branch-cwd-dir"
+	TargetCWDResidueWitnessArtifact     = "cwd-relative-witness.txt"
+	TargetCWDResidueForkArtifact        = "cwd-residue-fork-check.txt"
+	TargetUmaskResidueBaselineArtifact  = "baseline-umask.txt"
+	TargetUmaskResidueWitnessArtifact   = "umask-witness.txt"
+	TargetUmaskResidueForkArtifact      = "umask-residue-fork-check.txt"
+
 	DefaultTargetAdapterID              = "command"
 	DefaultTargetTaskID                 = "orphan-process"
 	LongDelayTargetTaskID               = "orphan-process-long-delay"
@@ -83,8 +91,11 @@ const (
 	DeletedOpenFDForkTargetTaskID       = "deleted-open-fd-residue-fork"
 	InheritedFDLeakTargetTaskID         = "inherited-fd-branch-leakage"
 	UnixListenerResidueForkTargetTaskID = "unix-listener-residue-fork"
-	longDelayTargetLateEffectArtifact   = "late-effect"
-	DefaultLongDelayLateObserveDelay    = 7 * time.Second
+	CWDResidueForkTargetTaskID          = "cwd-residue-fork"
+	UmaskResidueForkTargetTaskID        = "umask-residue-fork"
+
+	longDelayTargetLateEffectArtifact = "late-effect"
+	DefaultLongDelayLateObserveDelay  = 7 * time.Second
 )
 
 type TargetAdapterInfo struct {
@@ -703,6 +714,10 @@ func evaluateTargetOracle(workspace string, taskID string, completed bool, immed
 		return evaluateInheritedFDLeakTargetOracle(workspace, completed, immediateMissing)
 	case UnixListenerResidueForkTargetTaskID:
 		return evaluateUnixListenerResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case CWDResidueForkTargetTaskID:
+		return evaluateCWDResidueForkTargetOracle(workspace, completed, immediateMissing)
+	case UmaskResidueForkTargetTaskID:
+		return evaluateUmaskResidueForkTargetOracle(workspace, completed, immediateMissing)
 	default:
 		oracle := newTargetOracleResult("command-and-expected-files")
 		if completed {
@@ -2049,6 +2064,294 @@ func evaluateUnixListenerResidueForkTargetOracle(workspace string, completed boo
 		markTargetOracleInconclusive(&oracle)
 	}
 	return finalizeTargetOracle(oracle)
+}
+
+func evaluateCWDResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        "cwd-residue-fork",
+		Confirmed:   true,
+		Attribution: TargetOracleAttributionUnknown,
+	}
+
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, TargetCWDResidueForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+TargetCWDResidueForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	witnessKind := ""
+	switch {
+	case outputShowsCWDResidueMarker(witness):
+		witnessKind = "residue"
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that the successor branch still started inside branch-cwd-dir")
+	case outputShowsMissingBranchCWDResidue(witness):
+		witnessKind = "clean"
+		oracle.Evidence = append(oracle.Evidence, "fork witness reported that the successor branch started outside branch-cwd-dir")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness contained a recognizable CWD residue marker")
+	}
+
+	if pwd := targetOracleLineValue(witness, "PWD="); pwd != "" {
+		oracle.Evidence = append(oracle.Evidence, "fork witness recorded pwd: "+pwd)
+	}
+	if relativeWitness := targetOracleLineValue(witness, "RELATIVE_WITNESS="); relativeWitness != "" {
+		oracle.Evidence = append(oracle.Evidence, "fork witness recorded relative witness path: "+relativeWitness)
+	}
+
+	sawInitialCreate, err := langgraphHistoryShowsWorkspaceDirectoryCreate(workspace, TargetCWDResidueDirArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialCreate {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial branch-cwd-dir creation")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch-cwd-dir creation")
+	}
+
+	sawInitialCD, err := langgraphHistoryShowsWorkingDirectoryChange(workspace, TargetCWDResidueDirArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialCD {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial cd into branch-cwd-dir")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial cd into branch-cwd-dir")
+	}
+
+	transcript, err := inspectLangGraphForkCWDResidueEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case TargetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "cwd residue occurred without changing directories during the fork follow-up")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from observing the inherited cwd without another cd")
+			}
+		} else {
+			switch witnessKind {
+			case "residue":
+				oracle.Attribution = TargetOracleAttributionRuntimeResidue
+			case "clean":
+				oracle.Confirmed = false
+				oracle.Attribution = TargetOracleAttributionCleanFork
+				appendTargetOracleMissing(&oracle, "fork preserved branch-cwd-dir as the active cwd across the checkpoint boundary")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == TargetOracleAttributionUnknown {
+		oracle.Attribution = TargetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == TargetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateUmaskResidueForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := TargetOracleResult{
+		Name:        "umask-residue-fork",
+		Confirmed:   true,
+		Attribution: TargetOracleAttributionUnknown,
+	}
+
+	if !completed {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, immediateMissing...)
+		return oracle
+	}
+
+	witness, err := readTargetOracleFile(workspace, TargetUmaskResidueForkArtifact)
+	if err != nil {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "read "+TargetUmaskResidueForkArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return oracle
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+
+	baselineUmask := targetOracleLineValue(witness, "BASELINE_UMASK=")
+	witnessMode := targetOracleLineValue(witness, "WITNESS_MODE=")
+	if baselineUmask != "" {
+		oracle.Evidence = append(oracle.Evidence, "fork witness recorded baseline umask: "+baselineUmask)
+	}
+	if witnessMode != "" {
+		oracle.Evidence = append(oracle.Evidence, "fork witness recorded umask-witness.txt mode: "+witnessMode)
+	}
+
+	witnessKind := ""
+	baselineMode, baselineModeErr := defaultCreatedFileModeForUmask(baselineUmask)
+	tightenedMode, tightenedModeErr := defaultCreatedFileModeForUmask("077")
+	normalizedWitnessMode, witnessModeErr := normalizeOctalMode(witnessMode)
+
+	switch {
+	case strings.EqualFold(strings.TrimSpace(baselineUmask), "MISSING"):
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness recorded the baseline umask")
+	case baselineModeErr != nil:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness recorded a parseable baseline umask")
+		oracle.Evidence = append(oracle.Evidence, baselineModeErr.Error())
+	case tightenedModeErr != nil:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "internal oracle computed the tightened 077 file mode")
+		oracle.Evidence = append(oracle.Evidence, tightenedModeErr.Error())
+	case witnessModeErr != nil:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness recorded a parseable umask witness mode")
+		oracle.Evidence = append(oracle.Evidence, witnessModeErr.Error())
+	case normalizedWitnessMode == tightenedMode && baselineMode != tightenedMode:
+		witnessKind = "residue"
+		oracle.Evidence = append(oracle.Evidence, "fork witness matched the tightened branch umask file mode")
+	case normalizedWitnessMode == baselineMode && baselineMode != tightenedMode:
+		witnessKind = "clean"
+		oracle.Evidence = append(oracle.Evidence, "fork witness matched the baseline file-creation mode instead of the tightened branch umask")
+	case normalizedWitnessMode == baselineMode && normalizedWitnessMode == tightenedMode:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "baseline umask differed from the tightened 077 branch umask")
+		oracle.Evidence = append(oracle.Evidence, "baseline umask already produced the same witness mode as 077, so the fork observation is ambiguous")
+	default:
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "fork witness mode matched either the baseline umask or the tightened branch umask")
+		if baselineModeErr == nil {
+			oracle.Evidence = append(oracle.Evidence, "baseline-derived witness mode: "+baselineMode)
+		}
+		if tightenedModeErr == nil {
+			oracle.Evidence = append(oracle.Evidence, "tightened 077 witness mode: "+tightenedMode)
+		}
+	}
+
+	sawInitialBaselineWrite, err := langgraphHistoryShowsWorkspaceFileWrite(workspace, TargetUmaskResidueBaselineArtifact)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialBaselineWrite {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial baseline-umask.txt write")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial baseline-umask.txt write")
+	}
+
+	sawInitialUmaskChange, err := langgraphHistoryShowsUmaskChange(workspace, "077")
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if sawInitialUmaskChange {
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the initial umask 077 change")
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial umask 077 change")
+	}
+
+	transcript, err := inspectLangGraphForkUmaskResidueEvidence(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+	} else if transcript.Available {
+		oracle.Evidence = append(oracle.Evidence, transcript.Details...)
+		if transcript.Attribution != "" {
+			oracle.Attribution = transcript.Attribution
+		}
+		if !transcript.Confirmed {
+			oracle.Confirmed = false
+			switch transcript.Attribution {
+			case TargetOracleAttributionWorkspaceRebuild:
+				appendTargetOracleMissing(&oracle, "umask residue occurred without running umask during the fork follow-up")
+			default:
+				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from creating umask-witness.txt without changing the shell umask")
+			}
+		} else {
+			switch witnessKind {
+			case "residue":
+				oracle.Attribution = TargetOracleAttributionRuntimeResidue
+			case "clean":
+				oracle.Confirmed = false
+				oracle.Attribution = TargetOracleAttributionCleanFork
+				appendTargetOracleMissing(&oracle, "fork preserved the tightened branch umask across the checkpoint boundary")
+			}
+		}
+	} else {
+		oracle.Confirmed = false
+		oracle.Missing = append(oracle.Missing, "langgraph fork summary artifact was present and decodable")
+	}
+
+	if oracle.Confirmed && oracle.Attribution == TargetOracleAttributionUnknown {
+		oracle.Attribution = TargetOracleAttributionRuntimeResidue
+	}
+	if !oracle.Confirmed && oracle.Attribution == TargetOracleAttributionUnknown {
+		markTargetOracleInconclusive(&oracle)
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func targetOracleLineValue(witness string, prefix string) string {
+	for _, line := range strings.Split(witness, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
+}
+
+func defaultCreatedFileModeForUmask(umask string) (string, error) {
+	value, err := parseOctalMode(umask)
+	if err != nil {
+		return "", fmt.Errorf("parse baseline umask %q: %w", umask, err)
+	}
+	if value > 0o777 {
+		return "", fmt.Errorf("parse baseline umask %q: out of range", umask)
+	}
+	return fmt.Sprintf("%03o", 0o666&^value), nil
+}
+
+func normalizeOctalMode(value string) (string, error) {
+	parsed, err := parseOctalMode(value)
+	if err != nil {
+		return "", fmt.Errorf("parse octal mode %q: %w", value, err)
+	}
+	return fmt.Sprintf("%03o", parsed), nil
+}
+
+func parseOctalMode(value string) (uint64, error) {
+	value = strings.TrimSpace(strings.Trim(value, "\"'"))
+	if value == "" {
+		return 0, fmt.Errorf("empty value")
+	}
+	parsed, err := strconv.ParseUint(value, 8, 16)
+	if err != nil {
+		return 0, err
+	}
+	return parsed, nil
 }
 
 func evaluateLongDelayTargetOracle(completed bool, lineage core.ProcessLineageSummary, lateObserved bool, latePresent []string, lateMissing []string) TargetOracleResult {

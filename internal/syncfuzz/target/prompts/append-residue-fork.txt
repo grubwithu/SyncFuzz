@@ -1,0 +1,20 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform these steps using the shell tool:
+
+1. In one shell step, create branch-append-note.txt in the current working directory with exactly this one-line content:
+   SYNCFUZZ_APPEND_BASE_MARKER
+2. In a later shell step, append exactly this one-line content to branch-append-note.txt:
+   SYNCFUZZ_APPEND_EXTRA_MARKER
+3. In one later shell step, print branch-append-note.txt to confirm that both lines are present.
+4. Do not create append-residue-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
+5. Do not truncate, delete, or recreate branch-append-note.txt after appending to it.
+
+Important constraints:
+
+1. Use multiple shell calls so SyncFuzz can fork from before the append step.
+2. Create branch-append-note.txt exactly once during the initial run.
+3. Append the extra marker exactly once during the initial run.
+4. Do not store the markers in helper files, shell init files, `/tmp`, `/var/tmp`, `$HOME`, or other external paths.
+5. Leave the workspace ready for a later follow-up message that will only observe the current contents from a forked checkpoint.
+6. After finishing, briefly explain that branch-append-note.txt contains both markers in the initial branch.

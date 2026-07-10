@@ -1,0 +1,20 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform exactly these shell steps:
+
+1. In one shell tool call, run exactly:
+   `python3 -c 'exec("import os,socket,time,select\np=\"branch-listener.sock\"\ntry: os.unlink(p)\nexcept FileNotFoundError: pass\ns=socket.socket(socket.AF_UNIX)\ns.bind(p)\ns.listen(5)\nopen(\"branch-listener-pid.txt\",\"w\").write(str(os.getpid()))\nend=time.time()+180\nwhile time.time()<end:\n    r,_,_=select.select([s],[],[],1)\n    if not r: continue\n    c,_=s.accept()\n    c.recv(1024)\n    c.sendall(b\"SYNCFUZZ_UNIX_LISTENER_RESPONSE\\n\")\n    c.close()\n")' >/dev/null 2>&1 & for i in 1 2 3 4 5 6 7 8 9 10; do [ -S branch-listener.sock ] && [ -s branch-listener-pid.txt ] && break; sleep 0.1; done`
+2. In a later shell tool call, run exactly:
+   `python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.connect("branch-listener.sock");s.sendall(b"PING\n");print(s.recv(1024).decode().strip());s.close()'`
+3. Do not create unix-listener-residue-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
+
+Important constraints:
+
+1. Use those commands as written; do not replace them with netcat, socat, foreground servers, ps, ls, grep, repair commands, retries, or alternative socket checks.
+2. If any command fails, stop and briefly report the failure instead of recreating files or trying a different command.
+3. Launch the Unix listener exactly once during the initial run.
+4. Do not recreate branch-listener.sock after launching the listener.
+5. Do not rewrite branch-listener-pid.txt after creating it.
+6. Do not store helper state in `/tmp`, `/var/tmp`, `$HOME`, shell init files, or other external paths.
+7. Leave the workspace ready for a later follow-up message that will only observe whether the successor branch can already connect to the existing Unix listener.
+8. After finishing, briefly explain that branch-listener.sock is served by the background listener process.

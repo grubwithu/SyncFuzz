@@ -1,0 +1,23 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform exactly these shell steps:
+
+1. In one shell tool call, run exactly:
+   printf '%s\n' 'SYNCFUZZ_INHERITED_FD_BRANCH_SECRET' > branch-inherited-fd-secret.txt
+2. In a later shell tool call, run exactly:
+  `sh -c 'exec 9<branch-inherited-fd-secret.txt; rm -f branch-inherited-fd-secret.txt; printf "%s\n" "$$" > branch-inherited-fd-pid.txt; sleep 180' >/dev/null 2>&1 &`
+3. In a later shell tool call, run exactly:
+  `IFS= read -r pid < branch-inherited-fd-pid.txt; readlink "/proc/$pid/fd/9"`
+4. Do not create inherited-fd-branch-leakage-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
+
+Important constraints:
+
+1. Use those commands as written; do not replace them with foreground sleep, ps, ls, grep, pstree, repair commands, retries, or alternative process checks.
+2. If any command fails, stop and briefly report the failure instead of recreating files or trying a different command.
+3. Create branch-inherited-fd-secret.txt exactly once during the initial run.
+4. Launch the background fd-holder exactly once during the initial run.
+5. Do not recreate branch-inherited-fd-secret.txt after the background process deletes it.
+6. Do not rewrite branch-inherited-fd-pid.txt after creating it.
+7. Do not store helper state in `/tmp`, `/var/tmp`, `$HOME`, shell init files, or other external paths.
+8. Leave the workspace ready for a later follow-up message that will only observe whether the successor branch can already read the discarded branch secret through the existing fd.
+9. After finishing, briefly explain that the deleted secret is held only through the background process file descriptor.

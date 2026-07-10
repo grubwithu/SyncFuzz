@@ -102,7 +102,7 @@ func TestDefaultTargetLateObserveDelayMapsLongDelayTask(t *testing.T) {
 
 func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 	tasks := target.TargetTasks()
-	if len(tasks) < 17 {
+	if len(tasks) < 19 {
 		t.Fatalf("expected built-in target tasks: %#v", tasks)
 	}
 	foundPersistent := false
@@ -120,6 +120,8 @@ func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 	foundDeletedOpenFDFork := false
 	foundInheritedFDLeak := false
 	foundUnixListenerFork := false
+	foundCWDFork := false
+	foundUmaskFork := false
 	for _, task := range tasks {
 		if task.TaskID == target.PersistentShellTargetTaskID {
 			foundPersistent = true
@@ -211,8 +213,20 @@ func TestTargetTasksIncludesPersistentShellTask(t *testing.T) {
 				t.Fatalf("unexpected unix listener fork task metadata: %#v", task)
 			}
 		}
+		if task.TaskID == target.CWDResidueForkTargetTaskID {
+			foundCWDFork = true
+			if !target.ContainsString(task.DefaultExpectedFiles, target.TargetCWDResidueForkArtifact) || !target.ContainsString(task.DefaultExpectedFiles, target.LanggraphForkArtifact) {
+				t.Fatalf("unexpected cwd residue fork task metadata: %#v", task)
+			}
+		}
+		if task.TaskID == target.UmaskResidueForkTargetTaskID {
+			foundUmaskFork = true
+			if !target.ContainsString(task.DefaultExpectedFiles, target.TargetUmaskResidueForkArtifact) || !target.ContainsString(task.DefaultExpectedFiles, target.LanggraphForkArtifact) {
+				t.Fatalf("unexpected umask residue fork task metadata: %#v", task)
+			}
+		}
 	}
-	if !foundPersistent || !foundReplay || !foundFork || !foundDirectoryFork || !foundDeleteFork || !foundSymlinkFork || !foundRenameFork || !foundModeFork || !foundAppendFork || !foundHardlinkFork || !foundFIFOFork || !foundOpenFDFork || !foundDeletedOpenFDFork || !foundInheritedFDLeak || !foundUnixListenerFork {
+	if !foundPersistent || !foundReplay || !foundFork || !foundDirectoryFork || !foundDeleteFork || !foundSymlinkFork || !foundRenameFork || !foundModeFork || !foundAppendFork || !foundHardlinkFork || !foundFIFOFork || !foundOpenFDFork || !foundDeletedOpenFDFork || !foundInheritedFDLeak || !foundUnixListenerFork || !foundCWDFork || !foundUmaskFork {
 		t.Fatalf("expected persistent shell replay/fork tasks plus workspace residue fork tasks in catalog: %#v", tasks)
 	}
 }
@@ -242,6 +256,8 @@ func TestExpandTargetTasksIncludesGroupsAndDeduplicates(t *testing.T) {
 		target.DeletedOpenFDForkTargetTaskID,
 		target.InheritedFDLeakTargetTaskID,
 		target.UnixListenerResidueForkTargetTaskID,
+		target.CWDResidueForkTargetTaskID,
+		target.UmaskResidueForkTargetTaskID,
 	}
 	if len(tasks) != len(expected) {
 		t.Fatalf("unexpected expanded task count: got %d want %d (%#v)", len(tasks), len(expected), tasks)
@@ -281,6 +297,40 @@ func TestTargetScenarioSeedsExposeShellPathFamily(t *testing.T) {
 	}
 	if !target.ContainsString(shellSeed.LifecycleOperations, "run-continue") || !target.ContainsString(shellSeed.LifecycleOperations, "checkpoint-replay") || !target.ContainsString(shellSeed.LifecycleOperations, "checkpoint-fork") {
 		t.Fatalf("expected shell lifecycle variants in seed: %#v", shellSeed)
+	}
+}
+
+func TestTargetScenarioSeedsExposeExecutionContextResidueFamily(t *testing.T) {
+	seeds := target.TargetScenarioSeeds()
+	var executionContextSeed target.TargetScenarioSeedInfo
+	found := false
+	for _, seed := range seeds {
+		if seed.SeedID == "shell-execution-context-residue-fork" {
+			executionContextSeed = seed
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected shell-execution-context-residue-fork seed in catalog: %#v", seeds)
+	}
+	if len(executionContextSeed.Tasks) != 2 {
+		t.Fatalf("expected two execution-context residue tasks, got %#v", executionContextSeed)
+	}
+	if !target.ContainsString(executionContextSeed.Tasks, target.CWDResidueForkTargetTaskID) || !target.ContainsString(executionContextSeed.Tasks, target.UmaskResidueForkTargetTaskID) {
+		t.Fatalf("expected cwd/umask tasks in execution-context seed: %#v", executionContextSeed)
+	}
+	if !target.ContainsString(executionContextSeed.PlantPrimitives, "shell-cwd-change") || !target.ContainsString(executionContextSeed.PlantPrimitives, "shell-umask-change") {
+		t.Fatalf("expected execution-context primitives in seed: %#v", executionContextSeed)
+	}
+	if len(executionContextSeed.LifecycleOperations) != 1 || executionContextSeed.LifecycleOperations[0] != "checkpoint-fork" {
+		t.Fatalf("expected checkpoint-fork lifecycle in execution-context seed: %#v", executionContextSeed)
+	}
+	if !target.ContainsString(executionContextSeed.ActivationKinds, "relative-path-resolution") || !target.ContainsString(executionContextSeed.ActivationKinds, "file-mode-witness") {
+		t.Fatalf("expected execution-context activation kinds in seed: %#v", executionContextSeed)
+	}
+	if !target.ContainsString(executionContextSeed.OracleKinds, "cwd-residue") || !target.ContainsString(executionContextSeed.OracleKinds, "umask-residue") {
+		t.Fatalf("expected execution-context oracle kinds in seed: %#v", executionContextSeed)
 	}
 }
 

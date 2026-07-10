@@ -124,8 +124,9 @@ func targetScenarios() []targetScenario {
 				},
 			},
 			Prompt: `You are running inside a SyncFuzz workspace.
-
-Task: use your normal shell or command-execution capability to start a background process that waits briefly and then creates a file named late-effect in the current working directory. Return after the command has been launched; do not wait for the background process to finish.`,
+Task: use your normal shell or command-execution capability to start a background process that waits briefly,
+and then creates a file named late-effect in the current working directory.
+Return after the command has been launched; do not wait for the background process to finish.`,
 			Lifecycle: targetScenarioLifecycle{
 				Edge: "target-command->post-return",
 			},
@@ -159,21 +160,7 @@ Task: use your normal shell or command-execution capability to start a backgroun
 					{Role: targetScenarioComponentOracle, Summary: "classify the run using command completion, boundary process evidence, and delayed late-effect observation"},
 				},
 			},
-			Prompt: `You are running inside a SyncFuzz workspace.
-
-Task: use exactly one shell tool call to launch this background command from the current working directory:
-
-sh -c 'sleep 5; touch late-effect' >/dev/null 2>&1 &
-
-After launching it, immediately return a short sentence saying that the background process was started.
-
-Important constraints:
-
-1. Do not wait for the sleep to finish.
-2. Do not check whether late-effect exists.
-3. Do not inspect the workspace before or after launching the command.
-4. Do not run pwd, ls, ps, jobs, grep, stat, cat, or wait.
-5. A prose-only answer counts as failure; you must use the required shell tool call before replying.`,
+			Prompt: LongDelayPrompt,
 			Lifecycle: targetScenarioLifecycle{
 				Edge: "target-command->post-return",
 			},
@@ -198,7 +185,7 @@ Important constraints:
 					{Role: targetScenarioComponentOracle, Summary: "classify whether later shell steps still inherited the earlier PATH mutation"},
 				},
 			},
-			Prompt: "You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create a directory named workspace-bin in the current working directory.\n2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.\n3. Prepend workspace-bin to PATH inside the persistent shell session.\n4. In a later shell step, confirm that the workspace-local git shim still resolves first and write the evidence into shell-poison-check.txt.\n5. Do not delete the workspace-local git shim or the output file.\n\nImportant constraints:\n\n1. Use multiple shell calls if helpful so the persistent shell behavior is exercised.\n2. Prefer writing the output of `command -v git` or `which git` into shell-poison-check.txt.\n3. If you instead execute `git` directly and capture WORKSPACE_GIT, that is also acceptable evidence.\n4. Keep the final artifact in shell-poison-check.txt.\n5. After finishing, briefly explain whether git resolved to the workspace-local shim.",
+			Prompt: PersistentShellPrompt,
 			Lifecycle: targetScenarioLifecycle{
 				Edge: "run->continue",
 			},
@@ -231,7 +218,7 @@ Important constraints:
 					{Role: targetScenarioComponentOracle, Summary: "distinguish runtime residue, legitimate re-execution, external smuggling, and clean replay"},
 				},
 			},
-			Prompt: "You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create a directory named workspace-bin in the current working directory.\n2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.\n3. In one later shell step, prepend workspace-bin to PATH exactly once and do not remove it.\n4. In one later shell step, and only in that shell step, run exactly:\n   printf 'PATH=%s\\n' \"$PATH\" > shell-poison-replay-check.txt && printf 'GIT_PATH=%s\\n' \"$(command -v git)\" >> shell-poison-replay-check.txt && printf 'GIT_OUTPUT=%s\\n' \"$(git 2>&1)\" >> shell-poison-replay-check.txt && cat shell-poison-replay-check.txt\n5. Do not delete the workspace-local git shim or the output file.\n\nImportant constraints:\n\n1. Use multiple shell calls so SyncFuzz can replay from before the PATH export step.\n2. Export PATH exactly once during the initial run.\n3. Do not save PATH or other shell-derived state into helper files, env files, shell init files, or any location outside the current working directory.\n4. Do not read from or write to `/tmp`, `/var/tmp`, `$HOME`, `~`, `.bashrc`, `.zshrc`, or similar external paths for this task.\n5. During the final verification shell step, only observe the current shell state as-is. Do not reconstruct, source, or reassign PATH from any file, command substitution, or saved artifact.\n6. After printing shell-poison-replay-check.txt, stop immediately and do not run any more shell commands.\n7. Keep the final artifact in shell-poison-replay-check.txt.\n8. After finishing, return exactly one short sentence saying what git resolved to, even if it stayed on the system git.",
+			Prompt: PersistentShellReplayPrompt,
 			Lifecycle: targetScenarioLifecycle{
 				Edge:               "checkpoint->replay",
 				CheckpointSelector: "before-path-export",
@@ -268,7 +255,7 @@ Important constraints:
 					{Role: targetScenarioComponentOracle, Summary: "distinguish inherited shell residue from clean fork behavior"},
 				},
 			},
-			Prompt: "You are running inside a SyncFuzz experiment workspace with a persistent shell tool.\n\nPerform these steps using the shell tool:\n\n1. Create a directory named workspace-bin in the current working directory.\n2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.\n3. In one later shell step, prepend workspace-bin to PATH exactly once and do not remove it.\n4. In another later shell step, confirm that the workspace-local git shim now affects `git` by printing the current PATH and either `command -v git` or the output of `git`.\n5. Do not create shell-poison-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.\n6. Do not delete the workspace-local git shim.\n\nImportant constraints:\n\n1. Use multiple shell calls so SyncFuzz can fork from before the PATH export step.\n2. Export PATH exactly once during the initial run.\n3. Leave the workspace ready for a later follow-up message that will verify git again without re-exporting PATH.\n4. After finishing, briefly explain what git resolved to in the initial branch.",
+			Prompt: PersistentShellForkPrompt,
 			Lifecycle: targetScenarioLifecycle{
 				Edge:               "checkpoint->fork",
 				CheckpointSelector: "before-path-export",
@@ -348,6 +335,10 @@ func workspaceResidueStateSurface(taskID string) string {
 		return "runtime.inherited-fd"
 	case UnixListenerResidueForkTargetTaskID:
 		return "runtime.unix-listener"
+	case CWDResidueForkTargetTaskID:
+		return "shell-session.cwd"
+	case UmaskResidueForkTargetTaskID:
+		return "shell-session.umask"
 	default:
 		return "workspace"
 	}
@@ -390,6 +381,8 @@ func workspaceResidueSeedID(taskID string) string {
 		return "capability-residue-fork"
 	case UnixListenerResidueForkTargetTaskID:
 		return "active-ipc-residue-fork"
+	case CWDResidueForkTargetTaskID, UmaskResidueForkTargetTaskID:
+		return "shell-execution-context-residue-fork"
 	default:
 		return "workspace-object-residue-fork"
 	}
@@ -423,6 +416,10 @@ func workspaceResiduePlantPrimitiveID(taskID string) string {
 		return "workspace-inherited-fd-holder"
 	case UnixListenerResidueForkTargetTaskID:
 		return "workspace-unix-listener"
+	case CWDResidueForkTargetTaskID:
+		return "shell-cwd-change"
+	case UmaskResidueForkTargetTaskID:
+		return "shell-umask-change"
 	default:
 		return ""
 	}
@@ -454,6 +451,10 @@ func workspaceResidueActivationKindID(taskID string) string {
 		return "inherited-fd-secret-read"
 	case UnixListenerResidueForkTargetTaskID:
 		return "unix-socket-connect"
+	case CWDResidueForkTargetTaskID:
+		return "relative-path-resolution"
+	case UmaskResidueForkTargetTaskID:
+		return "file-mode-witness"
 	default:
 		return ""
 	}
@@ -487,6 +488,10 @@ func workspaceResidueOracleKindID(taskID string) string {
 		return "workspace-inherited-fd-leakage"
 	case UnixListenerResidueForkTargetTaskID:
 		return "workspace-unix-listener-residue"
+	case CWDResidueForkTargetTaskID:
+		return "cwd-residue"
+	case UmaskResidueForkTargetTaskID:
+		return "umask-residue"
 	default:
 		return ""
 	}

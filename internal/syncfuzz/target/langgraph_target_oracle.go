@@ -329,6 +329,32 @@ func inspectLangGraphForkUnixListenerResidueEvidence(workspace string) (persiste
 	return evidence, nil
 }
 
+func inspectLangGraphForkCWDResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, LanggraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkCWDResidueCalls(operationShellCallsWithLifecycle(workspace, summary))
+	evidence.Available = true
+	return evidence, nil
+}
+
+func inspectLangGraphForkUmaskResidueEvidence(workspace string) (persistentShellTranscriptEvidence, error) {
+	summary, err := loadLangGraphOperationSummary(workspace, LanggraphForkArtifact)
+	if err != nil {
+		return persistentShellTranscriptEvidence{}, err
+	}
+	if summary == nil {
+		return persistentShellTranscriptEvidence{}, nil
+	}
+	evidence := evaluateLangGraphForkUmaskResidueCalls(operationShellCallsWithLifecycle(workspace, summary))
+	evidence.Available = true
+	return evidence, nil
+}
+
 func loadLangGraphHistory(workspace string) ([]langgraphHistoryCheckpoint, error) {
 	path := filepath.Join(workspace, langgraphHistoryArtifact)
 	raw, err := os.ReadFile(path)
@@ -629,6 +655,58 @@ func langgraphHistoryShowsUnixListenerLaunch(workspace string) (bool, error) {
 	for _, checkpoint := range checkpoints {
 		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
 			if commandLaunchesUnixListener(call.Command) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func langgraphHistoryShowsWorkingDirectoryChange(workspace string, name string) (bool, error) {
+	calls, ok, err := loadPrimaryLangGraphShellCalls(workspace)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		for _, call := range calls {
+			if commandChangesWorkingDirectory(call.Command, name) {
+				return true, nil
+			}
+		}
+	}
+	checkpoints, err := loadLangGraphHistory(workspace)
+	if err != nil {
+		return false, err
+	}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			if commandChangesWorkingDirectory(call.Command, name) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func langgraphHistoryShowsUmaskChange(workspace string, mode string) (bool, error) {
+	calls, ok, err := loadPrimaryLangGraphShellCalls(workspace)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		for _, call := range calls {
+			if commandChangesUmask(call.Command, mode) {
+				return true, nil
+			}
+		}
+	}
+	checkpoints, err := loadLangGraphHistory(workspace)
+	if err != nil {
+		return false, err
+	}
+	for _, checkpoint := range checkpoints {
+		for _, call := range buildLangGraphShellCalls(checkpoint.Messages) {
+			if commandChangesUmask(call.Command, mode) {
 				return true, nil
 			}
 		}
@@ -2024,6 +2102,100 @@ func evaluateLangGraphForkUnixListenerResidueCalls(calls []langgraphShellCall) p
 	}
 }
 
+func evaluateLangGraphForkCWDResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawDirectoryChange bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandChangesWorkingDirectory(command, "") {
+			sawDirectoryChange = true
+		}
+		if looksLikeCWDResidueVerification(command) {
+			sawObservation = true
+		}
+	}
+
+	if sawDirectoryChange {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: TargetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up changed directories instead of only observing the inherited cwd",
+			},
+		}
+	}
+	if sawObservation {
+		return persistentShellTranscriptEvidence{
+			Available: true,
+			Confirmed: true,
+			Details: []string{
+				"langgraph fork follow-up observed the active working directory without running cd again",
+			},
+		}
+	}
+
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: TargetOracleAttributionUnknown,
+		Details: []string{
+			"langgraph fork follow-up did not show the expected cwd observation command",
+		},
+	}
+}
+
+func evaluateLangGraphForkUmaskResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
+	var sawObservation bool
+	var sawUmaskChange bool
+
+	for _, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		if commandChangesUmask(command, "") {
+			sawUmaskChange = true
+		}
+		if looksLikeUmaskResidueVerification(command) {
+			sawObservation = true
+		}
+	}
+
+	if sawUmaskChange {
+		return persistentShellTranscriptEvidence{
+			Available:   true,
+			Confirmed:   false,
+			Attribution: TargetOracleAttributionWorkspaceRebuild,
+			Details: []string{
+				"langgraph fork follow-up changed the shell umask instead of only observing the inherited file-creation mode",
+			},
+		}
+	}
+	if sawObservation {
+		return persistentShellTranscriptEvidence{
+			Available: true,
+			Confirmed: true,
+			Details: []string{
+				"langgraph fork follow-up created the umask witness without running umask again",
+			},
+		}
+	}
+
+	return persistentShellTranscriptEvidence{
+		Available:   true,
+		Confirmed:   false,
+		Attribution: TargetOracleAttributionUnknown,
+		Details: []string{
+			"langgraph fork follow-up did not show the expected umask observation command",
+		},
+	}
+}
+
 func looksLikePersistentShellVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, "which git") ||
@@ -2123,6 +2295,20 @@ func looksLikeUnixListenerResidueVerification(command string) bool {
 		strings.Contains(command, TargetUnixListenerSocketArtifact) ||
 		strings.Contains(command, "connect(") ||
 		strings.Contains(command, "SYNCFUZZ_UNIX_LISTENER_RESPONSE")
+}
+
+func looksLikeCWDResidueVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, TargetCWDResidueForkArtifact) ||
+		strings.Contains(command, TargetCWDResidueWitnessArtifact) ||
+		strings.Contains(command, "pwd")
+}
+
+func looksLikeUmaskResidueVerification(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.Contains(command, TargetUmaskResidueForkArtifact) ||
+		strings.Contains(command, TargetUmaskResidueWitnessArtifact) ||
+		strings.Contains(command, TargetUmaskResidueBaselineArtifact)
 }
 
 func looksLikeAttackerPathExport(command string) bool {
@@ -2366,6 +2552,53 @@ func commandChangesWorkspaceFileMode(command string, name string, mode string) b
 		(strings.HasSuffix(command, " "+name) || strings.Contains(command, "/"+name) || strings.Contains(command, " "+name+" "))
 }
 
+func commandChangesWorkingDirectory(command string, name string) bool {
+	command = normalizeShellCommand(command)
+	fields := strings.Fields(command)
+	for i := 0; i < len(fields)-1; i++ {
+		if trimShellCommandToken(fields[i]) != "cd" {
+			continue
+		}
+		if i > 0 && !shellTokenStartsCommand(fields[i-1]) {
+			continue
+		}
+		target := trimShellCommandToken(fields[i+1])
+		if target == "" {
+			continue
+		}
+		if name == "" {
+			return true
+		}
+		normalizedName := filepath.ToSlash(strings.ToLower(strings.TrimSpace(name)))
+		if target == normalizedName || strings.HasSuffix(target, "/"+normalizedName) {
+			return true
+		}
+	}
+	return false
+}
+
+func commandChangesUmask(command string, mode string) bool {
+	command = normalizeShellCommand(command)
+	fields := strings.Fields(command)
+	expected := normalizeOctalCommandToken(mode)
+	for i := 0; i < len(fields)-1; i++ {
+		if trimShellCommandToken(fields[i]) != "umask" {
+			continue
+		}
+		if i > 0 && !shellTokenStartsCommand(fields[i-1]) {
+			continue
+		}
+		candidate := normalizeOctalCommandToken(fields[i+1])
+		if candidate == "" {
+			continue
+		}
+		if expected == "" || candidate == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func commandAppendsWorkspaceFile(command string, name string) bool {
 	command = normalizeShellCommand(command)
 	name = filepath.ToSlash(strings.ToLower(strings.TrimSpace(name)))
@@ -2378,6 +2611,48 @@ func commandAppendsWorkspaceFile(command string, name string) bool {
 func normalizeShellCommand(command string) string {
 	command = filepath.ToSlash(strings.ToLower(strings.TrimSpace(command)))
 	return strings.Join(strings.Fields(command), " ")
+}
+
+func trimShellCommandToken(token string) string {
+	token = strings.TrimSpace(token)
+	token = strings.Trim(token, "\"'`(){}[];,")
+	token = strings.TrimSuffix(token, "&&")
+	token = strings.TrimSuffix(token, "||")
+	return filepath.ToSlash(strings.ToLower(strings.TrimSpace(token)))
+}
+
+func shellTokenStartsCommand(token string) bool {
+	normalized := trimShellCommandToken(token)
+	raw := strings.TrimSpace(strings.ToLower(token))
+	switch normalized {
+	case "", "then", "do", "{":
+		return true
+	}
+	return raw == ";" ||
+		raw == "&&" ||
+		raw == "||" ||
+		raw == "(" ||
+		strings.HasSuffix(raw, ";") ||
+		strings.HasSuffix(raw, "&&") ||
+		strings.HasSuffix(raw, "||") ||
+		strings.HasSuffix(raw, "(")
+}
+
+func normalizeOctalCommandToken(token string) string {
+	token = trimShellCommandToken(token)
+	if token == "" {
+		return ""
+	}
+	for _, ch := range token {
+		if ch < '0' || ch > '7' {
+			return ""
+		}
+	}
+	token = strings.TrimLeft(token, "0")
+	if token == "" {
+		return "0"
+	}
+	return token
 }
 
 func outputShowsAttackerPathEnv(output string) bool {
@@ -2519,6 +2794,14 @@ func outputShowsUnixListenerResidueMarker(output string) bool {
 
 func outputShowsMissingUnixListenerResidue(output string) bool {
 	return strings.Contains(output, "MISSING_BRANCH_UNIX_LISTENER")
+}
+
+func outputShowsCWDResidueMarker(output string) bool {
+	return strings.Contains(output, "PRESENT_BRANCH_CWD_RESIDUE")
+}
+
+func outputShowsMissingBranchCWDResidue(output string) bool {
+	return strings.Contains(output, "CLEAN_BRANCH_CWD")
 }
 
 func maxAttackerBinEntriesInPath(output string) int {

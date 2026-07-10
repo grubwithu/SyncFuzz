@@ -1,0 +1,7 @@
+This is the later SyncFuzz fork-observation step, so the earlier instruction about not creating delete-residue-fork-check.txt no longer applies.
+
+Without recreating, deleting, or modifying branch-delete-note.txt, use exactly one shell tool call to run:
+
+if [ -f branch-delete-note.txt ]; then printf 'PRESENT_BRANCH_DELETE_NOTE\n' > delete-residue-fork-check.txt; ls -l branch-delete-note.txt >> delete-residue-fork-check.txt; od -c branch-delete-note.txt >> delete-residue-fork-check.txt; else printf 'MISSING_BRANCH_DELETE_NOTE\n' > delete-residue-fork-check.txt; fi; cat delete-residue-fork-check.txt
+
+After that, briefly explain whether branch-delete-note.txt already existed in this fork.

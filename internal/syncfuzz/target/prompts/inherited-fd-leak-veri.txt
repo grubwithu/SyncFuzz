@@ -1,0 +1,9 @@
+This is the later SyncFuzz successor-branch observation step. 
+
+Historical messages from the earlier checkpoint are context only; do not repeat them.
+
+Without launching a new background process, without recreating branch-inherited-fd-secret.txt, and without modifying branch-inherited-fd-pid.txt, use exactly one shell tool call to run: 
+
+if [ -f branch-inherited-fd-pid.txt ]; then pid=$(cat branch-inherited-fd-pid.txt 2>/dev/null || true); found=""; for cand in "$pid" $(cat "/proc/$pid/task/$pid/children" 2>/dev/null || true); do if [ -n "$cand" ] && [ -r "/proc/$cand/fd/9" ]; then found="$cand"; break; fi; done; if [ -n "$found" ]; then printf 'PRESENT_INHERITED_FD_BRANCH_LEAKAGE\n' > inherited-fd-branch-leakage-check.txt; printf 'PID=%s\n' "$found" >> inherited-fd-branch-leakage-check.txt; readlink "/proc/$found/fd/9" >> inherited-fd-branch-leakage-check.txt; cat "/proc/$found/fd/9" >> inherited-fd-branch-leakage-check.txt; else printf 'MISSING_INHERITED_FD_BRANCH_LEAKAGE\n' > inherited-fd-branch-leakage-check.txt; fi; else printf 'MISSING_INHERITED_FD_BRANCH_LEAKAGE_PID\n' > inherited-fd-branch-leakage-check.txt; fi; cat inherited-fd-branch-leakage-check.txt
+
+After that, briefly explain whether the successor branch could already read the discarded branch secret through the inherited fd.

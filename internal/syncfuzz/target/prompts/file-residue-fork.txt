@@ -1,0 +1,17 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform these steps using the shell tool:
+
+1. In one shell step, create branch-note.txt in the current working directory with exactly this one-line content:
+   SYNCFUZZ_FILE_RESIDUE_MARKER
+2. In a later shell step, print branch-note.txt to confirm that it exists.
+3. Do not create file-residue-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
+4. Do not delete, rename, or modify branch-note.txt after creating it.
+
+Important constraints:
+
+1. Use multiple shell calls so SyncFuzz can fork from before the file-creation step.
+2. Create branch-note.txt exactly once during the initial run.
+3. Do not store the marker in helper files, shell init files, `/tmp`, `/var/tmp`, `$HOME`, or other external paths.
+4. Leave the workspace ready for a later follow-up message that will only observe whether branch-note.txt still exists from a forked checkpoint.
+5. After finishing, briefly explain that branch-note.txt was created.

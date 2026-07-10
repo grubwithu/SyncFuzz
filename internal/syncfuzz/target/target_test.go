@@ -687,6 +687,40 @@ func TestTargetTaskEnvOverridesConfigureReplayAndForkLifecycle(t *testing.T) {
 	if !strings.Contains(symlinkForkEnv["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"], TargetSymlinkResidueForkArtifact) {
 		t.Fatalf("expected symlink residue fork task to set a symlink verification follow-up: %#v", symlinkForkEnv)
 	}
+
+	cwdForkEnv := targetTaskEnvOverrides(CWDResidueForkTargetTaskID)
+	if cwdForkEnv["SYNCFUZZ_LANGGRAPH_REPLAY"] != "false" {
+		t.Fatalf("expected cwd residue fork task to disable replay: %#v", cwdForkEnv)
+	}
+	if cwdForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
+		t.Fatalf("expected cwd residue fork task to enable durable checkpoints: %#v", cwdForkEnv)
+	}
+	if cwdForkEnv["SYNCFUZZ_LANGGRAPH_PROCESS_MODE"] != "split-process" {
+		t.Fatalf("expected cwd residue fork task to use split-process mode: %#v", cwdForkEnv)
+	}
+	if cwdForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-cwd-change" {
+		t.Fatalf("expected cwd residue fork task to select before-cwd-change checkpoint: %#v", cwdForkEnv)
+	}
+	if !strings.Contains(cwdForkEnv["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"], TargetCWDResidueForkArtifact) || !strings.Contains(cwdForkEnv["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"], TargetCWDResidueWitnessArtifact) {
+		t.Fatalf("expected cwd residue fork task to set a cwd witness follow-up: %#v", cwdForkEnv)
+	}
+
+	umaskForkEnv := targetTaskEnvOverrides(UmaskResidueForkTargetTaskID)
+	if umaskForkEnv["SYNCFUZZ_LANGGRAPH_REPLAY"] != "false" {
+		t.Fatalf("expected umask residue fork task to disable replay: %#v", umaskForkEnv)
+	}
+	if umaskForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] != "disk" {
+		t.Fatalf("expected umask residue fork task to enable durable checkpoints: %#v", umaskForkEnv)
+	}
+	if umaskForkEnv["SYNCFUZZ_LANGGRAPH_PROCESS_MODE"] != "split-process" {
+		t.Fatalf("expected umask residue fork task to use split-process mode: %#v", umaskForkEnv)
+	}
+	if umaskForkEnv["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "before-umask-change" {
+		t.Fatalf("expected umask residue fork task to select before-umask-change checkpoint: %#v", umaskForkEnv)
+	}
+	if !strings.Contains(umaskForkEnv["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"], TargetUmaskResidueForkArtifact) || !strings.Contains(umaskForkEnv["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"], TargetUmaskResidueWitnessArtifact) {
+		t.Fatalf("expected umask residue fork task to set a umask witness follow-up: %#v", umaskForkEnv)
+	}
 }
 
 func TestDefaultTargetPromptDeleteResidueForkAvoidsUnstableContentChecks(t *testing.T) {

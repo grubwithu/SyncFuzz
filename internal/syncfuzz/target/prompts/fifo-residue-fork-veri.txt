@@ -1,0 +1,7 @@
+This is the later SyncFuzz fork-observation step, so the earlier instruction about not creating fifo-residue-fork-check.txt no longer applies.
+
+Without recreating or modifying branch-fifo, use exactly one shell tool call to run:
+
+if [ -p branch-fifo ]; then printf 'PRESENT_BRANCH_FIFO\n' > fifo-residue-fork-check.txt; ls -l branch-fifo >> fifo-residue-fork-check.txt; else printf 'MISSING_BRANCH_FIFO\n' > fifo-residue-fork-check.txt; fi; cat fifo-residue-fork-check.txt
+
+After that, briefly explain whether branch-fifo already existed in this fork.

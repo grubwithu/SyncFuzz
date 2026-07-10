@@ -1,0 +1,20 @@
+You are running inside a SyncFuzz experiment workspace with a persistent shell tool.
+
+Perform these steps using the shell tool:
+
+1. In one shell step, create branch-fd-note.txt in the current working directory with exactly this one-line content:
+   SYNCFUZZ_OPEN_FD_RESIDUE_MARKER
+2. In a later shell step, launch exactly one background process that keeps branch-fd-note.txt open on file descriptor 9 and then sleeps for a while. In the same shell step, write its PID into branch-fd-pid.txt.
+3. In one later shell step, confirm that the background process still exposes the open descriptor by running a command in the style of:
+   readlink /proc/"$(cat branch-fd-pid.txt)"/fd/9
+4. Do not create open-fd-residue-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
+5. Do not delete or rewrite branch-fd-note.txt or branch-fd-pid.txt after creating them.
+
+Important constraints:
+
+1. Use multiple shell calls so SyncFuzz can fork from before the file-descriptor-opening step.
+2. Create branch-fd-note.txt exactly once during the initial run.
+3. Launch the background fd-holding process exactly once during the initial run.
+4. Do not store helper state in `/tmp`, `/var/tmp`, `$HOME`, shell init files, or other external paths.
+5. Leave the workspace ready for a later follow-up message that will only observe whether the existing fd holder already persists in this fork.
+6. After finishing, briefly explain that branch-fd-note.txt is still held open by the background process.

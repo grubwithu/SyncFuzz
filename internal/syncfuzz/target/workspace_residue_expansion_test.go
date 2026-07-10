@@ -69,6 +69,18 @@ func TestWorkspaceResidueTaskSpecsIncludeExpandedStateSurfaces(t *testing.T) {
 			witness:   TargetUnixListenerForkArtifact,
 			promptHit: TargetUnixListenerSocketArtifact,
 		},
+		{
+			taskID:    CWDResidueForkTargetTaskID,
+			selector:  "before-cwd-change",
+			witness:   TargetCWDResidueForkArtifact,
+			promptHit: TargetCWDResidueDirArtifact,
+		},
+		{
+			taskID:    UmaskResidueForkTargetTaskID,
+			selector:  "before-umask-change",
+			witness:   TargetUmaskResidueForkArtifact,
+			promptHit: TargetUmaskResidueBaselineArtifact,
+		},
 	}
 
 	for _, tt := range tests {
@@ -106,6 +118,8 @@ func TestTargetTaskEnvOverridesExpandedResidueTasks(t *testing.T) {
 		{DeletedOpenFDForkTargetTaskID, "before-deleted-open-fd-hold", TargetDeletedOpenFDForkArtifact},
 		{InheritedFDLeakTargetTaskID, "before-inherited-fd-leak-holder", TargetInheritedFDLeakForkArtifact},
 		{UnixListenerResidueForkTargetTaskID, "before-unix-listener-launch", TargetUnixListenerForkArtifact},
+		{CWDResidueForkTargetTaskID, "before-cwd-change", TargetCWDResidueForkArtifact},
+		{UmaskResidueForkTargetTaskID, "before-umask-change", TargetUmaskResidueForkArtifact},
 	}
 
 	for _, tt := range tests {
@@ -415,6 +429,275 @@ func TestInspectLangGraphForkUnixListenerResidueEvidenceFlagsForkRelaunchFromLif
 	}
 	if evidence.Attribution != TargetOracleAttributionWorkspaceRebuild {
 		t.Fatalf("expected fork relaunch to be attributed as workspace rebuild: %#v", evidence)
+	}
+}
+
+func TestEvaluateCWDResidueForkTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetCWDResidueForkArtifact), []byte("PRESENT_BRANCH_CWD_RESIDUE\nPWD=/tmp/demo/branch-cwd-dir\nRELATIVE_WITNESS=branch-cwd-dir/cwd-relative-witness.txt\n"), 0o644); err != nil {
+		t.Fatalf("write cwd witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "mkdir -p branch-cwd-dir"},
+		langgraphShellCall{Command: "cd branch-cwd-dir"},
+		langgraphShellCall{Command: "pwd", Output: "/tmp/demo/branch-cwd-dir\n"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-cwd-change",
+		langgraphShellCall{
+			Command: "pwd_now=$(pwd); printf '%s\n' 'SYNCFUZZ_CWD_RESIDUE_WITNESS' > cwd-relative-witness.txt; printf 'PRESENT_BRANCH_CWD_RESIDUE\nPWD=/tmp/demo/branch-cwd-dir\nRELATIVE_WITNESS=branch-cwd-dir/cwd-relative-witness.txt\n' > cwd-residue-fork-check.txt; cat cwd-residue-fork-check.txt",
+			Output:  "PRESENT_BRANCH_CWD_RESIDUE\nPWD=/tmp/demo/branch-cwd-dir\nRELATIVE_WITNESS=branch-cwd-dir/cwd-relative-witness.txt\n",
+		},
+	)
+
+	oracle := evaluateCWDResidueForkTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed cwd residue: %#v", oracle)
+	}
+}
+
+func TestEvaluateCWDResidueForkTargetOracleRejectsForkSideDirectoryChange(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetCWDResidueForkArtifact), []byte("PRESENT_BRANCH_CWD_RESIDUE\nPWD=/tmp/demo/branch-cwd-dir\nRELATIVE_WITNESS=branch-cwd-dir/cwd-relative-witness.txt\n"), 0o644); err != nil {
+		t.Fatalf("write cwd witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "mkdir -p branch-cwd-dir"},
+		langgraphShellCall{Command: "cd branch-cwd-dir"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-cwd-change",
+		langgraphShellCall{
+			Command: "cd branch-cwd-dir && printf 'PRESENT_BRANCH_CWD_RESIDUE\nPWD=/tmp/demo/branch-cwd-dir\nRELATIVE_WITNESS=branch-cwd-dir/cwd-relative-witness.txt\n' > cwd-residue-fork-check.txt && cat cwd-residue-fork-check.txt",
+			Output:  "PRESENT_BRANCH_CWD_RESIDUE\nPWD=/tmp/demo/branch-cwd-dir\nRELATIVE_WITNESS=branch-cwd-dir/cwd-relative-witness.txt\n",
+		},
+	)
+
+	oracle := evaluateCWDResidueForkTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected fork-side cd to invalidate cwd residue: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionWorkspaceRebuild {
+		t.Fatalf("expected workspace rebuild attribution: %#v", oracle)
+	}
+	if !ContainsString(oracle.Missing, "cwd residue occurred without changing directories during the fork follow-up") {
+		t.Fatalf("expected cwd rebuild-specific missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluateCWDResidueForkTargetOracleRecordsCleanForkNegative(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetCWDResidueForkArtifact), []byte("CLEAN_BRANCH_CWD\nPWD=/tmp/demo\nRELATIVE_WITNESS=cwd-relative-witness.txt\n"), 0o644); err != nil {
+		t.Fatalf("write cwd witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "mkdir -p branch-cwd-dir"},
+		langgraphShellCall{Command: "cd branch-cwd-dir"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-cwd-change",
+		langgraphShellCall{
+			Command: "pwd_now=$(pwd); printf '%s\n' 'SYNCFUZZ_CWD_RESIDUE_WITNESS' > cwd-relative-witness.txt; printf 'CLEAN_BRANCH_CWD\nPWD=/tmp/demo\nRELATIVE_WITNESS=cwd-relative-witness.txt\n' > cwd-residue-fork-check.txt; cat cwd-residue-fork-check.txt",
+			Output:  "CLEAN_BRANCH_CWD\nPWD=/tmp/demo\nRELATIVE_WITNESS=cwd-relative-witness.txt\n",
+		},
+	)
+
+	oracle := evaluateCWDResidueForkTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected clean cwd fork to remain negative: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionCleanFork {
+		t.Fatalf("expected clean fork attribution: %#v", oracle)
+	}
+	if !ContainsString(oracle.Missing, "fork preserved branch-cwd-dir as the active cwd across the checkpoint boundary") {
+		t.Fatalf("expected clean cwd missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluateCWDResidueForkTaskComplianceCompliant(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "mkdir -p branch-cwd-dir"},
+		langgraphShellCall{Command: "cd branch-cwd-dir"},
+		langgraphShellCall{Command: "pwd", Output: "/tmp/demo/branch-cwd-dir\n"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-cwd-change",
+		langgraphShellCall{
+			Command: "pwd_now=$(pwd); printf '%s\n' 'SYNCFUZZ_CWD_RESIDUE_WITNESS' > cwd-relative-witness.txt; printf 'PRESENT_BRANCH_CWD_RESIDUE\nPWD=%s\nRELATIVE_WITNESS=cwd-relative-witness.txt\n' \"$pwd_now\" > cwd-residue-fork-check.txt; cat cwd-residue-fork-check.txt",
+			Output:  "PRESENT_BRANCH_CWD_RESIDUE\nPWD=/tmp/demo/branch-cwd-dir\nRELATIVE_WITNESS=cwd-relative-witness.txt\n",
+		},
+	)
+
+	result := evaluateTargetTaskCompliance(tmp, CWDResidueForkTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant cwd task: %#v", result)
+	}
+}
+
+func TestEvaluateCWDResidueForkTaskComplianceFlagsForkDirectoryChange(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "mkdir -p branch-cwd-dir"},
+		langgraphShellCall{Command: "cd branch-cwd-dir"},
+		langgraphShellCall{Command: "pwd", Output: "/tmp/demo/branch-cwd-dir\n"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-cwd-change",
+		langgraphShellCall{
+			Command: "cd branch-cwd-dir && printf '%s\n' 'SYNCFUZZ_CWD_RESIDUE_WITNESS' > cwd-relative-witness.txt && printf 'PRESENT_BRANCH_CWD_RESIDUE\nPWD=/tmp/demo/branch-cwd-dir\nRELATIVE_WITNESS=cwd-relative-witness.txt\n' > cwd-residue-fork-check.txt && cat cwd-residue-fork-check.txt",
+			Output:  "PRESENT_BRANCH_CWD_RESIDUE\nPWD=/tmp/demo/branch-cwd-dir\nRELATIVE_WITNESS=cwd-relative-witness.txt\n",
+		},
+	)
+
+	result := evaluateTargetTaskCompliance(tmp, CWDResidueForkTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected fork-side cd to violate cwd compliance: %#v", result)
+	}
+	if !ContainsString(result.Violations, "fork follow-up did not change cwd (observed 1 times)") {
+		t.Fatalf("expected cwd-mutation violation: %#v", result)
+	}
+}
+
+func TestEvaluateUmaskResidueForkTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetUmaskResidueForkArtifact), []byte("BASELINE_UMASK=022\nWITNESS_MODE=600\n"), 0o644); err != nil {
+		t.Fatalf("write umask witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "umask > baseline-umask.txt"},
+		langgraphShellCall{Command: "umask 077"},
+		langgraphShellCall{Command: "umask", Output: "0077\n"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-umask-change",
+		langgraphShellCall{
+			Command: "baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=022\nWITNESS_MODE=600\n' > umask-residue-fork-check.txt; cat umask-residue-fork-check.txt",
+			Output:  "BASELINE_UMASK=022\nWITNESS_MODE=600\n",
+		},
+	)
+
+	oracle := evaluateUmaskResidueForkTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed umask residue: %#v", oracle)
+	}
+}
+
+func TestEvaluateUmaskResidueForkTargetOracleRejectsForkSideUmaskChange(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetUmaskResidueForkArtifact), []byte("BASELINE_UMASK=022\nWITNESS_MODE=600\n"), 0o644); err != nil {
+		t.Fatalf("write umask witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "umask > baseline-umask.txt"},
+		langgraphShellCall{Command: "umask 077"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-umask-change",
+		langgraphShellCall{
+			Command: "umask 077 && : > umask-witness.txt && printf 'BASELINE_UMASK=022\nWITNESS_MODE=600\n' > umask-residue-fork-check.txt && cat umask-residue-fork-check.txt",
+			Output:  "BASELINE_UMASK=022\nWITNESS_MODE=600\n",
+		},
+	)
+
+	oracle := evaluateUmaskResidueForkTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected fork-side umask change to invalidate residue: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionWorkspaceRebuild {
+		t.Fatalf("expected workspace rebuild attribution: %#v", oracle)
+	}
+	if !ContainsString(oracle.Missing, "umask residue occurred without running umask during the fork follow-up") {
+		t.Fatalf("expected umask rebuild-specific missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluateUmaskResidueForkTargetOracleRecordsCleanForkNegative(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetUmaskResidueForkArtifact), []byte("BASELINE_UMASK=022\nWITNESS_MODE=644\n"), 0o644); err != nil {
+		t.Fatalf("write umask witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "umask > baseline-umask.txt"},
+		langgraphShellCall{Command: "umask 077"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-umask-change",
+		langgraphShellCall{
+			Command: "baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=022\nWITNESS_MODE=644\n' > umask-residue-fork-check.txt; cat umask-residue-fork-check.txt",
+			Output:  "BASELINE_UMASK=022\nWITNESS_MODE=644\n",
+		},
+	)
+
+	oracle := evaluateUmaskResidueForkTargetOracle(tmp, true, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected clean umask fork to remain negative: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionCleanFork {
+		t.Fatalf("expected clean fork attribution: %#v", oracle)
+	}
+	if !ContainsString(oracle.Missing, "fork preserved the tightened branch umask across the checkpoint boundary") {
+		t.Fatalf("expected clean umask missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluateUmaskResidueForkTargetOracleMarksAmbiguousBaselineInconclusive(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetUmaskResidueForkArtifact), []byte("BASELINE_UMASK=077\nWITNESS_MODE=600\n"), 0o644); err != nil {
+		t.Fatalf("write umask witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "umask > baseline-umask.txt"},
+		langgraphShellCall{Command: "umask 077"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-umask-change",
+		langgraphShellCall{
+			Command: "baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=077\nWITNESS_MODE=600\n' > umask-residue-fork-check.txt; cat umask-residue-fork-check.txt",
+			Output:  "BASELINE_UMASK=077\nWITNESS_MODE=600\n",
+		},
+	)
+
+	oracle := evaluateUmaskResidueForkTargetOracle(tmp, true, nil)
+	if oracle.Status != TargetOracleStatusInconclusive {
+		t.Fatalf("expected ambiguous baseline to be inconclusive: %#v", oracle)
+	}
+	if !ContainsString(oracle.Missing, "baseline umask differed from the tightened 077 branch umask") {
+		t.Fatalf("expected ambiguous baseline missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluateUmaskResidueForkTaskComplianceCompliant(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "umask > baseline-umask.txt"},
+		langgraphShellCall{Command: "umask 077"},
+		langgraphShellCall{Command: "umask", Output: "0077\n"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-umask-change",
+		langgraphShellCall{
+			Command: "baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=%s\n' \"$baseline\" > umask-residue-fork-check.txt; printf 'WITNESS_MODE=%s\n' \"$mode\" >> umask-residue-fork-check.txt; cat umask-residue-fork-check.txt",
+			Output:  "BASELINE_UMASK=022\nWITNESS_MODE=600\n",
+		},
+	)
+
+	result := evaluateTargetTaskCompliance(tmp, UmaskResidueForkTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant umask task: %#v", result)
+	}
+}
+
+func TestEvaluateUmaskResidueForkTaskComplianceFlagsForkUmaskChange(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: "umask > baseline-umask.txt"},
+		langgraphShellCall{Command: "umask 077"},
+		langgraphShellCall{Command: "umask", Output: "0077\n"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-umask-change",
+		langgraphShellCall{
+			Command: "umask 077 && baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=%s\n' \"$baseline\" > umask-residue-fork-check.txt; printf 'WITNESS_MODE=%s\n' \"$mode\" >> umask-residue-fork-check.txt; cat umask-residue-fork-check.txt",
+			Output:  "BASELINE_UMASK=022\nWITNESS_MODE=600\n",
+		},
+	)
+
+	result := evaluateTargetTaskCompliance(tmp, UmaskResidueForkTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected fork-side umask change to violate compliance: %#v", result)
+	}
+	if !ContainsString(result.Violations, "fork follow-up changed the shell umask") {
+		t.Fatalf("expected umask-mutation violation: %#v", result)
 	}
 }
 

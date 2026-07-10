@@ -1,0 +1,7 @@
+This is the later SyncFuzz fork-observation step, so the earlier instruction about not creating rename-residue-fork-check.txt no longer applies.
+
+Without creating, deleting, or renaming either branch-rename-src.txt or branch-rename-dst.txt, use exactly one shell tool call to run:
+
+if [ -f branch-rename-src.txt ]; then printf 'PRESENT_BRANCH_RENAME_SRC\n' > rename-residue-fork-check.txt; cat branch-rename-src.txt >> rename-residue-fork-check.txt; elif [ -f branch-rename-dst.txt ]; then printf 'PRESENT_BRANCH_RENAME_DST\n' > rename-residue-fork-check.txt; cat branch-rename-dst.txt >> rename-residue-fork-check.txt; else printf 'MISSING_BRANCH_RENAME_FILES\n' > rename-residue-fork-check.txt; fi; cat rename-residue-fork-check.txt
+
+After that, briefly explain which filename already existed in this fork.
