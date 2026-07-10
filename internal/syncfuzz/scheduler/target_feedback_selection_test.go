@@ -171,6 +171,27 @@ func TestSelectTargetMatrixCandidatesUsesCoverageGapsToPrioritizeUnseenCandidate
 	}
 }
 
+func TestSelectTargetMatrixCandidatesAllowsFullExclusionToReturnEmptyMatrix(t *testing.T) {
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates: []TargetScheduleCandidate{
+			testTargetScheduleCandidate("task-a", target.TargetPromptProfileBaselineID),
+		},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	selected, err := selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{
+		ExcludeCandidateIDs: []string{matrix.Candidates[0].CandidateID},
+	})
+	if err != nil {
+		t.Fatalf("selectTargetMatrixCandidates failed: %v", err)
+	}
+	if selected.TotalCandidates != 0 || len(selected.Candidates) != 0 {
+		t.Fatalf("expected full exclusion to produce an empty candidate set, got %#v", selected)
+	}
+}
+
 func testTargetScheduleCandidate(taskID string, profileID string) TargetScheduleCandidate {
 	return TargetScheduleCandidate{
 		CandidateID:            targetScheduleCandidateID("test-target", taskID, profileID),

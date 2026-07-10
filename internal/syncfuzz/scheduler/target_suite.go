@@ -359,7 +359,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 			coverageUniverse = matrix
 		}
 		result.DimensionCoverage = summarizeTargetDimensionCoverage(coverageUniverse.Candidates, result.Results)
-		result.FrontierCandidates = summarizeTargetCoverageFrontier(coverageUniverse, result.Results, targetFrontierDefaultLimit)
+		result.FrontierCandidates = summarizeTargetCoverageFrontier(coverageUniverse, result.Results, opts.ExcludeCandidates, targetFrontierDefaultLimit)
 		result.CandidateSummaries = summarizeTargetCandidates(result.Results)
 	}
 	corpusEntries, err := WriteTargetCorpus(opts.CorpusDir, result)

@@ -46,7 +46,7 @@ func TestSummarizeTargetCoverageFrontierPrefersGapFillingCandidates(t *testing.T
 			PromptProfileID:  target.TargetPromptProfileBaselineID,
 			PlantPrimitiveID: "primitive-a",
 		},
-	}, 2)
+	}, nil, 2)
 	if len(frontier) != 2 {
 		t.Fatalf("expected 2 frontier candidates, got %#v", frontier)
 	}
@@ -63,5 +63,25 @@ func TestSummarizeTargetCoverageFrontierPrefersGapFillingCandidates(t *testing.T
 		!target.ContainsString(frontier[0].CoveredGaps, "seed_id=seed-z") ||
 		!target.ContainsString(frontier[0].CoveredGaps, "mutation_id=mutation-z") {
 		t.Fatalf("expected frontier candidate to explain covered gaps: %#v", frontier[0])
+	}
+}
+
+func TestSummarizeTargetCoverageFrontierHonorsExcludedCandidates(t *testing.T) {
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates: []TargetScheduleCandidate{
+			testTargetScenarioCandidate("task-a", "seed-a", "primitive-a"),
+			testTargetScenarioCandidate("task-b", "seed-b", "primitive-b"),
+		},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	frontier := summarizeTargetCoverageFrontier(matrix, nil, []string{matrix.Candidates[0].CandidateID}, 5)
+	if len(frontier) != 1 {
+		t.Fatalf("expected only one frontier candidate after exclusion, got %#v", frontier)
+	}
+	if frontier[0].CandidateID != matrix.Candidates[1].CandidateID {
+		t.Fatalf("expected excluded candidate to disappear from frontier, got %#v", frontier)
 	}
 }

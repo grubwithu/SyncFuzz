@@ -32,7 +32,12 @@ type TargetFrontierCandidate struct {
 	CoveredGaps          []string                        `json:"covered_gaps,omitempty"`
 }
 
-func summarizeTargetCoverageFrontier(matrix *TargetScheduleMatrix, results []TargetSuiteRunResult, limit int) []TargetFrontierCandidate {
+func summarizeTargetCoverageFrontier(
+	matrix *TargetScheduleMatrix,
+	results []TargetSuiteRunResult,
+	excludeCandidateIDs []string,
+	limit int,
+) []TargetFrontierCandidate {
 	if matrix == nil || len(matrix.Candidates) == 0 {
 		return nil
 	}
@@ -45,6 +50,20 @@ func summarizeTargetCoverageFrontier(matrix *TargetScheduleMatrix, results []Tar
 	executedCandidates := make([]TargetScheduleCandidate, 0, len(results))
 	for _, candidate := range matrix.Candidates {
 		candidateByID[candidate.CandidateID] = candidate
+	}
+	for _, candidateID := range excludeCandidateIDs {
+		if candidateID == "" {
+			continue
+		}
+		if _, ok := executedIDs[candidateID]; ok {
+			continue
+		}
+		candidate, ok := candidateByID[candidateID]
+		if !ok {
+			continue
+		}
+		executedIDs[candidateID] = struct{}{}
+		executedCandidates = append(executedCandidates, candidate)
 	}
 	for _, result := range results {
 		if result.CandidateID == "" {

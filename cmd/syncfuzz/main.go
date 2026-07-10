@@ -999,11 +999,23 @@ func targetCampaign(args []string) {
 		fmt.Printf("catalog_exhausted: true\n")
 	}
 	for _, pivot := range result.PivotHistory {
-		fmt.Printf("pivot_round_%d: dimension=%s values=%s\n",
+		fmt.Printf("pivot_round_%d: dimension=%s values=%s",
 			pivot.AfterRound,
 			pivot.Dimension,
 			strings.Join(pivot.Values, ","),
 		)
+		if pivot.FrontierCandidate != "" {
+			fmt.Printf(" frontier_candidate=%s gap_score=%d novelty_score=%d mode=%s",
+				pivot.FrontierCandidate,
+				pivot.FrontierGapScore,
+				pivot.FrontierNovelty,
+				pivot.FrontierSelection,
+			)
+		}
+		if pivot.NewCandidateCount > 0 {
+			fmt.Printf(" new_candidates=%d", pivot.NewCandidateCount)
+		}
+		fmt.Println()
 	}
 	for _, recommendation := range result.PivotRecommendations {
 		fmt.Printf("pivot[%s]: %s", recommendation.Dimension, strings.Join(recommendation.Values, ","))

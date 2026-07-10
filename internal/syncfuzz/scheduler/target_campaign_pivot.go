@@ -12,6 +12,15 @@ type TargetCampaignPivotRecommendation struct {
 	Reason    string   `json:"reason,omitempty"`
 }
 
+type targetCampaignPivotOption struct {
+	NextOpts          TargetCampaignOptions
+	NextUniverse      *TargetScheduleMatrix
+	Event             *TargetCampaignPivotEvent
+	TopFrontier       *TargetFrontierCandidate
+	NewCandidateCount int
+	ValueRank         int
+}
+
 func summarizeTargetCampaignPivotRecommendations(universe *TargetScheduleMatrix) ([]TargetCampaignPivotRecommendation, bool) {
 	if universe == nil {
 		return nil, false
@@ -132,6 +141,143 @@ func targetPivotReason(dimension string) string {
 		return "probe with different witness and oracle shapes"
 	default:
 		return "expand the current campaign universe"
+	}
+}
+
+func targetCampaignBestPivotOption(
+	opts TargetCampaignOptions,
+	currentUniverse *TargetScheduleMatrix,
+	previousResults []TargetSuiteRunResult,
+	recommendation TargetCampaignPivotRecommendation,
+	afterRound int,
+) (TargetCampaignOptions, *TargetScheduleMatrix, *TargetCampaignPivotEvent, bool, error) {
+	options := make([]targetCampaignPivotOption, 0, len(recommendation.Values))
+	for _, value := range recommendation.Values {
+		nextOpts, ok := targetCampaignPivotExpandValue(opts, recommendation.Dimension, value)
+		if !ok {
+			continue
+		}
+		nextUniverse, err := buildTargetCampaignUniverse(nextOpts)
+		if err != nil {
+			return TargetCampaignOptions{}, nil, nil, false, err
+		}
+		if !targetScheduleUniverseExpanded(currentUniverse, nextUniverse) {
+			continue
+		}
+		frontier := summarizeTargetCoverageFrontier(nextUniverse, previousResults, nil, 1)
+		option := targetCampaignPivotOption{
+			NextOpts:          nextOpts,
+			NextUniverse:      nextUniverse,
+			NewCandidateCount: targetCampaignNewCandidateCount(currentUniverse, nextUniverse),
+			ValueRank:         targetCampaignPivotValueRank(recommendation.Dimension, value),
+			Event: &TargetCampaignPivotEvent{
+				AfterRound:     afterRound,
+				Dimension:      recommendation.Dimension,
+				Values:         []string{value},
+				Tasks:          append([]string{}, nextUniverse.Tasks...),
+				SeedIDs:        append([]string{}, nextUniverse.SeedIDs...),
+				PromptProfiles: append([]string{}, nextUniverse.PromptProfiles...),
+				Reason:         recommendation.Reason,
+			},
+		}
+		if len(frontier) > 0 {
+			frontierTop := frontier[0]
+			option.TopFrontier = &frontierTop
+			option.Event.FrontierCandidate = frontierTop.CandidateID
+			option.Event.FrontierGapScore = frontierTop.GapScore
+			option.Event.FrontierNovelty = frontierTop.NoveltyScore
+			option.Event.FrontierSelection = frontierTop.SelectionMode
+		}
+		option.Event.NewCandidateCount = option.NewCandidateCount
+		options = append(options, option)
+	}
+	if len(options) == 0 {
+		return TargetCampaignOptions{}, nil, nil, false, nil
+	}
+	sort.Slice(options, func(i, j int) bool {
+		return targetCampaignPivotOptionLess(options[i], options[j])
+	})
+	best := options[0]
+	return best.NextOpts, best.NextUniverse, best.Event, true, nil
+}
+
+func targetCampaignPivotExpandValue(opts TargetCampaignOptions, dimension string, value string) (TargetCampaignOptions, bool) {
+	if value == "" {
+		return TargetCampaignOptions{}, false
+	}
+	nextOpts := opts
+	switch dimension {
+	case "seed_id":
+		nextOpts.SeedIDs = mergeStringLists(opts.SeedIDs, []string{value})
+	case "prompt_profile_id":
+		nextOpts.PromptProfileID = ""
+		nextOpts.PromptProfileIDs = mergeStringLists(target.TargetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs), []string{value})
+	case "state_surface", "plant_primitive_id", "activation_kind_id", "oracle_kind_id":
+		nextOpts.Tasks = mergeStringLists(opts.Tasks, targetTaskIDsForDimensionValues(dimension, []string{value}))
+	default:
+		return TargetCampaignOptions{}, false
+	}
+	return nextOpts, true
+}
+
+func targetCampaignPivotOptionLess(left targetCampaignPivotOption, right targetCampaignPivotOption) bool {
+	leftGapScore, leftNovelty := targetCampaignPivotFrontierScore(left.TopFrontier)
+	rightGapScore, rightNovelty := targetCampaignPivotFrontierScore(right.TopFrontier)
+	if leftGapScore != rightGapScore {
+		return leftGapScore > rightGapScore
+	}
+	if leftNovelty != rightNovelty {
+		return leftNovelty > rightNovelty
+	}
+	if left.NewCandidateCount != right.NewCandidateCount {
+		return left.NewCandidateCount < right.NewCandidateCount
+	}
+	if left.ValueRank != right.ValueRank {
+		return left.ValueRank < right.ValueRank
+	}
+	if left.Event.Dimension != right.Event.Dimension {
+		return left.Event.Dimension < right.Event.Dimension
+	}
+	if len(left.Event.Values) == 0 || len(right.Event.Values) == 0 {
+		return len(left.Event.Values) < len(right.Event.Values)
+	}
+	return left.Event.Values[0] < right.Event.Values[0]
+}
+
+func targetCampaignPivotFrontierScore(frontier *TargetFrontierCandidate) (int, int) {
+	if frontier == nil {
+		return 0, 0
+	}
+	return frontier.GapScore, frontier.NoveltyScore
+}
+
+func targetCampaignNewCandidateCount(current *TargetScheduleMatrix, next *TargetScheduleMatrix) int {
+	if next == nil {
+		return 0
+	}
+	if current == nil {
+		return len(next.Candidates)
+	}
+	seen := make(map[string]struct{}, len(current.Candidates))
+	for _, candidate := range current.Candidates {
+		seen[candidate.CandidateID] = struct{}{}
+	}
+	count := 0
+	for _, candidate := range next.Candidates {
+		if _, ok := seen[candidate.CandidateID]; ok {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func targetCampaignPivotValueRank(dimension string, value string) int {
+	switch dimension {
+	case "prompt_profile_id":
+		return targetPromptProfileRank(value)
+	default:
+		return 0
 	}
 }
 

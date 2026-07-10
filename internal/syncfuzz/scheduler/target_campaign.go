@@ -67,13 +67,18 @@ type TargetCampaignRoundResult struct {
 }
 
 type TargetCampaignPivotEvent struct {
-	AfterRound     int      `json:"after_round"`
-	Dimension      string   `json:"dimension"`
-	Values         []string `json:"values,omitempty"`
-	Tasks          []string `json:"tasks,omitempty"`
-	SeedIDs        []string `json:"seed_ids,omitempty"`
-	PromptProfiles []string `json:"prompt_profiles,omitempty"`
-	Reason         string   `json:"reason,omitempty"`
+	AfterRound        int      `json:"after_round"`
+	Dimension         string   `json:"dimension"`
+	Values            []string `json:"values,omitempty"`
+	Tasks             []string `json:"tasks,omitempty"`
+	SeedIDs           []string `json:"seed_ids,omitempty"`
+	PromptProfiles    []string `json:"prompt_profiles,omitempty"`
+	Reason            string   `json:"reason,omitempty"`
+	NewCandidateCount int      `json:"new_candidate_count,omitempty"`
+	FrontierCandidate string   `json:"frontier_candidate,omitempty"`
+	FrontierGapScore  int      `json:"frontier_gap_score,omitempty"`
+	FrontierNovelty   int      `json:"frontier_novelty_score,omitempty"`
+	FrontierSelection string   `json:"frontier_selection_mode,omitempty"`
 }
 
 type TargetCampaignResult struct {
@@ -251,6 +256,29 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 			}
 			seenCandidates[item.CandidateID] = struct{}{}
 		}
+		if suite.TotalCandidates == 0 {
+			if opts.AutoPivot {
+				nextOpts, nextUniverse, pivotEvent, ok, err := applyTargetCampaignPivot(runningOpts, universe, allResults, round)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					runningOpts = nextOpts
+					universe = nextUniverse
+					result.Tasks = append([]string{}, nextUniverse.Tasks...)
+					result.TaskGroups = append([]string{}, nextUniverse.TaskGroups...)
+					result.SeedIDs = append([]string{}, nextUniverse.SeedIDs...)
+					result.PromptProfiles = append([]string{}, nextUniverse.PromptProfiles...)
+					result.PivotHistory = append(result.PivotHistory, *pivotEvent)
+					stagnantRounds = 0
+					feedbackFrom = ""
+					continue
+				}
+			}
+			result.StoppedEarly = true
+			result.StopReason = targetCampaignExhaustedStopReason()
+			break
+		}
 		feedbackFrom = suite.MatrixResult
 		if opts.MaxStagnantRounds > 0 && round < opts.Rounds {
 			if roundResult.CoverageGainStats.WeightedScore <= opts.MinCoverageGainScore {
@@ -260,7 +288,7 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 			}
 			if stagnantRounds >= opts.MaxStagnantRounds {
 				if opts.AutoPivot {
-					nextOpts, nextUniverse, pivotEvent, ok, err := applyTargetCampaignPivot(runningOpts, universe, round)
+					nextOpts, nextUniverse, pivotEvent, ok, err := applyTargetCampaignPivot(runningOpts, universe, allResults, round)
 					if err != nil {
 						return nil, err
 					}
@@ -273,6 +301,7 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 						result.PromptProfiles = append([]string{}, nextUniverse.PromptProfiles...)
 						result.PivotHistory = append(result.PivotHistory, *pivotEvent)
 						stagnantRounds = 0
+						feedbackFrom = ""
 						continue
 					}
 				}
@@ -288,7 +317,7 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 	result.OutcomeSummaries = targetSuiteOutcomeStats(outcomeSummary)
 	result.ActivationSummaries = targetSuiteActivationStats(activationSummary)
 	result.DimensionCoverage = summarizeTargetDimensionCoverage(universe.Candidates, allResults)
-	result.FrontierCandidates = summarizeTargetCoverageFrontier(universe, allResults, targetFrontierDefaultLimit)
+	result.FrontierCandidates = summarizeTargetCoverageFrontier(universe, allResults, nil, targetFrontierDefaultLimit)
 	result.PivotRecommendations, result.CatalogExhausted = summarizeTargetCampaignPivotRecommendations(universe)
 	result.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := core.WriteJSON(filepath.Join(campaignDir, targetCampaignResultArtifact), result); err != nil {
@@ -299,6 +328,10 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 
 func targetCampaignStopReason(stagnantRounds int, threshold int, score int) string {
 	return fmt.Sprintf("coverage gain score %d stayed at or below threshold %d for %d consecutive rounds", score, threshold, stagnantRounds)
+}
+
+func targetCampaignExhaustedStopReason() string {
+	return "current campaign universe has no unexplored candidates remaining"
 }
 
 func buildTargetCampaignUniverse(opts TargetCampaignOptions) (*TargetScheduleMatrix, error) {
@@ -314,6 +347,7 @@ func buildTargetCampaignUniverse(opts TargetCampaignOptions) (*TargetScheduleMat
 func applyTargetCampaignPivot(
 	opts TargetCampaignOptions,
 	currentUniverse *TargetScheduleMatrix,
+	previousResults []TargetSuiteRunResult,
 	afterRound int,
 ) (TargetCampaignOptions, *TargetScheduleMatrix, *TargetCampaignPivotEvent, bool, error) {
 	recommendations, _ := summarizeTargetCampaignPivotRecommendations(currentUniverse)
@@ -322,42 +356,13 @@ func applyTargetCampaignPivot(
 		if !ok {
 			continue
 		}
-		nextOpts := opts
-		switch recommendation.Dimension {
-		case "seed_id":
-			nextOpts.SeedIDs = mergeStringLists(opts.SeedIDs, recommendation.Values)
-		case "prompt_profile_id":
-			nextOpts.PromptProfileID = ""
-			nextOpts.PromptProfileIDs = mergeStringLists(target.TargetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs), recommendation.Values)
-		case "state_surface":
-			nextOpts.Tasks = mergeStringLists(opts.Tasks, targetTaskIDsForDimensionValues(recommendation.Dimension, recommendation.Values))
-		case "plant_primitive_id":
-			nextOpts.Tasks = mergeStringLists(opts.Tasks, targetTaskIDsForDimensionValues(recommendation.Dimension, recommendation.Values))
-		case "activation_kind_id":
-			nextOpts.Tasks = mergeStringLists(opts.Tasks, targetTaskIDsForDimensionValues(recommendation.Dimension, recommendation.Values))
-		case "oracle_kind_id":
-			nextOpts.Tasks = mergeStringLists(opts.Tasks, targetTaskIDsForDimensionValues(recommendation.Dimension, recommendation.Values))
-		default:
-			continue
-		}
-
-		nextUniverse, err := buildTargetCampaignUniverse(nextOpts)
+		nextOpts, nextUniverse, event, ok, err := targetCampaignBestPivotOption(opts, currentUniverse, previousResults, recommendation, afterRound)
 		if err != nil {
 			return TargetCampaignOptions{}, nil, nil, false, fmt.Errorf("apply target campaign pivot %s: %w", recommendation.Dimension, err)
 		}
-		if !targetScheduleUniverseExpanded(currentUniverse, nextUniverse) {
-			continue
+		if ok {
+			return nextOpts, nextUniverse, event, true, nil
 		}
-		event := &TargetCampaignPivotEvent{
-			AfterRound:     afterRound,
-			Dimension:      recommendation.Dimension,
-			Values:         append([]string{}, recommendation.Values...),
-			Tasks:          append([]string{}, nextUniverse.Tasks...),
-			SeedIDs:        append([]string{}, nextUniverse.SeedIDs...),
-			PromptProfiles: append([]string{}, nextUniverse.PromptProfiles...),
-			Reason:         recommendation.Reason,
-		}
-		return nextOpts, nextUniverse, event, true, nil
 	}
 	return TargetCampaignOptions{}, nil, nil, false, nil
 }

@@ -53,10 +53,7 @@ func selectTargetMatrixCandidates(matrix *TargetScheduleMatrix, opts TargetFeedb
 		dimensionCoverage = append([]TargetDimensionCoverageSummary{}, feedback.DimensionCoverage...)
 	}
 	if len(opts.ExcludeCandidateIDs) > 0 {
-		filtered := filterExcludedTargetCandidates(candidates, opts.ExcludeCandidateIDs)
-		if len(filtered) > 0 {
-			candidates = filtered
-		}
+		candidates = filterExcludedTargetCandidates(candidates, opts.ExcludeCandidateIDs)
 	}
 	if len(summaryByCandidate) > 0 {
 		candidates = orderTargetFeedbackCandidates(candidates, summaryByCandidate, dimensionCoverage)

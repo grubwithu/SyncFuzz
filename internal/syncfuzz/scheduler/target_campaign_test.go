@@ -104,7 +104,6 @@ func TestRunTargetCampaignStopsEarlyWhenCoverageGainStagnates(t *testing.T) {
 	tmp := t.TempDir()
 	command := `case "$SYNCFUZZ_TASK_ID" in
 orphan-process) printf ok > late-effect ;;
-persistent-shell-poisoning) mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && printf '%s\n' "$PWD/workspace-bin/git" > shell-poison-check.txt ;;
 *) exit 9 ;;
 esac`
 
@@ -112,12 +111,13 @@ esac`
 		OutDir:               tmp,
 		CorpusDir:            filepath.Join(tmp, "corpus"),
 		TargetID:             "campaign-stop-smoke",
-		Tasks:                []string{target.DefaultTargetTaskID, target.PersistentShellTargetTaskID},
+		Tasks:                []string{target.DefaultTargetTaskID},
+		PromptProfileIDs:     []string{target.TargetPromptProfileBaselineID, target.TargetPromptProfileWorkflowID, target.TargetPromptProfileAuditID},
 		Command:              command,
 		ObserveDelay:         10 * time.Millisecond,
 		Rounds:               4,
 		CandidateLimit:       1,
-		MinCoverageGainScore: 0,
+		MinCoverageGainScore: 9999,
 		MaxStagnantRounds:    1,
 	})
 	if err != nil {
@@ -136,11 +136,50 @@ esac`
 	if len(result.PivotRecommendations) == 0 {
 		t.Fatalf("expected pivot recommendations when target campaign stops early: %#v", result)
 	}
-	if result.TotalSuites != 3 || len(result.RoundResults) != 3 {
-		t.Fatalf("expected campaign to stop after first stagnant repeat round: %#v", result.RoundResults)
+	if result.TotalSuites != 1 || len(result.RoundResults) != 1 {
+		t.Fatalf("expected campaign to stop after first low-gain round: %#v", result.RoundResults)
 	}
-	if result.RoundResults[2].CoverageGainStats.WeightedScore != 0 {
-		t.Fatalf("expected stagnant round to have zero coverage gain score: %#v", result.RoundResults[2].CoverageGainStats)
+	if result.RoundResults[0].CoverageGainStats.WeightedScore <= 0 {
+		t.Fatalf("expected the first round to execute, but still count as stagnant under the raised threshold: %#v", result.RoundResults[0].CoverageGainStats)
+	}
+}
+
+func TestRunTargetCampaignStopsWhenUniverseIsExhaustedWithoutRepeatingCandidates(t *testing.T) {
+	tmp := t.TempDir()
+	command := `case "$SYNCFUZZ_TASK_ID" in
+orphan-process) printf ok > late-effect ;;
+persistent-shell-poisoning) mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && printf '%s\n' "$PWD/workspace-bin/git" > shell-poison-check.txt ;;
+*) exit 9 ;;
+esac`
+
+	result, err := RunTargetCampaign(context.Background(), TargetCampaignOptions{
+		OutDir:         tmp,
+		CorpusDir:      filepath.Join(tmp, "corpus"),
+		TargetID:       "campaign-exhausted-smoke",
+		Tasks:          []string{target.DefaultTargetTaskID, target.PersistentShellTargetTaskID},
+		Command:        command,
+		ObserveDelay:   10 * time.Millisecond,
+		Rounds:         4,
+		CandidateLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("RunTargetCampaign failed: %v", err)
+	}
+
+	if !result.StoppedEarly {
+		t.Fatalf("expected campaign to stop once the current universe is exhausted: %#v", result)
+	}
+	if result.StopReason != targetCampaignExhaustedStopReason() {
+		t.Fatalf("unexpected exhaustion stop reason: %#v", result.StopReason)
+	}
+	if result.TotalSuites != 3 || len(result.RoundResults) != 3 {
+		t.Fatalf("expected two executed rounds plus one empty exhaustion round: %#v", result.RoundResults)
+	}
+	if result.UniqueCandidates != 2 || result.RepeatedCandidates != 0 {
+		t.Fatalf("expected no repeated candidates before exhaustion stop: %#v", result)
+	}
+	if result.RoundResults[2].TotalCandidates != 0 || result.RoundResults[2].TotalRuns != 0 {
+		t.Fatalf("expected exhaustion round to run no candidates: %#v", result.RoundResults[2])
 	}
 }
 
@@ -159,7 +198,7 @@ esac`
 		PromptProfileID:      target.TargetPromptProfileBaselineID,
 		Command:              command,
 		ObserveDelay:         10 * time.Millisecond,
-		Rounds:               4,
+		Rounds:               3,
 		CandidateLimit:       1,
 		MinCoverageGainScore: 0,
 		MaxStagnantRounds:    1,
@@ -179,16 +218,22 @@ esac`
 	if pivot.Dimension != "prompt_profile_id" {
 		t.Fatalf("expected prompt-profile pivot, got %#v", pivot)
 	}
-	if !target.ContainsString(pivot.Values, target.TargetPromptProfileWorkflowID) || !target.ContainsString(pivot.Values, target.TargetPromptProfileAuditID) {
-		t.Fatalf("expected workflow/audit pivot values: %#v", pivot)
+	if len(pivot.Values) != 1 || pivot.Values[0] != target.TargetPromptProfileWorkflowID {
+		t.Fatalf("expected single-step workflow pivot value: %#v", pivot)
 	}
-	if len(result.PromptProfiles) != 3 {
+	if pivot.NewCandidateCount <= 0 || pivot.FrontierCandidate == "" {
+		t.Fatalf("expected pivot event to carry frontier rationale: %#v", pivot)
+	}
+	if len(result.PromptProfiles) != 2 {
 		t.Fatalf("expected prompt profiles to expand after pivot: %#v", result.PromptProfiles)
 	}
-	if result.TotalSuites != 4 || len(result.RoundResults) != 4 {
+	if result.TotalSuites != 3 || len(result.RoundResults) != 3 {
 		t.Fatalf("expected campaign to consume remaining rounds after pivot: %#v", result.RoundResults)
 	}
-	if result.RoundResults[2].CoverageGainStats.WeightedScore <= 0 || result.RoundResults[3].CoverageGainStats.WeightedScore <= 0 {
-		t.Fatalf("expected post-pivot rounds to regain positive coverage: round3=%#v round4=%#v", result.RoundResults[2].CoverageGainStats, result.RoundResults[3].CoverageGainStats)
+	if result.RoundResults[2].FeedbackFrom != "" {
+		t.Fatalf("expected post-pivot round to start from a fresh frontier, got feedback_from=%q", result.RoundResults[2].FeedbackFrom)
+	}
+	if result.RoundResults[2].CoverageGainStats.WeightedScore <= 0 {
+		t.Fatalf("expected post-pivot round to regain positive coverage: round3=%#v", result.RoundResults[2].CoverageGainStats)
 	}
 }
