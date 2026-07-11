@@ -36,6 +36,7 @@ type ReplayResult struct {
 	TargetID             string                                    `json:"target_id,omitempty"`
 	TaskID               string                                    `json:"task_id,omitempty"`
 	PromptProfileID      string                                    `json:"prompt_profile_id,omitempty"`
+	PromptVariantID      string                                    `json:"prompt_variant_id,omitempty"`
 	Environment          string                                    `json:"environment"`
 	ContainerImage       string                                    `json:"container_image,omitempty"`
 	FaultPlanID          string                                    `json:"fault_plan_id,omitempty"`
@@ -161,6 +162,7 @@ func replayTargetEntry(ctx context.Context, entry CorpusEntry, opts ReplayOption
 		TaskID:           task.TaskID,
 		Objective:        task.Objective,
 		PromptProfileID:  task.PromptProfileID,
+		PromptVariantID:  task.PromptVariantID,
 		Prompt:           task.Prompt,
 		Command:          task.Command,
 		OutDir:           replayDir,
@@ -187,6 +189,7 @@ func replayTargetEntry(ctx context.Context, entry CorpusEntry, opts ReplayOption
 		TargetID:             runResult.TargetID,
 		TaskID:               runResult.TaskID,
 		PromptProfileID:      runResult.PromptProfileID,
+		PromptVariantID:      runResult.PromptVariantID,
 		Environment:          runResult.Environment,
 		ContainerImage:       runResult.ContainerImage,
 		SourceSuiteID:        entry.SuiteID,

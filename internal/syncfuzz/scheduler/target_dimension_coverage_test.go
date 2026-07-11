@@ -14,6 +14,7 @@ func TestSummarizeTargetDimensionCoverageTracksMissingValuesAndProgress(t *testi
 			SeedID:               "seed-a",
 			TaskID:               "task-a",
 			PromptProfileID:      target.TargetPromptProfileBaselineID,
+			PromptVariantID:      target.TargetPromptVariantBaseID,
 			StateSurface:         "workspace.file",
 			LifecycleEdge:        "checkpoint->fork",
 			ContractRuleID:       "rule-a",
@@ -31,6 +32,7 @@ func TestSummarizeTargetDimensionCoverageTracksMissingValuesAndProgress(t *testi
 			SeedID:               "seed-b",
 			TaskID:               "task-b",
 			PromptProfileID:      target.TargetPromptProfileWorkflowID,
+			PromptVariantID:      target.TargetPromptVariantMutationFocusID,
 			StateSurface:         "workspace.socket",
 			LifecycleEdge:        "checkpoint->replay",
 			ContractRuleID:       "rule-b",
@@ -64,12 +66,28 @@ func TestSummarizeTargetDimensionCoverageTracksMissingValuesAndProgress(t *testi
 		t.Fatalf("unexpected task coverage gaps: %#v", taskCoverage.MissingValues)
 	}
 
-	mutationCoverage := findTargetDimensionCoverage(t, summaries, "mutation_id")
+	mutationCoverage := findTargetDimensionCoverage(t, summaries, "mutation_focus_id")
 	if mutationCoverage.TotalValues != 2 || mutationCoverage.ExecutedValues != 1 {
 		t.Fatalf("unexpected mutation coverage summary: %#v", mutationCoverage)
 	}
 	if len(mutationCoverage.MissingValues) != 1 || mutationCoverage.MissingValues[0] != "mutation-b" {
 		t.Fatalf("unexpected mutation coverage gaps: %#v", mutationCoverage.MissingValues)
+	}
+
+	transitionCoverage := findTargetDimensionCoverage(t, summaries, "plant_to_activation")
+	if transitionCoverage.TotalValues != 2 || transitionCoverage.ExecutedValues != 1 {
+		t.Fatalf("unexpected transition coverage summary: %#v", transitionCoverage)
+	}
+	if len(transitionCoverage.MissingValues) != 1 || transitionCoverage.MissingValues[0] != "primitive-b->activation-b" {
+		t.Fatalf("unexpected transition coverage gaps: %#v", transitionCoverage.MissingValues)
+	}
+
+	promptVariantCoverage := findTargetDimensionCoverage(t, summaries, "prompt_variant_id")
+	if promptVariantCoverage.TotalValues != 2 || promptVariantCoverage.ExecutedValues != 1 {
+		t.Fatalf("unexpected prompt variant coverage summary: %#v", promptVariantCoverage)
+	}
+	if len(promptVariantCoverage.MissingValues) != 1 || promptVariantCoverage.MissingValues[0] != target.TargetPromptVariantMutationFocusID {
+		t.Fatalf("unexpected prompt variant coverage gaps: %#v", promptVariantCoverage.MissingValues)
 	}
 }
 
@@ -81,6 +99,7 @@ func TestSummarizeTargetDimensionCoverageGainTracksNewValuesAndTransitions(t *te
 			SeedID:               "seed-a",
 			TaskID:               "task-a",
 			PromptProfileID:      target.TargetPromptProfileBaselineID,
+			PromptVariantID:      target.TargetPromptVariantBaseID,
 			StateSurface:         "workspace.file",
 			LifecycleEdge:        "checkpoint->fork",
 			ContractRuleID:       "rule-a",
@@ -98,6 +117,7 @@ func TestSummarizeTargetDimensionCoverageGainTracksNewValuesAndTransitions(t *te
 			SeedID:               "seed-b",
 			TaskID:               "task-b",
 			PromptProfileID:      target.TargetPromptProfileWorkflowID,
+			PromptVariantID:      target.TargetPromptVariantMutationFocusID,
 			StateSurface:         "workspace.socket",
 			LifecycleEdge:        "checkpoint->replay",
 			ContractRuleID:       "rule-b",
@@ -140,6 +160,14 @@ func TestSummarizeTargetDimensionCoverageGainTracksNewValuesAndTransitions(t *te
 	}
 	if len(taskGain.NewActivationReachedValues) != 1 || taskGain.NewActivationReachedValues[0] != "task-a" {
 		t.Fatalf("unexpected task activation gain: %#v", taskGain)
+	}
+
+	transitionGain := findTargetDimensionCoverageGain(t, gains, "activation_to_oracle")
+	if len(transitionGain.NewExecutedValues) != 1 || transitionGain.NewExecutedValues[0] != "activation-b->oracle-b" {
+		t.Fatalf("unexpected transition execution gain: %#v", transitionGain)
+	}
+	if len(transitionGain.NewConfirmedValues) != 1 || transitionGain.NewConfirmedValues[0] != "activation-a->oracle-a" {
+		t.Fatalf("unexpected transition confirmation gain: %#v", transitionGain)
 	}
 }
 

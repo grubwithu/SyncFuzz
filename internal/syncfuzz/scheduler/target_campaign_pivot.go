@@ -29,6 +29,7 @@ func summarizeTargetCampaignPivotRecommendations(universe *TargetScheduleMatrix)
 	current := map[string]map[string]struct{}{
 		"seed_id":            {},
 		"prompt_profile_id":  {},
+		"prompt_variant_id":  {},
 		"state_surface":      {},
 		"plant_primitive_id": {},
 		"activation_kind_id": {},
@@ -37,6 +38,7 @@ func summarizeTargetCampaignPivotRecommendations(universe *TargetScheduleMatrix)
 	for _, candidate := range universe.Candidates {
 		targetAddPivotValue(current["seed_id"], candidate.SeedID)
 		targetAddPivotValue(current["prompt_profile_id"], candidate.PromptProfileID)
+		targetAddPivotValue(current["prompt_variant_id"], target.NormalizeTargetPromptVariantID(candidate.PromptVariantID))
 		targetAddPivotValue(current["state_surface"], candidate.StateSurface)
 		targetAddPivotValue(current["plant_primitive_id"], candidate.PlantPrimitiveID)
 		targetAddPivotValue(current["activation_kind_id"], candidate.ActivationKindID)
@@ -46,6 +48,7 @@ func summarizeTargetCampaignPivotRecommendations(universe *TargetScheduleMatrix)
 	global := map[string][]string{
 		"seed_id":            targetPivotSeedValues(),
 		"prompt_profile_id":  targetPivotPromptProfileValues(),
+		"prompt_variant_id":  targetPivotPromptVariantValues(),
 		"state_surface":      targetPivotTaskDimensionValues(func(task target.TargetTaskInfo) string { return task.StateSurface }),
 		"plant_primitive_id": targetPivotTaskDimensionValues(func(task target.TargetTaskInfo) string { return task.PlantPrimitiveID }),
 		"activation_kind_id": targetPivotTaskDimensionValues(func(task target.TargetTaskInfo) string { return task.ActivationKindID }),
@@ -55,6 +58,7 @@ func summarizeTargetCampaignPivotRecommendations(universe *TargetScheduleMatrix)
 	order := []string{
 		"seed_id",
 		"prompt_profile_id",
+		"prompt_variant_id",
 		"state_surface",
 		"plant_primitive_id",
 		"activation_kind_id",
@@ -114,6 +118,16 @@ func targetPivotTaskDimensionValues(selector func(target.TargetTaskInfo) string)
 	return values
 }
 
+func targetPivotPromptVariantValues() []string {
+	variants := target.TargetPromptVariants()
+	values := make([]string, 0, len(variants))
+	for _, variant := range variants {
+		targetAppendPivotValue(&values, variant.VariantID)
+	}
+	sort.Strings(values)
+	return values
+}
+
 func targetMissingCatalogValues(global []string, current map[string]struct{}) []string {
 	out := make([]string, 0, len(global))
 	for _, value := range global {
@@ -131,6 +145,8 @@ func targetPivotReason(dimension string) string {
 		return "expand into additional built-in scenario seed families"
 	case "prompt_profile_id":
 		return "rotate into additional deterministic prompt profiles"
+	case "prompt_variant_id":
+		return "rotate into additional deterministic prompt variants derived from scenario structure"
 	case "state_surface":
 		return "shift to a different OS or workspace state surface"
 	case "plant_primitive_id":
@@ -212,6 +228,8 @@ func targetCampaignPivotExpandValue(opts TargetCampaignOptions, dimension string
 	case "prompt_profile_id":
 		nextOpts.PromptProfileID = ""
 		nextOpts.PromptProfileIDs = mergeStringLists(target.TargetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs), []string{value})
+	case "prompt_variant_id":
+		return TargetCampaignOptions{}, false
 	case "state_surface", "plant_primitive_id", "activation_kind_id", "oracle_kind_id":
 		nextOpts.Tasks = mergeStringLists(opts.Tasks, targetTaskIDsForDimensionValues(dimension, []string{value}))
 	default:
@@ -276,8 +294,23 @@ func targetCampaignPivotValueRank(dimension string, value string) int {
 	switch dimension {
 	case "prompt_profile_id":
 		return targetPromptProfileRank(value)
+	case "prompt_variant_id":
+		return targetPromptVariantRank(value)
 	default:
 		return 0
+	}
+}
+
+func targetPromptVariantRank(variantID string) int {
+	switch target.NormalizeTargetPromptVariantID(variantID) {
+	case target.TargetPromptVariantBaseID:
+		return 0
+	case target.TargetPromptVariantLifecycleBoundaryID:
+		return 1
+	case target.TargetPromptVariantMutationFocusID:
+		return 2
+	default:
+		return 3
 	}
 }
 

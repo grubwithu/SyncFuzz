@@ -84,6 +84,7 @@ Usage:
   syncfuzz target scenarios
   syncfuzz target groups
   syncfuzz target prompt-profiles
+  syncfuzz target prompt-variants
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles baseline,workflow,audit] [--matrix] [--feedback-from target-matrix-result.json] [--candidate-limit 3] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
@@ -466,7 +467,7 @@ func campaign(args []string) {
 
 func runTarget(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, scenarios, groups, prompt-profiles, matrix, run, suite, or campaign")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, scenarios, groups, prompt-profiles, prompt-variants, matrix, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -482,6 +483,8 @@ func runTarget(args []string) {
 		targetGroups()
 	case "prompt-profiles":
 		targetPromptProfiles()
+	case "prompt-variants":
+		targetPromptVariants()
 	case "matrix":
 		targetMatrix(args[1:])
 	case "run":
@@ -575,6 +578,13 @@ func targetPromptProfiles() {
 	}
 }
 
+func targetPromptVariants() {
+	fmt.Printf("%-18s %s\n", "variant", "description")
+	for _, variant := range target.TargetPromptVariants() {
+		fmt.Printf("%-18s %s\n", variant.VariantID, variant.Description)
+	}
+}
+
 func targetMatrix(args []string) {
 	fs := flag.NewFlagSet("target matrix", flag.ExitOnError)
 	targetID := fs.String("target", "command", "human-readable target runtime id")
@@ -620,14 +630,15 @@ func targetMatrix(args []string) {
 		fmt.Printf("prompt_profiles: %s\n", strings.Join(result.PromptProfiles, ","))
 	}
 	fmt.Printf("total_candidates: %d\n", result.TotalCandidates)
-	fmt.Printf("%-52s %-24s %-22s %-20s %-10s %-5s %s\n", "candidate_id", "seed", "primitive", "lifecycle_op", "prompt", "late", "description")
+	fmt.Printf("%-52s %-24s %-22s %-20s %-10s %-18s %-5s %s\n", "candidate_id", "seed", "primitive", "lifecycle_op", "prompt", "variant", "late", "description")
 	for _, candidate := range result.Candidates {
-		fmt.Printf("%-52s %-24s %-22s %-20s %-10s %-5t %s\n",
+		fmt.Printf("%-52s %-24s %-22s %-20s %-10s %-18s %-5t %s\n",
 			candidate.CandidateID,
 			candidate.SeedID,
 			candidate.PlantPrimitiveID,
 			candidate.LifecycleOperationID,
 			candidate.PromptProfileID,
+			target.NormalizeTargetPromptVariantID(candidate.PromptVariantID),
 			candidate.UsesLateObservation,
 			candidate.Description,
 		)
@@ -687,6 +698,9 @@ func targetRun(args []string) {
 	fmt.Printf("task: %s\n", result.TaskID)
 	if result.PromptProfileID != "" {
 		fmt.Printf("prompt_profile: %s\n", result.PromptProfileID)
+	}
+	if result.PromptVariantID != "" {
+		fmt.Printf("prompt_variant: %s\n", result.PromptVariantID)
 	}
 	fmt.Printf("environment: %s\n", result.Environment)
 	printContainerImage(result.ContainerImage)
@@ -1213,6 +1227,9 @@ func corpusShow(args []string) {
 		fmt.Printf("task: %s\n", entry.TaskID)
 		if entry.PromptProfileID != "" {
 			fmt.Printf("prompt_profile: %s\n", entry.PromptProfileID)
+		}
+		if entry.PromptVariantID != "" {
+			fmt.Printf("prompt_variant: %s\n", entry.PromptVariantID)
 		}
 		if entry.TargetOracleStatus != "" {
 			fmt.Printf("target_oracle_status: %s\n", entry.TargetOracleStatus)

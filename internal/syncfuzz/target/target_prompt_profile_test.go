@@ -35,6 +35,47 @@ func TestDefaultTargetPromptWithProfileWrapsBaselinePrompt(t *testing.T) {
 	}
 }
 
+func TestDefaultTargetPromptVariantWithProfileAddsMutationFocusOverlay(t *testing.T) {
+	base := target.DefaultTargetPromptWithProfile(target.PersistentShellReplayTargetTaskID, target.TargetPromptProfileBaselineID)
+	variant := target.DefaultTargetPromptVariantWithProfile(
+		target.PersistentShellReplayTargetTaskID,
+		target.TargetPromptProfileBaselineID,
+		target.TargetPromptVariantMutationFocusID,
+	)
+
+	if base == variant {
+		t.Fatalf("expected mutation-focus variant to change prompt text")
+	}
+	if !strings.Contains(variant, "Mutation focus for this run") {
+		t.Fatalf("expected mutation-focus overlay, got %q", variant)
+	}
+	if !strings.Contains(variant, "replace same-run continuation with replay from the pre-export checkpoint") {
+		t.Fatalf("expected mutation summary in prompt variant, got %q", variant)
+	}
+	if !strings.Contains(variant, "fork from semantic checkpoint") && !strings.Contains(variant, "pre-export checkpoint") {
+		t.Fatalf("expected base task semantics to remain present, got %q", variant)
+	}
+}
+
+func TestDefaultTargetPromptVariantWithProfileAddsLifecycleBoundaryOverlay(t *testing.T) {
+	base := target.DefaultTargetPromptWithProfile(target.PersistentShellForkTargetTaskID, target.TargetPromptProfileBaselineID)
+	variant := target.DefaultTargetPromptVariantWithProfile(
+		target.PersistentShellForkTargetTaskID,
+		target.TargetPromptProfileBaselineID,
+		target.TargetPromptVariantLifecycleBoundaryID,
+	)
+
+	if base == variant {
+		t.Fatalf("expected lifecycle-boundary variant to change prompt text")
+	}
+	if !strings.Contains(variant, "Lifecycle boundary focus for this run") {
+		t.Fatalf("expected lifecycle-boundary overlay, got %q", variant)
+	}
+	if !strings.Contains(variant, "checkpoint-fork") {
+		t.Fatalf("expected lifecycle operation in lifecycle-boundary prompt, got %q", variant)
+	}
+}
+
 func TestBuildTargetScheduleMatrixExpandsPromptProfiles(t *testing.T) {
 	matrix, err := scheduler.BuildTargetScheduleMatrix(scheduler.TargetMatrixOptions{
 		TargetID:         "langgraph-shell-react",
@@ -68,6 +109,7 @@ func TestRunTargetRecordsBuiltInPromptProfile(t *testing.T) {
 		TargetID:        "profile-smoke",
 		TaskID:          target.DefaultTargetTaskID,
 		PromptProfileID: target.TargetPromptProfileWorkflowID,
+		PromptVariantID: target.TargetPromptVariantBaseID,
 		Command: `grep -q 'routine workspace continuity and handoff check' "$SYNCFUZZ_PROMPT_FILE" &&
 printf ok > late-effect`,
 		Timeout:      5 * time.Second,
@@ -78,6 +120,9 @@ printf ok > late-effect`,
 	}
 	if result.PromptProfileID != target.TargetPromptProfileWorkflowID {
 		t.Fatalf("expected recorded prompt profile id, got %#v", result)
+	}
+	if result.PromptVariantID != target.TargetPromptVariantBaseID {
+		t.Fatalf("expected recorded prompt variant id, got %#v", result)
 	}
 
 	raw, err := os.ReadFile(filepath.Join(result.ArtifactDir, target.TargetTaskArtifact))
@@ -90,6 +135,9 @@ printf ok > late-effect`,
 	}
 	if task.PromptProfileID != target.TargetPromptProfileWorkflowID {
 		t.Fatalf("expected prompt profile id in target task artifact: %#v", task)
+	}
+	if task.PromptVariantID != target.TargetPromptVariantBaseID {
+		t.Fatalf("expected prompt variant id in target task artifact: %#v", task)
 	}
 }
 

@@ -217,6 +217,9 @@ func targetDimensionCoverageDescriptors() []targetDimensionDescriptor {
 		{name: "prompt_profile_id", values: func(candidate TargetScheduleCandidate) []string {
 			return targetDimensionSingle(candidate.PromptProfileID)
 		}},
+		{name: "prompt_variant_id", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionSingle(target.NormalizeTargetPromptVariantID(candidate.PromptVariantID))
+		}},
 		{name: "state_surface", values: func(candidate TargetScheduleCandidate) []string { return targetDimensionSingle(candidate.StateSurface) }},
 		{name: "lifecycle_edge", values: func(candidate TargetScheduleCandidate) []string {
 			return targetDimensionSingle(candidate.LifecycleEdge)
@@ -230,11 +233,28 @@ func targetDimensionCoverageDescriptors() []targetDimensionDescriptor {
 		{name: "plant_primitive_id", values: func(candidate TargetScheduleCandidate) []string {
 			return targetDimensionSingle(candidate.PlantPrimitiveID)
 		}},
+		{name: "seed_to_plant", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionPair(candidate.SeedID, candidate.PlantPrimitiveID)
+		}},
 		{name: "activation_kind_id", values: func(candidate TargetScheduleCandidate) []string {
 			return targetDimensionSingle(candidate.ActivationKindID)
 		}},
+		{name: "plant_to_activation", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionPair(candidate.PlantPrimitiveID, candidate.ActivationKindID)
+		}},
+		{name: "lifecycle_to_activation", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionPair(candidate.LifecycleOperationID, candidate.ActivationKindID)
+		}},
 		{name: "oracle_kind_id", values: func(candidate TargetScheduleCandidate) []string { return targetDimensionSingle(candidate.OracleKindID) }},
-		{name: "mutation_id", values: func(candidate TargetScheduleCandidate) []string { return targetDimensionMutations(candidate.Mutations) }},
+		{name: "activation_to_oracle", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionPair(candidate.ActivationKindID, candidate.OracleKindID)
+		}},
+		{name: "mutation_focus_id", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionSingle(targetCandidateMutationFocusID(candidate))
+		}},
+		{name: "mutation_focus_to_oracle", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionPair(targetCandidateMutationFocusID(candidate), candidate.OracleKindID)
+		}},
 	}
 }
 
@@ -245,19 +265,16 @@ func targetDimensionSingle(value string) []string {
 	return []string{value}
 }
 
-func targetDimensionMutations(mutations []target.TargetScenarioMutation) []string {
-	values := make([]string, 0, len(mutations))
-	seen := make(map[string]struct{}, len(mutations))
-	for _, mutation := range mutations {
-		if mutation.MutationID == "" {
-			continue
-		}
-		if _, ok := seen[mutation.MutationID]; ok {
-			continue
-		}
-		seen[mutation.MutationID] = struct{}{}
-		values = append(values, mutation.MutationID)
+func targetDimensionPair(left string, right string) []string {
+	if pair := targetDimensionPairValue(left, right); pair != "" {
+		return []string{pair}
 	}
-	sort.Strings(values)
-	return values
+	return nil
+}
+
+func targetDimensionPairValue(left string, right string) string {
+	if left == "" || right == "" {
+		return ""
+	}
+	return left + "->" + right
 }

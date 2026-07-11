@@ -30,6 +30,40 @@ type TargetScenarioMutation struct {
 	Summary    string                     `json:"summary,omitempty"`
 }
 
+func TargetScenarioMutationFocus(mutations []TargetScenarioMutation) (TargetScenarioMutation, bool) {
+	bestIdx := -1
+	bestRank := -1
+	for i, mutation := range mutations {
+		if mutation.MutationID == "" {
+			continue
+		}
+		rank := targetScenarioMutationFocusRank(mutation.Kind)
+		if rank > bestRank {
+			bestRank = rank
+			bestIdx = i
+		}
+	}
+	if bestIdx < 0 {
+		return TargetScenarioMutation{}, false
+	}
+	return mutations[bestIdx], true
+}
+
+func targetScenarioMutationFocusRank(kind TargetScenarioMutationKind) int {
+	switch kind {
+	case TargetScenarioMutationActivationSubstitution:
+		return 4
+	case TargetScenarioMutationPrimitiveSubstitution:
+		return 3
+	case TargetScenarioMutationLifecycleSplice:
+		return 2
+	case TargetScenarioMutationPhaseShift:
+		return 1
+	default:
+		return 0
+	}
+}
+
 type TargetScenarioExecutionPlan struct {
 	LifecycleOperationID string `json:"lifecycle_operation_id,omitempty"`
 	CheckpointSelector   string `json:"checkpoint_selector,omitempty"`

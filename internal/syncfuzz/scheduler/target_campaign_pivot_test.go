@@ -18,6 +18,7 @@ func TestSummarizeTargetCampaignPivotRecommendationsSuggestsMissingProfilesAndSe
 				TaskID:           target.DefaultTargetTaskID,
 				SeedID:           "delayed-effect",
 				PromptProfileID:  target.TargetPromptProfileBaselineID,
+				PromptVariantID:  target.TargetPromptVariantBaseID,
 				StateSurface:     "workspace.file-effect",
 				PlantPrimitiveID: "background-process",
 				ActivationKindID: "workspace-file-appearance",
@@ -38,6 +39,13 @@ func TestSummarizeTargetCampaignPivotRecommendationsSuggestsMissingProfilesAndSe
 	for _, forbidden := range []string{target.TargetPromptProfileWorkflowID, target.TargetPromptProfileAuditID} {
 		if !target.ContainsString(promptRecommendation.Values, forbidden) {
 			t.Fatalf("expected prompt profile recommendation %q in %#v", forbidden, promptRecommendation.Values)
+		}
+	}
+
+	variantRecommendation := findTargetPivotRecommendation(t, recommendations, "prompt_variant_id")
+	for _, expected := range []string{target.TargetPromptVariantLifecycleBoundaryID, target.TargetPromptVariantMutationFocusID} {
+		if !target.ContainsString(variantRecommendation.Values, expected) {
+			t.Fatalf("expected prompt variant recommendation %q in %#v", expected, variantRecommendation.Values)
 		}
 	}
 

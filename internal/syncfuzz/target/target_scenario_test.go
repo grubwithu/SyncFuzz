@@ -42,6 +42,9 @@ func TestTargetScenariosExposeStructuredComponents(t *testing.T) {
 	if replay.ExecutionPlan == nil || replay.ExecutionPlan.LifecycleOperationID != "checkpoint-replay" || !replay.ExecutionPlan.Replay {
 		t.Fatalf("expected executable replay plan: %#v", replay.ExecutionPlan)
 	}
+	if focus, ok := TargetScenarioMutationFocus(replay.Mutations); !ok || focus.MutationID != "lifecycle-splice.checkpoint-replay" || focus.Kind != TargetScenarioMutationLifecycleSplice {
+		t.Fatalf("expected replay mutation focus metadata: %#v", replay.Mutations)
+	}
 	if len(replay.Mutations) == 0 || replay.Mutations[0].Kind != TargetScenarioMutationLifecycleSplice {
 		t.Fatalf("expected replay mutation metadata: %#v", replay.Mutations)
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
@@ -168,6 +169,246 @@ func TestSelectTargetMatrixCandidatesUsesCoverageGapsToPrioritizeUnseenCandidate
 	}
 	if selected.Candidates[1].TaskID != "task-b" {
 		t.Fatalf("expected remaining candidate second, got task=%q", selected.Candidates[1].TaskID)
+	}
+}
+
+func TestSelectTargetMatrixCandidatesUsesPromptRepairBeforeNewTaskExpansion(t *testing.T) {
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates: []TargetScheduleCandidate{
+			testTargetScheduleCandidate("task-a", target.TargetPromptProfileBaselineID),
+			testTargetScheduleCandidate("task-a", target.TargetPromptProfileWorkflowID),
+			testTargetScheduleCandidate("task-a", target.TargetPromptProfileAuditID),
+			testTargetScheduleCandidate("task-b", target.TargetPromptProfileBaselineID),
+		},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	tmp := t.TempDir()
+	feedbackPath := filepath.Join(tmp, "feedback.json")
+	if err := core.WriteJSON(feedbackPath, &TargetMatrixResult{
+		SchemaVersion: "syncfuzz.target-matrix-result.v1",
+		CandidateSummaries: []TargetCandidateSummary{
+			{
+				CandidateID:      targetScheduleCandidateID("test-target", "task-a", target.TargetPromptProfileBaselineID),
+				TaskID:           "task-a",
+				PromptProfileID:  target.TargetPromptProfileBaselineID,
+				OutcomeSummaries: []TargetSuiteOutcomeStats{{Category: corpus.TargetObservationExecutionNotReached, TotalRuns: 1}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write feedback: %v", err)
+	}
+
+	selected, err := selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{
+		FeedbackFrom:        feedbackPath,
+		ExcludeCandidateIDs: []string{targetScheduleCandidateID("test-target", "task-a", target.TargetPromptProfileBaselineID)},
+		Limit:               2,
+	})
+	if err != nil {
+		t.Fatalf("selectTargetMatrixCandidates failed: %v", err)
+	}
+	if len(selected.Candidates) != 2 {
+		t.Fatalf("expected 2 selected candidates, got %d", len(selected.Candidates))
+	}
+	if selected.Candidates[0].TaskID != "task-a" || selected.Candidates[0].PromptProfileID != target.TargetPromptProfileWorkflowID {
+		t.Fatalf("expected prompt repair candidate first, got task=%q profile=%q", selected.Candidates[0].TaskID, selected.Candidates[0].PromptProfileID)
+	}
+	if selected.Candidates[1].TaskID != "task-b" || selected.Candidates[1].PromptProfileID != target.TargetPromptProfileBaselineID {
+		t.Fatalf("expected new task expansion second, got task=%q profile=%q", selected.Candidates[1].TaskID, selected.Candidates[1].PromptProfileID)
+	}
+}
+
+func TestSelectTargetMatrixCandidatesSkipsPromptRepairOnceActivationReached(t *testing.T) {
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates: []TargetScheduleCandidate{
+			testTargetScheduleCandidate("task-a", target.TargetPromptProfileBaselineID),
+			testTargetScheduleCandidate("task-a", target.TargetPromptProfileWorkflowID),
+			testTargetScheduleCandidate("task-a", target.TargetPromptProfileAuditID),
+			testTargetScheduleCandidate("task-b", target.TargetPromptProfileBaselineID),
+		},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	tmp := t.TempDir()
+	feedbackPath := filepath.Join(tmp, "feedback.json")
+	if err := core.WriteJSON(feedbackPath, &TargetMatrixResult{
+		SchemaVersion: "syncfuzz.target-matrix-result.v1",
+		CandidateSummaries: []TargetCandidateSummary{
+			{
+				CandidateID:         targetScheduleCandidateID("test-target", "task-a", target.TargetPromptProfileBaselineID),
+				TaskID:              "task-a",
+				PromptProfileID:     target.TargetPromptProfileBaselineID,
+				ActivationReached:   1,
+				OutcomeSummaries:    []TargetSuiteOutcomeStats{{Category: corpus.TargetObservationCleanNegative, TotalRuns: 1}},
+				ActivationSummaries: []TargetSuiteActivationStats{{Stage: TargetActivationStageActivationReached, TotalRuns: 1}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write feedback: %v", err)
+	}
+
+	selected, err := selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{
+		FeedbackFrom:        feedbackPath,
+		ExcludeCandidateIDs: []string{targetScheduleCandidateID("test-target", "task-a", target.TargetPromptProfileBaselineID)},
+		Limit:               2,
+	})
+	if err != nil {
+		t.Fatalf("selectTargetMatrixCandidates failed: %v", err)
+	}
+	if len(selected.Candidates) != 2 {
+		t.Fatalf("expected 2 selected candidates, got %d", len(selected.Candidates))
+	}
+	if selected.Candidates[0].TaskID != "task-b" || selected.Candidates[0].PromptProfileID != target.TargetPromptProfileBaselineID {
+		t.Fatalf("expected new task expansion first after activation reached, got task=%q profile=%q", selected.Candidates[0].TaskID, selected.Candidates[0].PromptProfileID)
+	}
+	if selected.Candidates[1].TaskID != "task-a" || selected.Candidates[1].PromptProfileID != target.TargetPromptProfileWorkflowID {
+		t.Fatalf("expected alternate prompt profile second after new task, got task=%q profile=%q", selected.Candidates[1].TaskID, selected.Candidates[1].PromptProfileID)
+	}
+}
+
+func TestSelectTargetMatrixCandidatesPrefersSeedExpansionAfterConfirmedHit(t *testing.T) {
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates: []TargetScheduleCandidate{
+			func() TargetScheduleCandidate {
+				item := testTargetScenarioCandidateWithProfile("task-a", "seed-shared", "primitive-shared", target.TargetPromptProfileBaselineID)
+				item.ActivationKindID = "activation-a"
+				item.OracleKindID = "oracle-a"
+				item.Mutations = []target.TargetScenarioMutation{{MutationID: "mutation-a"}}
+				return item
+			}(),
+			func() TargetScheduleCandidate {
+				item := testTargetScenarioCandidateWithProfile("task-a2", "seed-shared", "primitive-shared", target.TargetPromptProfileBaselineID)
+				item.ActivationKindID = "activation-b"
+				item.OracleKindID = "oracle-b"
+				item.Mutations = []target.TargetScenarioMutation{{MutationID: "mutation-b"}}
+				return item
+			}(),
+			testTargetScenarioCandidateWithProfile("task-b", "seed-other", "primitive-other", target.TargetPromptProfileBaselineID),
+		},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	tmp := t.TempDir()
+	feedbackPath := filepath.Join(tmp, "feedback.json")
+	if err := core.WriteJSON(feedbackPath, &TargetMatrixResult{
+		SchemaVersion: "syncfuzz.target-matrix-result.v1",
+		CandidateSummaries: []TargetCandidateSummary{
+			{
+				CandidateID:          matrix.Candidates[0].CandidateID,
+				TaskID:               "task-a",
+				PromptProfileID:      target.TargetPromptProfileBaselineID,
+				SeedID:               "seed-shared",
+				PlantPrimitiveID:     "primitive-shared",
+				LifecycleOperationID: "checkpoint-fork",
+				ActivationKindID:     "activation-a",
+				OracleKindID:         "oracle-a",
+				Confirmed:            1,
+				Mutations:            []target.TargetScenarioMutation{{MutationID: "mutation-a"}},
+				OutcomeSummaries:     []TargetSuiteOutcomeStats{{Category: corpus.TargetObservationResidueObserved, TotalRuns: 1}},
+				ActivationSummaries:  []TargetSuiteActivationStats{{Stage: TargetActivationStageActivationReached, TotalRuns: 1}},
+				ContractViolations:   1,
+				ComplianceCompliant:  1,
+				ReproducibilityRate:  1,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write feedback: %v", err)
+	}
+
+	selected, err := selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{
+		FeedbackFrom:        feedbackPath,
+		ExcludeCandidateIDs: []string{matrix.Candidates[0].CandidateID},
+		Limit:               2,
+	})
+	if err != nil {
+		t.Fatalf("selectTargetMatrixCandidates failed: %v", err)
+	}
+	if len(selected.Candidates) != 2 {
+		t.Fatalf("expected 2 selected candidates, got %d", len(selected.Candidates))
+	}
+	if selected.Candidates[0].TaskID != "task-a2" {
+		t.Fatalf("expected shared-seed expansion candidate first, got %#v", selected.Candidates[0])
+	}
+	if selected.Candidates[1].TaskID != "task-b" {
+		t.Fatalf("expected unrelated candidate second, got %#v", selected.Candidates[1])
+	}
+}
+
+func TestSelectTargetMatrixCandidatesPrefersVariantExpansionForCheckpointFamilies(t *testing.T) {
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates: []TargetScheduleCandidate{
+			func() TargetScheduleCandidate {
+				item := testTargetScenarioCandidateWithProfile("task-checkpoint", "seed-a", "primitive-a", target.TargetPromptProfileBaselineID)
+				item.LifecycleOperationID = "checkpoint-replay"
+				item.PromptVariantID = target.TargetPromptVariantBaseID
+				item.CandidateID = targetScheduleCandidateIDWithVariant("test-target", item.TaskID, item.PromptProfileID, item.PromptVariantID)
+				return item
+			}(),
+			func() TargetScheduleCandidate {
+				item := testTargetScenarioCandidateWithProfile("task-checkpoint", "seed-a", "primitive-a", target.TargetPromptProfileBaselineID)
+				item.LifecycleOperationID = "checkpoint-replay"
+				item.PromptVariantID = target.TargetPromptVariantLifecycleBoundaryID
+				item.CandidateID = targetScheduleCandidateIDWithVariant("test-target", item.TaskID, item.PromptProfileID, item.PromptVariantID)
+				return item
+			}(),
+			func() TargetScheduleCandidate {
+				item := testTargetScenarioCandidateWithProfile("task-checkpoint", "seed-a", "primitive-a", target.TargetPromptProfileBaselineID)
+				item.LifecycleOperationID = "checkpoint-replay"
+				item.MutationFocusID = "mutation-focus-a"
+				item.PromptVariantID = target.TargetPromptVariantMutationFocusID
+				item.CandidateID = targetScheduleCandidateIDWithVariant("test-target", item.TaskID, item.PromptProfileID, item.PromptVariantID)
+				return item
+			}(),
+			testTargetScenarioCandidateWithProfile("task-other", "seed-b", "primitive-b", target.TargetPromptProfileBaselineID),
+		},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	tmp := t.TempDir()
+	feedbackPath := filepath.Join(tmp, "feedback.json")
+	if err := core.WriteJSON(feedbackPath, &TargetMatrixResult{
+		SchemaVersion: "syncfuzz.target-matrix-result.v1",
+		CandidateSummaries: []TargetCandidateSummary{
+			{
+				CandidateID:          matrix.Candidates[0].CandidateID,
+				TaskID:               "task-checkpoint",
+				PromptProfileID:      target.TargetPromptProfileBaselineID,
+				PromptVariantID:      target.TargetPromptVariantBaseID,
+				LifecycleOperationID: "checkpoint-replay",
+				Confirmed:            1,
+				OutcomeSummaries:     []TargetSuiteOutcomeStats{{Category: corpus.TargetObservationResidueObserved, TotalRuns: 1}},
+				ActivationSummaries:  []TargetSuiteActivationStats{{Stage: TargetActivationStageActivationReached, TotalRuns: 1}},
+				ReproducibilityRate:  1,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write feedback: %v", err)
+	}
+
+	selected, err := selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{
+		FeedbackFrom:        feedbackPath,
+		ExcludeCandidateIDs: []string{matrix.Candidates[0].CandidateID},
+		Limit:               2,
+	})
+	if err != nil {
+		t.Fatalf("selectTargetMatrixCandidates failed: %v", err)
+	}
+	if len(selected.Candidates) != 2 {
+		t.Fatalf("expected 2 selected candidates, got %d", len(selected.Candidates))
+	}
+	if selected.Candidates[0].TaskID != "task-checkpoint" || target.NormalizeTargetPromptVariantID(selected.Candidates[0].PromptVariantID) == target.TargetPromptVariantBaseID {
+		t.Fatalf("expected sibling checkpoint variant first, got %#v", selected.Candidates[0])
+	}
+	if selected.Candidates[1].TaskID != "task-checkpoint" || target.NormalizeTargetPromptVariantID(selected.Candidates[1].PromptVariantID) == target.TargetPromptVariantBaseID {
+		t.Fatalf("expected second sibling checkpoint variant next, got %#v", selected.Candidates[1])
 	}
 }
 

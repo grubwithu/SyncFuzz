@@ -24,7 +24,7 @@ func TestBuildTargetScheduleMatrixExpandsGroupsAndContracts(t *testing.T) {
 	if matrix.TargetID != "langgraph-shell-react" {
 		t.Fatalf("unexpected target id %q", matrix.TargetID)
 	}
-	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 3 {
+	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 7 {
 		t.Fatalf("unexpected target matrix size: %#v", matrix)
 	}
 	replay, err := findTargetMatrixCandidate(matrix, target.PersistentShellReplayTargetTaskID)
@@ -39,6 +39,9 @@ func TestBuildTargetScheduleMatrixExpandsGroupsAndContracts(t *testing.T) {
 	}
 	if replay.LifecycleOperationID != "checkpoint-replay" || replay.ActivationKindID != "git-resolution" || replay.OracleKindID != "replay-path-residue" {
 		t.Fatalf("unexpected replay scenario execution metadata: %#v", replay)
+	}
+	if replay.MutationFocusID != "lifecycle-splice.checkpoint-replay" || replay.MutationFocusKind != target.TargetScenarioMutationLifecycleSplice {
+		t.Fatalf("unexpected replay mutation focus: %#v", replay)
 	}
 	if len(replay.Mutations) == 0 || replay.Mutations[0].Kind != target.TargetScenarioMutationLifecycleSplice {
 		t.Fatalf("expected replay candidate mutations: %#v", replay)
@@ -56,8 +59,41 @@ func TestBuildTargetScheduleMatrixExpandsSeeds(t *testing.T) {
 	if len(matrix.SeedIDs) != 1 || matrix.SeedIDs[0] != "shell-path-residue" {
 		t.Fatalf("unexpected seed ids: %#v", matrix)
 	}
-	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 3 {
+	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 7 {
 		t.Fatalf("unexpected seed-expanded matrix size: %#v", matrix)
+	}
+}
+
+func TestBuildTargetScheduleMatrixAddsMutationFocusDerivedCandidates(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		Tasks:    []string{target.PersistentShellReplayTargetTaskID},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	if matrix.TotalCandidates != 3 {
+		t.Fatalf("expected base plus two derived candidates, got %#v", matrix)
+	}
+	want := map[string]string{
+		"langgraph-shell-react/persistent-shell-poisoning-replay":                    target.TargetPromptVariantBaseID,
+		"langgraph-shell-react/persistent-shell-poisoning-replay/lifecycle-boundary": target.TargetPromptVariantLifecycleBoundaryID,
+		"langgraph-shell-react/persistent-shell-poisoning-replay/mutation-focus":     target.TargetPromptVariantMutationFocusID,
+	}
+	for _, candidate := range matrix.Candidates {
+		wantVariant, ok := want[candidate.CandidateID]
+		if !ok {
+			t.Fatalf("unexpected candidate id: %#v", candidate)
+		}
+		if candidate.PromptVariantID != wantVariant {
+			t.Fatalf("unexpected prompt variant for %q: %#v", candidate.CandidateID, candidate)
+		}
+		if wantVariant == target.TargetPromptVariantBaseID && candidate.Generated {
+			t.Fatalf("base candidate should not be generated: %#v", candidate)
+		}
+		if wantVariant != target.TargetPromptVariantBaseID && !candidate.Generated {
+			t.Fatalf("derived candidate should be marked generated: %#v", candidate)
+		}
 	}
 }
 

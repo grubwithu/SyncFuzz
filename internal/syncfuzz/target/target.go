@@ -117,6 +117,7 @@ type TargetRunOptions struct {
 	TaskID           string
 	Objective        string
 	PromptProfileID  string
+	PromptVariantID  string
 	Prompt           string
 	PromptFile       string
 	Command          string
@@ -139,6 +140,7 @@ type TargetTask struct {
 	TaskID             string              `json:"task_id"`
 	Objective          string              `json:"objective"`
 	PromptProfileID    string              `json:"prompt_profile_id,omitempty"`
+	PromptVariantID    string              `json:"prompt_variant_id,omitempty"`
 	Scenario           *TargetScenarioInfo `json:"scenario,omitempty"`
 	Prompt             string              `json:"prompt"`
 	PromptFile         string              `json:"prompt_file"`
@@ -195,6 +197,7 @@ type TargetRunResult struct {
 	TaskID                   string                        `json:"task_id"`
 	Objective                string                        `json:"objective"`
 	PromptProfileID          string                        `json:"prompt_profile_id,omitempty"`
+	PromptVariantID          string                        `json:"prompt_variant_id,omitempty"`
 	Environment              string                        `json:"environment"`
 	ContainerImage           string                        `json:"container_image,omitempty"`
 	Command                  string                        `json:"command"`
@@ -281,12 +284,13 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		return nil, err
 	}
 	opts.Command = command
-	prompt, promptProfileID, err := resolveTargetPrompt(opts)
+	prompt, promptProfileID, promptVariantID, err := resolveTargetPrompt(opts)
 	if err != nil {
 		return nil, err
 	}
 	opts.Prompt = prompt
 	opts.PromptProfileID = promptProfileID
+	opts.PromptVariantID = promptVariantID
 	if opts.Objective == "" {
 		opts.Objective = defaultTargetObjective(opts.TaskID)
 	}
@@ -342,6 +346,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		TaskID:             opts.TaskID,
 		Objective:          opts.Objective,
 		PromptProfileID:    opts.PromptProfileID,
+		PromptVariantID:    opts.PromptVariantID,
 		Prompt:             opts.Prompt,
 		PromptFile:         TargetPromptArtifact,
 		Command:            opts.Command,
@@ -373,6 +378,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"artifact":       TargetTaskArtifact,
 		"prompt_file":    TargetPromptArtifact,
 		"prompt_profile": opts.PromptProfileID,
+		"prompt_variant": opts.PromptVariantID,
 		"command":        opts.Command,
 	})); err != nil {
 		return nil, err
@@ -549,6 +555,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		TaskID:                   opts.TaskID,
 		Objective:                opts.Objective,
 		PromptProfileID:          opts.PromptProfileID,
+		PromptVariantID:          opts.PromptVariantID,
 		Environment:              run.Environment,
 		ContainerImage:           run.ContainerImage,
 		Command:                  opts.Command,
@@ -584,6 +591,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"contract_status":             TargetContractInterpretationStatusValue(contractInterpretation),
 		"contract_rule_id":            TargetContractInterpretationRuleIDValue(contractInterpretation),
 		"prompt_profile":              opts.PromptProfileID,
+		"prompt_variant":              opts.PromptVariantID,
 		"oracle_confirmed":            targetOracle.Confirmed,
 		"workspace_remaining_after":   processLineage.Summary.WorkspaceRemainingAfter,
 		"late_observed":               lateObserved,
@@ -600,27 +608,31 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	return result, nil
 }
 
-func resolveTargetPrompt(opts TargetRunOptions) (string, string, error) {
+func resolveTargetPrompt(opts TargetRunOptions) (string, string, string, error) {
 	profileID := strings.TrimSpace(opts.PromptProfileID)
 	if profileID != "" {
 		profile, err := resolveTargetPromptProfile(profileID)
 		if err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
 		profileID = profile.ProfileID
+	}
+	variant, err := resolveTargetPromptVariant(opts.PromptVariantID)
+	if err != nil {
+		return "", "", "", err
 	}
 	if opts.PromptFile != "" {
 		raw, err := os.ReadFile(opts.PromptFile)
 		if err != nil {
-			return "", "", fmt.Errorf("read target prompt file: %w", err)
+			return "", "", "", fmt.Errorf("read target prompt file: %w", err)
 		}
-		return string(raw), profileID, nil
+		return string(raw), profileID, variant.VariantID, nil
 	}
 	if opts.Prompt != "" {
-		return opts.Prompt, profileID, nil
+		return opts.Prompt, profileID, variant.VariantID, nil
 	}
 	profileID = NormalizeTargetPromptProfileID(profileID)
-	return DefaultTargetPromptWithProfile(opts.TaskID, profileID), profileID, nil
+	return DefaultTargetPromptVariantWithProfile(opts.TaskID, profileID, variant.VariantID), profileID, variant.VariantID, nil
 }
 
 func resolveTargetCommand(opts TargetRunOptions) (string, error) {

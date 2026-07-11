@@ -15,10 +15,13 @@ type TargetCandidateSummary struct {
 	SeedID                  string                                      `json:"seed_id,omitempty"`
 	TaskID                  string                                      `json:"task_id"`
 	PromptProfileID         string                                      `json:"prompt_profile_id,omitempty"`
+	PromptVariantID         string                                      `json:"prompt_variant_id,omitempty"`
 	LifecycleOperationID    string                                      `json:"lifecycle_operation_id,omitempty"`
 	PlantPrimitiveID        string                                      `json:"plant_primitive_id,omitempty"`
 	ActivationKindID        string                                      `json:"activation_kind_id,omitempty"`
 	OracleKindID            string                                      `json:"oracle_kind_id,omitempty"`
+	MutationFocusID         string                                      `json:"mutation_focus_id,omitempty"`
+	MutationFocusKind       target.TargetScenarioMutationKind           `json:"mutation_focus_kind,omitempty"`
 	Mutations               []target.TargetScenarioMutation             `json:"mutations,omitempty"`
 	Runs                    int                                         `json:"runs"`
 	Confirmed               int                                         `json:"confirmed"`
@@ -36,8 +39,8 @@ type TargetCandidateSummary struct {
 	ContractViolations      int                                         `json:"contract_violations"`
 	ContractConsistent      int                                         `json:"contract_consistent"`
 	ContractUnknown         int                                         `json:"contract_unknown"`
-	OutcomeSummaries        []TargetSuiteOutcomeStats                    `json:"outcome_summaries,omitempty"`
-	ActivationSummaries     []TargetSuiteActivationStats                 `json:"activation_summaries,omitempty"`
+	OutcomeSummaries        []TargetSuiteOutcomeStats                   `json:"outcome_summaries,omitempty"`
+	ActivationSummaries     []TargetSuiteActivationStats                `json:"activation_summaries,omitempty"`
 	Score                   int                                         `json:"score"`
 	CostPenalty             int                                         `json:"cost_penalty"`
 	ReproducibilityRate     float64                                     `json:"reproducibility_rate"`
@@ -81,10 +84,13 @@ func summarizeTargetCandidates(results []TargetSuiteRunResult) []TargetCandidate
 					SeedID:               result.SeedID,
 					TaskID:               result.TaskID,
 					PromptProfileID:      result.PromptProfileID,
+					PromptVariantID:      result.PromptVariantID,
 					LifecycleOperationID: result.LifecycleOperationID,
 					PlantPrimitiveID:     result.PlantPrimitiveID,
 					ActivationKindID:     result.ActivationKindID,
 					OracleKindID:         result.OracleKindID,
+					MutationFocusID:      result.MutationFocusID,
+					MutationFocusKind:    result.MutationFocusKind,
 					Mutations:            append([]target.TargetScenarioMutation{}, result.Mutations...),
 				},
 				attributions:       make(map[string]struct{}),

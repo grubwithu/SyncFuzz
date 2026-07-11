@@ -49,10 +49,13 @@ type TargetSuiteRunResult struct {
 	TaskID                 string                               `json:"task_id"`
 	TargetID               string                               `json:"target_id,omitempty"`
 	PromptProfileID        string                               `json:"prompt_profile_id,omitempty"`
+	PromptVariantID        string                               `json:"prompt_variant_id,omitempty"`
 	LifecycleOperationID   string                               `json:"lifecycle_operation_id,omitempty"`
 	PlantPrimitiveID       string                               `json:"plant_primitive_id,omitempty"`
 	ActivationKindID       string                               `json:"activation_kind_id,omitempty"`
 	OracleKindID           string                               `json:"oracle_kind_id,omitempty"`
+	MutationFocusID        string                               `json:"mutation_focus_id,omitempty"`
+	MutationFocusKind      target.TargetScenarioMutationKind    `json:"mutation_focus_kind,omitempty"`
 	Mutations              []target.TargetScenarioMutation      `json:"mutations,omitempty"`
 	Iteration              int                                  `json:"iteration"`
 	RunID                  string                               `json:"run_id,omitempty"`
@@ -429,24 +432,33 @@ func runTargetSuiteTask(
 		TaskID:               taskID,
 		TargetID:             opts.TargetID,
 		PromptProfileID:      target.NormalizeTargetPromptProfileID(candidate.PromptProfileID),
+		PromptVariantID:      target.NormalizeTargetPromptVariantID(candidate.PromptVariantID),
 		LifecycleOperationID: candidate.LifecycleOperationID,
 		PlantPrimitiveID:     candidate.PlantPrimitiveID,
 		ActivationKindID:     candidate.ActivationKindID,
 		OracleKindID:         candidate.OracleKindID,
+		MutationFocusID:      candidate.MutationFocusID,
+		MutationFocusKind:    candidate.MutationFocusKind,
 		Mutations:            append([]target.TargetScenarioMutation{}, candidate.Mutations...),
 		Iteration:            iteration,
 		LateObserveDelayMs:   runLateObserveDelay.Milliseconds(),
 		Signature:            target.TargetSignature(taskID),
 	}
 	startedRun := time.Now()
+	runPrompt := opts.Prompt
+	runPromptFile := opts.PromptFile
+	if runPrompt == "" && runPromptFile == "" && target.NormalizeTargetPromptVariantID(candidate.PromptVariantID) != target.TargetPromptVariantBaseID {
+		runPrompt = target.DefaultTargetPromptVariantWithProfile(taskID, candidate.PromptProfileID, candidate.PromptVariantID)
+	}
 	runResult, err := target.RunTarget(ctx, target.TargetRunOptions{
 		AdapterID:        opts.AdapterID,
 		TargetID:         opts.TargetID,
 		TaskID:           taskID,
 		Objective:        opts.Objective,
 		PromptProfileID:  candidate.PromptProfileID,
-		Prompt:           opts.Prompt,
-		PromptFile:       opts.PromptFile,
+		PromptVariantID:  candidate.PromptVariantID,
+		Prompt:           runPrompt,
+		PromptFile:       runPromptFile,
 		Command:          opts.Command,
 		CommandFile:      opts.CommandFile,
 		OutDir:           suiteDir,
@@ -470,6 +482,7 @@ func runTargetSuiteTask(
 	item.RunID = runResult.RunID
 	item.TargetID = runResult.TargetID
 	item.PromptProfileID = runResult.PromptProfileID
+	item.PromptVariantID = runResult.PromptVariantID
 	item.Confirmed = runResult.ExpectationsMet
 	item.Completed = runResult.Completed
 	item.LateObserveDelayMs = runResult.LateObserveDelayMs
@@ -511,6 +524,7 @@ func targetScheduledTaskCandidate(targetID string, taskID string, promptProfileI
 		TargetID:                targetID,
 		TaskID:                  taskID,
 		PromptProfileID:         target.NormalizeTargetPromptProfileID(promptProfileID),
+		PromptVariantID:         target.TargetPromptVariantBaseID,
 		DefaultExpectedFiles:    target.DefaultTargetExpectedFiles(taskID),
 		UsesLateObservation:     target.DefaultTargetLateObserveDelay(taskID) > 0,
 		DefaultLateObserveDelay: target.DefaultTargetLateObserveDelay(taskID).Milliseconds(),
@@ -526,6 +540,8 @@ func targetScheduledTaskCandidate(targetID string, taskID string, promptProfileI
 		item.PlantPrimitiveID = taskInfo.PlantPrimitiveID
 		item.ActivationKindID = taskInfo.ActivationKindID
 		item.OracleKindID = taskInfo.OracleKindID
+		item.MutationFocusID = taskInfo.MutationFocusID
+		item.MutationFocusKind = taskInfo.MutationFocusKind
 		item.Mutations = append([]target.TargetScenarioMutation{}, taskInfo.Mutations...)
 	}
 	return item

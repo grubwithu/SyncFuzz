@@ -25,6 +25,9 @@ type TargetScheduleCandidate struct {
 	TaskID                   string                              `json:"task_id"`
 	PromptProfileID          string                              `json:"prompt_profile_id,omitempty"`
 	PromptProfileDescription string                              `json:"prompt_profile_description,omitempty"`
+	PromptVariantID          string                              `json:"prompt_variant_id,omitempty"`
+	PromptVariantDescription string                              `json:"prompt_variant_description,omitempty"`
+	Generated                bool                                `json:"generated,omitempty"`
 	Description              string                              `json:"description,omitempty"`
 	DefaultExpectedFiles     []string                            `json:"default_expected_files,omitempty"`
 	UsesLateObservation      bool                                `json:"uses_late_observation,omitempty"`
@@ -40,6 +43,8 @@ type TargetScheduleCandidate struct {
 	PlantPrimitiveID         string                              `json:"plant_primitive_id,omitempty"`
 	ActivationKindID         string                              `json:"activation_kind_id,omitempty"`
 	OracleKindID             string                              `json:"oracle_kind_id,omitempty"`
+	MutationFocusID          string                              `json:"mutation_focus_id,omitempty"`
+	MutationFocusKind        target.TargetScenarioMutationKind   `json:"mutation_focus_kind,omitempty"`
 	Mutations                []target.TargetScenarioMutation     `json:"mutations,omitempty"`
 }
 
@@ -81,7 +86,7 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 	}
 
 	profile := target.TargetContractProfileFor(targetID)
-	candidates := make([]TargetScheduleCandidate, 0, len(tasks)*len(promptProfiles))
+	candidates := make([]TargetScheduleCandidate, 0, len(tasks)*len(promptProfiles)*2)
 	for _, taskID := range tasks {
 		taskInfo, ok := targetTaskInfoByID(taskID)
 		for _, promptProfile := range promptProfiles {
@@ -91,6 +96,7 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 				TaskID:                   taskID,
 				PromptProfileID:          promptProfile.ProfileID,
 				PromptProfileDescription: promptProfile.Description,
+				PromptVariantID:          target.TargetPromptVariantBaseID,
 				DefaultExpectedFiles:     target.DefaultTargetExpectedFiles(taskID),
 				UsesLateObservation:      target.DefaultTargetLateObserveDelay(taskID) > 0,
 				DefaultLateObserveDelay:  target.DefaultTargetLateObserveDelay(taskID).Milliseconds(),
@@ -110,9 +116,14 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 				candidate.PlantPrimitiveID = taskInfo.PlantPrimitiveID
 				candidate.ActivationKindID = taskInfo.ActivationKindID
 				candidate.OracleKindID = taskInfo.OracleKindID
+				candidate.MutationFocusID = taskInfo.MutationFocusID
+				candidate.MutationFocusKind = taskInfo.MutationFocusKind
 				candidate.Mutations = append([]target.TargetScenarioMutation{}, taskInfo.Mutations...)
 			} else {
 				candidate.Description = "custom target task"
+			}
+			if variant, err := targetPromptVariantInfo(candidate.PromptVariantID); err == nil {
+				candidate.PromptVariantDescription = variant.Description
 			}
 			if profile != nil {
 				if rule, ok := target.TargetContractRuleFor(profile, taskID); ok {
@@ -125,6 +136,12 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 				}
 			}
 			candidates = append(candidates, candidate)
+			if derived, ok := targetDerivedLifecycleBoundaryCandidate(candidate); ok {
+				candidates = append(candidates, derived)
+			}
+			if derived, ok := targetDerivedMutationFocusCandidate(candidate); ok {
+				candidates = append(candidates, derived)
+			}
 		}
 	}
 
@@ -144,15 +161,25 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 }
 
 func targetScheduleCandidateID(targetID string, taskID string, promptProfileID string) string {
+	return targetScheduleCandidateIDWithVariant(targetID, taskID, promptProfileID, target.TargetPromptVariantBaseID)
+}
+
+func targetScheduleCandidateIDWithVariant(targetID string, taskID string, promptProfileID string, promptVariantID string) string {
 	targetID = strings.TrimSpace(targetID)
 	if targetID == "" {
 		targetID = target.DefaultTargetAdapterID
 	}
 	promptProfileID = target.NormalizeTargetPromptProfileID(promptProfileID)
-	if promptProfileID == target.TargetPromptProfileBaselineID {
-		return strings.Join([]string{targetID, taskID}, "/")
+	promptVariantID = target.NormalizeTargetPromptVariantID(promptVariantID)
+
+	parts := []string{targetID, taskID}
+	if promptProfileID != target.TargetPromptProfileBaselineID {
+		parts = append(parts, promptProfileID)
 	}
-	return strings.Join([]string{targetID, taskID, promptProfileID}, "/")
+	if promptVariantID != target.TargetPromptVariantBaseID {
+		parts = append(parts, promptVariantID)
+	}
+	return strings.Join(parts, "/")
 }
 
 func allTargetTaskIDs() []string {
@@ -165,12 +192,53 @@ func allTargetTaskIDs() []string {
 }
 
 func targetTaskInfoByID(taskID string) (target.TargetTaskInfo, bool) {
-	for _, task := range target.TargetTasks() {
-		if task.TaskID == taskID {
-			return task, true
+	return target.TargetTaskByID(taskID)
+}
+
+func targetPromptVariantInfo(variantID string) (target.TargetPromptVariantInfo, error) {
+	for _, variant := range target.TargetPromptVariants() {
+		if variant.VariantID == target.NormalizeTargetPromptVariantID(variantID) {
+			return variant, nil
 		}
 	}
-	return target.TargetTaskInfo{}, false
+	return target.TargetPromptVariantInfo{}, fmt.Errorf("unknown target prompt variant %q", variantID)
+}
+
+func targetDerivedMutationFocusCandidate(base TargetScheduleCandidate) (TargetScheduleCandidate, bool) {
+	if target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID {
+		return TargetScheduleCandidate{}, false
+	}
+	if base.MutationFocusID == "" {
+		return TargetScheduleCandidate{}, false
+	}
+
+	derived := base
+	derived.PromptVariantID = target.TargetPromptVariantMutationFocusID
+	if variant, err := targetPromptVariantInfo(derived.PromptVariantID); err == nil {
+		derived.PromptVariantDescription = variant.Description
+	}
+	derived.Generated = true
+	derived.CandidateID = targetScheduleCandidateIDWithVariant(base.TargetID, base.TaskID, base.PromptProfileID, derived.PromptVariantID)
+	return derived, true
+}
+
+func targetDerivedLifecycleBoundaryCandidate(base TargetScheduleCandidate) (TargetScheduleCandidate, bool) {
+	if target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID {
+		return TargetScheduleCandidate{}, false
+	}
+	lifecycleOperationID := strings.TrimSpace(base.LifecycleOperationID)
+	if lifecycleOperationID == "" || !strings.HasPrefix(lifecycleOperationID, "checkpoint-") {
+		return TargetScheduleCandidate{}, false
+	}
+
+	derived := base
+	derived.PromptVariantID = target.TargetPromptVariantLifecycleBoundaryID
+	if variant, err := targetPromptVariantInfo(derived.PromptVariantID); err == nil {
+		derived.PromptVariantDescription = variant.Description
+	}
+	derived.Generated = true
+	derived.CandidateID = targetScheduleCandidateIDWithVariant(base.TargetID, base.TaskID, base.PromptProfileID, derived.PromptVariantID)
+	return derived, true
 }
 
 func findTargetMatrixCandidate(matrix *TargetScheduleMatrix, taskID string) (TargetScheduleCandidate, error) {

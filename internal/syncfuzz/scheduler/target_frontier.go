@@ -9,8 +9,11 @@ import (
 const targetFrontierDefaultLimit = 5
 
 const (
-	targetFrontierSelectionCoverageGap = "coverage-gap"
-	targetFrontierSelectionExploration = "exploration-novelty"
+	targetFrontierSelectionCoverageGap   = "coverage-gap"
+	targetFrontierSelectionExploration   = "exploration-novelty"
+	targetFrontierSelectionPromptRepair  = "prompt-repair"
+	targetFrontierSelectionVariantExpand = "variant-expansion"
+	targetFrontierSelectionSeedExpand    = "seed-expansion"
 )
 
 type TargetFrontierCandidate struct {
@@ -21,6 +24,7 @@ type TargetFrontierCandidate struct {
 	SeedID               string                          `json:"seed_id,omitempty"`
 	TaskID               string                          `json:"task_id"`
 	PromptProfileID      string                          `json:"prompt_profile_id,omitempty"`
+	PromptVariantID      string                          `json:"prompt_variant_id,omitempty"`
 	LifecycleOperationID string                          `json:"lifecycle_operation_id,omitempty"`
 	PlantPrimitiveID     string                          `json:"plant_primitive_id,omitempty"`
 	ActivationKindID     string                          `json:"activation_kind_id,omitempty"`
@@ -93,6 +97,9 @@ func summarizeTargetCoverageFrontier(
 
 	gaps := targetMissingDimensionValues(summarizeTargetDimensionCoverage(matrix.Candidates, results))
 	state := newTargetExplorationStateFromCandidates(executedCandidates)
+	repair := newTargetPromptRepairFeedbackFromResults(candidateByID, results)
+	variantExpansion := newTargetVariantExpansionFeedbackFromResults(candidateByID, results)
+	expansion := newTargetSeedExpansionFeedbackFromResults(candidateByID, results)
 	sort.SliceStable(remaining, func(i, j int) bool {
 		return targetExplorationBaseLess(remaining[i], remaining[j])
 	})
@@ -100,15 +107,47 @@ func summarizeTargetCoverageFrontier(
 	out := make([]TargetFrontierCandidate, 0, minInt(limit, len(remaining)))
 	for len(remaining) > 0 && len(out) < limit {
 		bestIdx := 0
+		bestRepair := targetPromptRepairScore(remaining[0], repair)
+		bestVariantExpansion := targetVariantExpansionScore(remaining[0], variantExpansion)
+		bestExpansion := targetSeedExpansionScore(remaining[0], expansion)
 		bestGapScore := targetGapCoverageScore(remaining[0], gaps)
 		bestNovelty := state.noveltyScore(remaining[0])
 		for i := 1; i < len(remaining); i++ {
+			repairScore := targetPromptRepairScore(remaining[i], repair)
+			variantExpansionScore := targetVariantExpansionScore(remaining[i], variantExpansion)
+			expansionScore := targetSeedExpansionScore(remaining[i], expansion)
 			gapScore := targetGapCoverageScore(remaining[i], gaps)
 			novelty := state.noveltyScore(remaining[i])
-			if gapScore > bestGapScore ||
-				(gapScore == bestGapScore && (novelty > bestNovelty ||
-					(novelty == bestNovelty && targetExplorationBaseLess(remaining[i], remaining[bestIdx])))) {
+			better := false
+			switch {
+			case repairScore > bestRepair:
+				better = true
+			case repairScore < bestRepair:
+				better = false
+			case variantExpansionScore > bestVariantExpansion:
+				better = true
+			case variantExpansionScore < bestVariantExpansion:
+				better = false
+			case expansionScore > bestExpansion:
+				better = true
+			case expansionScore < bestExpansion:
+				better = false
+			case gapScore > bestGapScore:
+				better = true
+			case gapScore < bestGapScore:
+				better = false
+			case novelty > bestNovelty:
+				better = true
+			case novelty < bestNovelty:
+				better = false
+			default:
+				better = targetExplorationBaseLess(remaining[i], remaining[bestIdx])
+			}
+			if better {
 				bestIdx = i
+				bestRepair = repairScore
+				bestVariantExpansion = variantExpansionScore
+				bestExpansion = expansionScore
 				bestGapScore = gapScore
 				bestNovelty = novelty
 			}
@@ -117,7 +156,13 @@ func summarizeTargetCoverageFrontier(
 		pick := remaining[bestIdx]
 		coveredGaps := targetCandidateCoveredGaps(pick, gaps)
 		selectionMode := targetFrontierSelectionExploration
-		if bestGapScore > 0 {
+		if bestRepair > 0 {
+			selectionMode = targetFrontierSelectionPromptRepair
+		} else if bestVariantExpansion > 0 {
+			selectionMode = targetFrontierSelectionVariantExpand
+		} else if bestExpansion > 0 {
+			selectionMode = targetFrontierSelectionSeedExpand
+		} else if bestGapScore > 0 {
 			selectionMode = targetFrontierSelectionCoverageGap
 		}
 		out = append(out, TargetFrontierCandidate{
@@ -128,6 +173,7 @@ func summarizeTargetCoverageFrontier(
 			SeedID:               pick.SeedID,
 			TaskID:               pick.TaskID,
 			PromptProfileID:      pick.PromptProfileID,
+			PromptVariantID:      target.NormalizeTargetPromptVariantID(pick.PromptVariantID),
 			LifecycleOperationID: pick.LifecycleOperationID,
 			PlantPrimitiveID:     pick.PlantPrimitiveID,
 			ActivationKindID:     pick.ActivationKindID,
@@ -138,6 +184,9 @@ func summarizeTargetCoverageFrontier(
 			SelectionMode:        selectionMode,
 			CoveredGaps:          coveredGaps,
 		})
+		targetConsumePromptRepair(repair, pick)
+		targetConsumeVariantExpansion(variantExpansion, pick)
+		targetConsumeSeedExpansion(expansion, pick)
 		targetConsumeGapCoverage(gaps, pick)
 		state.record(pick)
 		remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)

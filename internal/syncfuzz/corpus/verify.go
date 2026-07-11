@@ -33,6 +33,7 @@ type VerificationEntryResult struct {
 	TargetID          string                 `json:"target_id,omitempty"`
 	TaskID            string                 `json:"task_id,omitempty"`
 	PromptProfileID   string                 `json:"prompt_profile_id,omitempty"`
+	PromptVariantID   string                 `json:"prompt_variant_id,omitempty"`
 	FaultPlanID       string                 `json:"fault_plan_id,omitempty"`
 	PrimitiveID       string                 `json:"primitive_id,omitempty"`
 	TimingProfileID   string                 `json:"timing_profile_id,omitempty"`
@@ -146,6 +147,7 @@ func VerifyCorpus(ctx context.Context, opts VerifyOptions) (*VerificationResult,
 			TargetID:          entry.TargetID,
 			TaskID:            entry.TaskID,
 			PromptProfileID:   entry.PromptProfileID,
+			PromptVariantID:   entry.PromptVariantID,
 			FaultPlanID:       entry.FaultPlanID,
 			PrimitiveID:       entry.PrimitiveID,
 			TimingProfileID:   entry.TimingProfileID,
@@ -177,6 +179,7 @@ func VerifyCorpus(ctx context.Context, opts VerifyOptions) (*VerificationResult,
 		item.TargetID = core.FirstNonEmpty(replay.TargetID, item.TargetID)
 		item.TaskID = core.FirstNonEmpty(replay.TaskID, item.TaskID)
 		item.PromptProfileID = core.FirstNonEmpty(replay.PromptProfileID, item.PromptProfileID)
+		item.PromptVariantID = core.FirstNonEmpty(replay.PromptVariantID, item.PromptVariantID)
 		item.Environment = replay.Environment
 		item.ContainerImage = replay.ContainerImage
 		item.FaultPlanID = replay.FaultPlanID
