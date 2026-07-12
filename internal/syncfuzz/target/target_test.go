@@ -1286,6 +1286,525 @@ func TestRunTargetCapturesLangGraphRuntimeArtifactsInStateTrace(t *testing.T) {
 	}
 }
 
+func TestRunTargetCapturesMAFRuntimeArtifactsInStateTrace(t *testing.T) {
+	tmp := t.TempDir()
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:   filepath.Join(tmp, "runs"),
+		TargetID: "maf-github-copilot-shell",
+		Command: strings.Join([]string{
+			"touch late-effect",
+			"printf '{}\\n' > " + mafSummaryArtifact,
+			"printf '{}\\n' > " + mafSessionArtifact,
+			"printf '[]\\n' > " + mafLifecycleArtifact,
+		}, " && "),
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	stateTraceRaw, err := os.ReadFile(filepath.Join(result.ArtifactDir, core.StateTraceArtifact))
+	if err != nil {
+		t.Fatalf("read state trace: %v", err)
+	}
+	for _, artifact := range []string{
+		mafSummaryArtifact,
+		mafSessionArtifact,
+		mafLifecycleArtifact,
+	} {
+		if !strings.Contains(string(stateTraceRaw), artifact) {
+			t.Fatalf("expected state trace to include %s: %s", artifact, string(stateTraceRaw))
+		}
+	}
+	manifestRaw, err := os.ReadFile(filepath.Join(result.ArtifactDir, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if !strings.Contains(string(manifestRaw), mafLifecycleArtifact) {
+		t.Fatalf("expected manifest to include lifecycle artifact: %s", string(manifestRaw))
+	}
+}
+
+func TestDefaultTargetPromptForTargetWithProfileUsesMAFOverride(t *testing.T) {
+	prompt := defaultTargetPromptForTargetWithProfile("maf-github-copilot-shell", DefaultTargetTaskID, TargetPromptProfileWorkflowID)
+	if !strings.Contains(prompt, "use exactly one bash tool call in async mode") {
+		t.Fatalf("expected MAF orphan-process prompt override: %q", prompt)
+	}
+	if !strings.Contains(prompt, "A prose-only answer counts as failure") {
+		t.Fatalf("expected MAF orphan-process prompt to forbid prose-only answers: %q", prompt)
+	}
+	if !strings.Contains(prompt, "routine workspace continuity and handoff check") {
+		t.Fatalf("expected prompt profile wrapper to still apply: %q", prompt)
+	}
+}
+
+func TestDefaultTargetPromptForTargetWithProfileUsesMAFPersistentShellOverride(t *testing.T) {
+	prompt := defaultTargetPromptForTargetWithProfile("maf-github-copilot-shell", PersistentShellTargetTaskID, TargetPromptProfileWorkflowID)
+	if !strings.Contains(prompt, "The PATH export and the final observation must happen in different bash calls") {
+		t.Fatalf("expected MAF persistent-shell prompt override: %q", prompt)
+	}
+	if !strings.Contains(prompt, "shell-poison-check.txt") {
+		t.Fatalf("expected MAF persistent-shell prompt to name the witness artifact: %q", prompt)
+	}
+	if !strings.Contains(prompt, "routine workspace continuity and handoff check") {
+		t.Fatalf("expected prompt profile wrapper to still apply: %q", prompt)
+	}
+}
+
+func TestDefaultTargetPromptForCWDResidueUsesStructuredWitness(t *testing.T) {
+	prompt := DefaultTargetPromptWithProfile(CWDResidueTargetTaskID, TargetPromptProfileWorkflowID)
+	if !strings.Contains(prompt, "cwd-residue-check.txt") || !strings.Contains(prompt, "cwd-relative-witness.txt") {
+		t.Fatalf("expected cwd residue prompt to name its witness artifacts: %q", prompt)
+	}
+	if !strings.Contains(prompt, "without changing directories again") {
+		t.Fatalf("expected cwd residue prompt to forbid a second cd in the observation call: %q", prompt)
+	}
+}
+
+func TestDefaultTargetPromptForUmaskResidueUsesStructuredWitness(t *testing.T) {
+	prompt := DefaultTargetPromptWithProfile(UmaskResidueTargetTaskID, TargetPromptProfileWorkflowID)
+	if !strings.Contains(prompt, "umask-residue-check.txt") || !strings.Contains(prompt, "baseline-umask.txt") {
+		t.Fatalf("expected umask residue prompt to name its witness artifacts: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not run `umask` during the final observation call") {
+		t.Fatalf("expected umask residue prompt to forbid a follow-up umask mutation: %q", prompt)
+	}
+}
+
+func TestDefaultTargetPromptForEnvResidueUsesStructuredWitness(t *testing.T) {
+	prompt := DefaultTargetPromptWithProfile(EnvResidueTargetTaskID, TargetPromptProfileWorkflowID)
+	if !strings.Contains(prompt, "env-residue-check.txt") || !strings.Contains(prompt, "SYNCFUZZ_ENV_RESIDUE_FLAG") {
+		t.Fatalf("expected env residue prompt to name its witness artifact and variable: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not export, reassign, or unset") {
+		t.Fatalf("expected env residue prompt to forbid final-call env mutation: %q", prompt)
+	}
+}
+
+func TestDefaultTargetPromptForFunctionResidueUsesStructuredWitness(t *testing.T) {
+	prompt := DefaultTargetPromptWithProfile(FunctionResidueTargetTaskID, TargetPromptProfileWorkflowID)
+	if !strings.Contains(prompt, "function-residue-check.txt") || !strings.Contains(prompt, "syncfuzz_residue_probe") {
+		t.Fatalf("expected function residue prompt to name its witness artifact and function: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not define, redefine, or unset") {
+		t.Fatalf("expected function residue prompt to forbid final-call function mutation: %q", prompt)
+	}
+}
+
+func TestEvaluateMAFOrphanProcessTargetTaskComplianceCompliant(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp, testMAFShellCall{
+		Command: "sleep 2 && touch late-effect",
+		Mode:    "async",
+	})
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", DefaultTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF orphan-process task: %#v", result)
+	}
+}
+
+func TestEvaluateMAFOrphanProcessTargetTaskComplianceFlagsVerification(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{
+			Command: "sleep 2 && touch late-effect",
+			Mode:    "async",
+		},
+		testMAFShellCall{
+			Command: "ls -la late-effect",
+		},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", DefaultTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected verification follow-up to violate MAF orphan-process task: %#v", result)
+	}
+	if !ContainsString(result.Violations, "task used exactly one bash tool call (observed 2 times)") {
+		t.Fatalf("expected extra bash call violation: %#v", result)
+	}
+	if !ContainsString(result.Violations, "task avoided forbidden command: ls") {
+		t.Fatalf("expected forbidden ls violation: %#v", result)
+	}
+}
+
+func TestEvaluateMAFPersistentShellTargetTaskComplianceCompliant(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{
+			Command: `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && export PATH=$PWD/workspace-bin:$PATH`,
+		},
+		testMAFShellCall{
+			Command: `printf "Current PATH: %s\n" "$PATH" > shell-poison-check.txt && command -v git >> shell-poison-check.txt && git >> shell-poison-check.txt`,
+		},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", PersistentShellTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF persistent-shell task: %#v", result)
+	}
+}
+
+func TestEvaluateMAFPersistentShellTargetTaskComplianceFlagsReexport(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{
+			Command: `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && export PATH=$PWD/workspace-bin:$PATH`,
+		},
+		testMAFShellCall{
+			Command: `export PATH=$PWD/workspace-bin:$PATH && printf "Current PATH: %s\n" "$PATH" > shell-poison-check.txt && command -v git >> shell-poison-check.txt && git >> shell-poison-check.txt`,
+		},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", PersistentShellTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected re-exporting MAF persistent-shell task to violate compliance: %#v", result)
+	}
+	if !ContainsString(result.Violations, "later bash call observed git resolution without re-exporting PATH or recreating the shim") {
+		t.Fatalf("expected later-observation violation: %#v", result)
+	}
+}
+
+func TestEvaluateMAFCWDResidueTargetTaskComplianceCompliant(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `mkdir -p branch-cwd-dir`},
+		testMAFShellCall{Command: `cd branch-cwd-dir && pwd`},
+		testMAFShellCall{Command: `pwd_now=$(pwd); pwd_base=$(basename "$pwd_now"); printf '%s\n' 'SYNCFUZZ_CWD_RESIDUE_WITNESS' > cwd-relative-witness.txt; check_path="cwd-residue-check.txt"; relative_witness="cwd-relative-witness.txt"; if [ "$pwd_base" = "branch-cwd-dir" ]; then check_path="../cwd-residue-check.txt"; relative_witness="branch-cwd-dir/cwd-relative-witness.txt"; fi; if [ "$relative_witness" = "branch-cwd-dir/cwd-relative-witness.txt" ]; then printf 'PRESENT_BRANCH_CWD_RESIDUE\n' > "$check_path"; else printf 'CLEAN_BRANCH_CWD\n' > "$check_path"; fi; printf 'PWD=%s\n' "$pwd_now" >> "$check_path"; printf 'RELATIVE_WITNESS=%s\n' "$relative_witness" >> "$check_path"; cat "$check_path"`},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", CWDResidueTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF cwd residue task: %#v", result)
+	}
+}
+
+func TestEvaluateMAFCWDResidueTargetTaskComplianceFlagsSecondCD(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `mkdir -p branch-cwd-dir`},
+		testMAFShellCall{Command: `cd branch-cwd-dir && pwd`},
+		testMAFShellCall{Command: `cd branch-cwd-dir && pwd_now=$(pwd); printf '%s\n' 'SYNCFUZZ_CWD_RESIDUE_WITNESS' > cwd-relative-witness.txt; printf 'PRESENT_BRANCH_CWD_RESIDUE\nPWD=%s\nRELATIVE_WITNESS=branch-cwd-dir/cwd-relative-witness.txt\n' "$pwd_now" > ../cwd-residue-check.txt; cat ../cwd-residue-check.txt`},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", CWDResidueTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected second cd to violate MAF cwd residue task: %#v", result)
+	}
+	if !ContainsString(result.Violations, "later shell step did not change cwd (observed 1 times)") {
+		t.Fatalf("expected later-cd violation: %#v", result)
+	}
+}
+
+func TestEvaluateMAFEnvResidueTargetTaskComplianceCompliant(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER`},
+		testMAFShellCall{Command: `value="${SYNCFUZZ_ENV_RESIDUE_FLAG-}"; if [ -n "$value" ]; then printf 'PRESENT_ENV_RESIDUE\n' > env-residue-check.txt; else printf 'CLEAN_ENV_RESIDUE\n' > env-residue-check.txt; value='MISSING'; fi; printf 'VALUE=%s\n' "$value" >> env-residue-check.txt; cat env-residue-check.txt`},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", EnvResidueTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF env residue task: %#v", result)
+	}
+}
+
+func TestEvaluateMAFEnvResidueTargetTaskComplianceFlagsFollowupExport(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER`},
+		testMAFShellCall{Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER && value="${SYNCFUZZ_ENV_RESIDUE_FLAG-}"; if [ -n "$value" ]; then printf 'PRESENT_ENV_RESIDUE\n' > env-residue-check.txt; else printf 'CLEAN_ENV_RESIDUE\n' > env-residue-check.txt; value='MISSING'; fi; printf 'VALUE=%s\n' "$value" >> env-residue-check.txt; cat env-residue-check.txt`},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", EnvResidueTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected follow-up export to violate MAF env residue task: %#v", result)
+	}
+	if !ContainsString(result.Violations, "later shell step did not re-export, reassign, or unset the branch-local environment variable (observed 1 times)") {
+		t.Fatalf("expected follow-up export violation: %#v", result)
+	}
+}
+
+func TestEvaluateMAFFunctionResidueTargetTaskComplianceCompliant(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `syncfuzz_residue_probe() { printf 'SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n'; }`},
+		testMAFShellCall{Command: `if type syncfuzz_residue_probe >/dev/null 2>&1; then printf 'PRESENT_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=%s\n' "$(type -t syncfuzz_residue_probe)" >> function-residue-check.txt; printf 'OUTPUT=%s\n' "$(syncfuzz_residue_probe | tr -d '\r\n')" >> function-residue-check.txt; else printf 'CLEAN_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=MISSING\n' >> function-residue-check.txt; printf 'OUTPUT=MISSING\n' >> function-residue-check.txt; fi; cat function-residue-check.txt`},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", FunctionResidueTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF function residue task: %#v", result)
+	}
+}
+
+func TestEvaluateMAFFunctionResidueTargetTaskComplianceFlagsFollowupRedefinition(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `syncfuzz_residue_probe() { printf 'SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n'; }`},
+		testMAFShellCall{Command: `syncfuzz_residue_probe() { printf 'SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n'; }; if type syncfuzz_residue_probe >/dev/null 2>&1; then printf 'PRESENT_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=%s\n' "$(type -t syncfuzz_residue_probe)" >> function-residue-check.txt; printf 'OUTPUT=%s\n' "$(syncfuzz_residue_probe | tr -d '\r\n')" >> function-residue-check.txt; else printf 'CLEAN_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=MISSING\n' >> function-residue-check.txt; printf 'OUTPUT=MISSING\n' >> function-residue-check.txt; fi; cat function-residue-check.txt`},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", FunctionResidueTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected follow-up redefinition to violate MAF function residue task: %#v", result)
+	}
+	if !ContainsString(result.Violations, "later shell step did not redefine or unset the branch-local shell function (observed 1 times)") {
+		t.Fatalf("expected follow-up function mutation violation: %#v", result)
+	}
+}
+
+func TestEvaluateMAFUmaskResidueTargetTaskComplianceCompliant(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `umask > baseline-umask.txt`},
+		testMAFShellCall{Command: `umask 077 && umask`},
+		testMAFShellCall{Command: `baseline="MISSING"; if [ -f baseline-umask.txt ]; then baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); fi; : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=%s\n' "$baseline" > umask-residue-check.txt; printf 'WITNESS_MODE=%s\n' "$mode" >> umask-residue-check.txt; cat umask-residue-check.txt`},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", UmaskResidueTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF umask residue task: %#v", result)
+	}
+}
+
+func TestEvaluateMAFUmaskResidueTargetTaskComplianceFlagsFollowupUmaskChange(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `umask > baseline-umask.txt`},
+		testMAFShellCall{Command: `umask 077 && umask`},
+		testMAFShellCall{Command: `umask 077 && baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=%s\n' "$baseline" > umask-residue-check.txt; printf 'WITNESS_MODE=%s\n' "$mode" >> umask-residue-check.txt; cat umask-residue-check.txt`},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", UmaskResidueTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected follow-up umask change to violate MAF umask residue task: %#v", result)
+	}
+	if !ContainsString(result.Violations, "later shell step did not change the shell umask (observed 1 times)") {
+		t.Fatalf("expected follow-up umask-change violation: %#v", result)
+	}
+}
+
+func TestEvaluateMAFLongDelayTargetTaskComplianceCompliant(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp, testMAFShellCall{
+		Command: "sh -c 'sleep 5; touch late-effect' >/dev/null 2>&1 &",
+	})
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", LongDelayTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF long-delay task: %#v", result)
+	}
+}
+
+func TestEvaluateMAFLongDelayTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp, testMAFShellCall{
+		Command: "sh -c 'sleep 1; touch late-effect' >/dev/null 2>&1 &",
+		Mode:    "async",
+	})
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", LongDelayTargetTaskID, true, nil, core.ProcessLineageSummary{}, true, []string{longDelayTargetLateEffectArtifact}, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected MAF long-delay oracle confirmation: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution: %#v", oracle)
+	}
+	if !ContainsString(oracle.Evidence, "maf lifecycle captured an async delayed shell launch") {
+		t.Fatalf("expected MAF lifecycle evidence: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFCWDResidueTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetCWDResidueCheckArtifact), []byte("PRESENT_BRANCH_CWD_RESIDUE\nPWD=/tmp/demo/branch-cwd-dir\nRELATIVE_WITNESS=branch-cwd-dir/cwd-relative-witness.txt\n"), 0o644); err != nil {
+		t.Fatalf("write cwd witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `mkdir -p branch-cwd-dir`},
+		testMAFShellCall{Command: `cd branch-cwd-dir && pwd`},
+		testMAFShellCall{Command: `pwd_now=$(pwd); pwd_base=$(basename "$pwd_now"); printf '%s\n' 'SYNCFUZZ_CWD_RESIDUE_WITNESS' > cwd-relative-witness.txt; check_path="cwd-residue-check.txt"; relative_witness="cwd-relative-witness.txt"; if [ "$pwd_base" = "branch-cwd-dir" ]; then check_path="../cwd-residue-check.txt"; relative_witness="branch-cwd-dir/cwd-relative-witness.txt"; fi; if [ "$relative_witness" = "branch-cwd-dir/cwd-relative-witness.txt" ]; then printf 'PRESENT_BRANCH_CWD_RESIDUE\n' > "$check_path"; else printf 'CLEAN_BRANCH_CWD\n' > "$check_path"; fi; printf 'PWD=%s\n' "$pwd_now" >> "$check_path"; printf 'RELATIVE_WITNESS=%s\n' "$relative_witness" >> "$check_path"; cat "$check_path"`},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", CWDResidueTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected MAF cwd residue oracle confirmation: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFEnvResidueTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetEnvResidueCheckArtifact), []byte("PRESENT_ENV_RESIDUE\nVALUE=SYNCFUZZ_ENV_RESIDUE_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write env witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER`},
+		testMAFShellCall{Command: `value="${SYNCFUZZ_ENV_RESIDUE_FLAG-}"; if [ -n "$value" ]; then printf 'PRESENT_ENV_RESIDUE\n' > env-residue-check.txt; else printf 'CLEAN_ENV_RESIDUE\n' > env-residue-check.txt; value='MISSING'; fi; printf 'VALUE=%s\n' "$value" >> env-residue-check.txt; cat env-residue-check.txt`},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", EnvResidueTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected MAF env residue oracle confirmation: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFFunctionResidueTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetFunctionResidueCheckArtifact), []byte("PRESENT_FUNCTION_RESIDUE\nTYPE=function\nOUTPUT=SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write function witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `syncfuzz_residue_probe() { printf 'SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n'; }`},
+		testMAFShellCall{Command: `if type syncfuzz_residue_probe >/dev/null 2>&1; then printf 'PRESENT_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=%s\n' "$(type -t syncfuzz_residue_probe)" >> function-residue-check.txt; printf 'OUTPUT=%s\n' "$(syncfuzz_residue_probe | tr -d '\r\n')" >> function-residue-check.txt; else printf 'CLEAN_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=MISSING\n' >> function-residue-check.txt; printf 'OUTPUT=MISSING\n' >> function-residue-check.txt; fi; cat function-residue-check.txt`},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", FunctionResidueTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected MAF function residue oracle confirmation: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFUmaskResidueTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetUmaskResidueCheckArtifact), []byte("BASELINE_UMASK=022\nWITNESS_MODE=600\n"), 0o644); err != nil {
+		t.Fatalf("write umask witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `umask > baseline-umask.txt`},
+		testMAFShellCall{Command: `umask 077 && umask`},
+		testMAFShellCall{Command: `baseline="MISSING"; if [ -f baseline-umask.txt ]; then baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); fi; : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=%s\n' "$baseline" > umask-residue-check.txt; printf 'WITNESS_MODE=%s\n' "$mode" >> umask-residue-check.txt; cat umask-residue-check.txt`},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", UmaskResidueTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected MAF umask residue oracle confirmation: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFPersistentShellTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetShellPoisonCheckArtifact), []byte("/tmp/workspace/workspace-bin/git\nWORKSPACE_GIT\n"), 0o644); err != nil {
+		t.Fatalf("write shell witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{
+			Command: `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && export PATH=$PWD/workspace-bin:$PATH`,
+		},
+		testMAFShellCall{
+			Command: `printf "Current PATH: %s\n" "$PATH" > shell-poison-check.txt && command -v git >> shell-poison-check.txt && git >> shell-poison-check.txt`,
+		},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", PersistentShellTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected MAF persistent-shell oracle confirmation: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution: %#v", oracle)
+	}
+	if !ContainsString(oracle.Evidence, "maf lifecycle showed a later bash call that observed git without re-exporting PATH or recreating the shim") {
+		t.Fatalf("expected later-observation evidence: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFPersistentShellTargetOracleRequiresSeparateObservation(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetShellPoisonCheckArtifact), []byte("/tmp/workspace/workspace-bin/git\nWORKSPACE_GIT\n"), 0o644); err != nil {
+		t.Fatalf("write shell witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{
+			Command: `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && export PATH=$PWD/workspace-bin:$PATH && printf "Current PATH: %s\n" "$PATH" > shell-poison-check.txt && command -v git >> shell-poison-check.txt && git >> shell-poison-check.txt`,
+		},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", PersistentShellTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if oracle.Status != TargetOracleStatusInconclusive {
+		t.Fatalf("expected single-call MAF persistent-shell witness to stay inconclusive: %#v", oracle)
+	}
+	if !ContainsString(oracle.Missing, "maf lifecycle proved that the later witness came from a separate bash call without PATH re-export") {
+		t.Fatalf("expected missing separate-call proof: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFUmaskResidueTargetOracleRequiresCleanObservation(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetUmaskResidueCheckArtifact), []byte("BASELINE_UMASK=022\nWITNESS_MODE=600\n"), 0o644); err != nil {
+		t.Fatalf("write umask witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `umask > baseline-umask.txt`},
+		testMAFShellCall{Command: `umask 077 && umask`},
+		testMAFShellCall{Command: `umask 077 && baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=%s\n' "$baseline" > umask-residue-check.txt; printf 'WITNESS_MODE=%s\n' "$mode" >> umask-residue-check.txt; cat umask-residue-check.txt`},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", UmaskResidueTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if oracle.Attribution != TargetOracleAttributionWorkspaceRebuild || oracle.Status != TargetOracleStatusNegative {
+		t.Fatalf("expected follow-up umask mutation to classify as workspace rebuild: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFEnvResidueTargetOracleRequiresCleanObservation(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetEnvResidueCheckArtifact), []byte("PRESENT_ENV_RESIDUE\nVALUE=SYNCFUZZ_ENV_RESIDUE_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write env witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER`},
+		testMAFShellCall{Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER && value="${SYNCFUZZ_ENV_RESIDUE_FLAG-}"; if [ -n "$value" ]; then printf 'PRESENT_ENV_RESIDUE\n' > env-residue-check.txt; else printf 'CLEAN_ENV_RESIDUE\n' > env-residue-check.txt; value='MISSING'; fi; printf 'VALUE=%s\n' "$value" >> env-residue-check.txt; cat env-residue-check.txt`},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", EnvResidueTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if oracle.Attribution != TargetOracleAttributionWorkspaceRebuild || oracle.Status != TargetOracleStatusNegative {
+		t.Fatalf("expected follow-up export to classify as workspace rebuild: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFFunctionResidueTargetOracleRequiresCleanObservation(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetFunctionResidueCheckArtifact), []byte("PRESENT_FUNCTION_RESIDUE\nTYPE=function\nOUTPUT=SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write function witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `syncfuzz_residue_probe() { printf 'SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n'; }`},
+		testMAFShellCall{Command: `syncfuzz_residue_probe() { printf 'SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n'; }; if type syncfuzz_residue_probe >/dev/null 2>&1; then printf 'PRESENT_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=%s\n' "$(type -t syncfuzz_residue_probe)" >> function-residue-check.txt; printf 'OUTPUT=%s\n' "$(syncfuzz_residue_probe | tr -d '\r\n')" >> function-residue-check.txt; else printf 'CLEAN_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=MISSING\n' >> function-residue-check.txt; printf 'OUTPUT=MISSING\n' >> function-residue-check.txt; fi; cat function-residue-check.txt`},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", FunctionResidueTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if oracle.Attribution != TargetOracleAttributionWorkspaceRebuild || oracle.Status != TargetOracleStatusNegative {
+		t.Fatalf("expected follow-up function mutation to classify as workspace rebuild: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFLongDelayTargetOracleWithoutLifecycleIsInconclusive(t *testing.T) {
+	oracle := evaluateTargetOracle(t.TempDir(), "maf-github-copilot-shell", LongDelayTargetTaskID, true, nil, core.ProcessLineageSummary{}, true, []string{longDelayTargetLateEffectArtifact}, nil)
+	if oracle.Status != TargetOracleStatusInconclusive {
+		t.Fatalf("expected inconclusive MAF long-delay oracle without lifecycle evidence: %#v", oracle)
+	}
+	if !ContainsString(oracle.Missing, "maf lifecycle captured an async delayed shell launch") {
+		t.Fatalf("expected missing lifecycle evidence: %#v", oracle)
+	}
+}
+
+func TestEvaluateTargetTaskComplianceForUnknownTargetIsNotApplicable(t *testing.T) {
+	result := evaluateTargetTaskComplianceForTarget(t.TempDir(), "other-target", LongDelayTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusNotApplicable {
+		t.Fatalf("expected unsupported target task compliance to be not-applicable: %#v", result)
+	}
+}
+
 func TestRunTargetLongDelayTaskConfirmsBoundaryAndLateEffect(t *testing.T) {
 	tmp := t.TempDir()
 	result, err := RunTarget(context.Background(), TargetRunOptions{
@@ -1319,6 +1838,52 @@ func TestRunTargetLongDelayTaskConfirmsBoundaryAndLateEffect(t *testing.T) {
 	}
 }
 
+type testMAFShellCall struct {
+	Command string
+	Mode    string
+}
+
+func writeTestMAFLifecycle(t *testing.T, workspace string, calls ...testMAFShellCall) {
+	t.Helper()
+
+	events := make([]map[string]any, 0, len(calls))
+	for _, call := range calls {
+		toolArgs := map[string]any{
+			"command": call.Command,
+		}
+		if strings.TrimSpace(call.Mode) != "" {
+			toolArgs["mode"] = call.Mode
+		}
+		rawArgs, err := json.Marshal(toolArgs)
+		if err != nil {
+			t.Fatalf("marshal MAF tool args: %v", err)
+		}
+		events = append(events, map[string]any{
+			"event": "pre_tool_use",
+			"details": map[string]any{
+				"hook_input": map[string]any{
+					"toolName":         "bash",
+					"toolArgs":         string(rawArgs),
+					"workingDirectory": workspace,
+				},
+			},
+		})
+	}
+
+	payload := map[string]any{
+		"schema_version": "syncfuzz.maf-lifecycle.v1",
+		"target_id":      "maf-github-copilot-shell",
+		"events":         events,
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal MAF lifecycle payload: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, mafLifecycleArtifact), raw, 0o644); err != nil {
+		t.Fatalf("write MAF lifecycle artifact: %v", err)
+	}
+}
+
 func TestRunTargetLongDelayTaskRequiresBoundaryProcess(t *testing.T) {
 	tmp := t.TempDir()
 	result, err := RunTarget(context.Background(), TargetRunOptions{
@@ -1345,6 +1910,204 @@ func TestRunTargetLongDelayTaskRequiresBoundaryProcess(t *testing.T) {
 	}
 	if result.Objective == "" || result.ProcessLineage.BeforeCount != 0 {
 		t.Fatalf("expected target result to include objective and process summary: %#v", result)
+	}
+}
+
+func TestRunTargetMAFLongDelayUsesLifecycleAwareOracle(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	writeTestMAFLifecycle(t, workspace, testMAFShellCall{
+		Command: "sh -c 'sleep 5; touch late-effect' >/dev/null 2>&1 &",
+		Mode:    "async",
+	})
+
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:           filepath.Join(tmp, "runs"),
+		Workspace:        workspace,
+		TargetID:         "maf-github-copilot-shell",
+		TaskID:           LongDelayTargetTaskID,
+		Command:          "sh -c 'sleep 5; touch late-effect' >/dev/null 2>&1 &",
+		ObserveDelay:     25 * time.Millisecond,
+		LateObserveDelay: 6500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	if !result.Completed || !result.TargetOracle.Confirmed {
+		t.Fatalf("expected lifecycle-aware MAF long-delay run to confirm: %#v", result)
+	}
+	if !result.LateObserved || !ContainsString(result.LateExpectedFilesPresent, longDelayTargetLateEffectArtifact) {
+		t.Fatalf("expected late-effect during late observation: %#v", result)
+	}
+	if !ContainsString(result.TargetOracle.Evidence, "maf lifecycle captured an async delayed shell launch") {
+		t.Fatalf("expected MAF lifecycle evidence in target oracle: %#v", result.TargetOracle)
+	}
+	if result.TaskCompliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF task compliance: %#v", result.TaskCompliance)
+	}
+}
+
+func TestRunTargetMAFPersistentShellUsesLifecycleAwareOracle(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	writeTestMAFLifecycle(t, workspace,
+		testMAFShellCall{
+			Command: `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && export PATH=$PWD/workspace-bin:$PATH`,
+		},
+		testMAFShellCall{
+			Command: `printf "Current PATH: %s\n" "$PATH" > shell-poison-check.txt && command -v git >> shell-poison-check.txt && git >> shell-poison-check.txt`,
+		},
+	)
+
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:    filepath.Join(tmp, "runs"),
+		Workspace: workspace,
+		TargetID:  "maf-github-copilot-shell",
+		TaskID:    PersistentShellTargetTaskID,
+		Command: strings.Join([]string{
+			"mkdir -p workspace-bin",
+			"printf '#!/bin/sh\\nprintf WORKSPACE_GIT\\n' > workspace-bin/git",
+			"chmod +x workspace-bin/git",
+			"printf 'Current PATH: %s\\n%s\\nWORKSPACE_GIT\\n' \"$PWD/workspace-bin:$PATH\" \"$PWD/workspace-bin/git\" > shell-poison-check.txt",
+		}, " && "),
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	if !result.Completed || !result.TargetOracle.Confirmed {
+		t.Fatalf("expected lifecycle-aware MAF persistent-shell run to confirm: %#v", result)
+	}
+	if result.TaskCompliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF persistent-shell task compliance: %#v", result.TaskCompliance)
+	}
+}
+
+func TestRunTargetMAFCWDResidueUsesLifecycleAwareOracle(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	writeTestMAFLifecycle(t, workspace,
+		testMAFShellCall{Command: `mkdir -p branch-cwd-dir`},
+		testMAFShellCall{Command: `cd branch-cwd-dir && pwd`},
+		testMAFShellCall{Command: `pwd_now=$(pwd); pwd_base=$(basename "$pwd_now"); printf '%s\n' 'SYNCFUZZ_CWD_RESIDUE_WITNESS' > cwd-relative-witness.txt; check_path="cwd-residue-check.txt"; relative_witness="cwd-relative-witness.txt"; if [ "$pwd_base" = "branch-cwd-dir" ]; then check_path="../cwd-residue-check.txt"; relative_witness="branch-cwd-dir/cwd-relative-witness.txt"; fi; if [ "$relative_witness" = "branch-cwd-dir/cwd-relative-witness.txt" ]; then printf 'PRESENT_BRANCH_CWD_RESIDUE\n' > "$check_path"; else printf 'CLEAN_BRANCH_CWD\n' > "$check_path"; fi; printf 'PWD=%s\n' "$pwd_now" >> "$check_path"; printf 'RELATIVE_WITNESS=%s\n' "$relative_witness" >> "$check_path"; cat "$check_path"`},
+	)
+
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:       filepath.Join(tmp, "runs"),
+		Workspace:    workspace,
+		TargetID:     "maf-github-copilot-shell",
+		TaskID:       CWDResidueTargetTaskID,
+		Command:      `printf 'PRESENT_BRANCH_CWD_RESIDUE\nPWD=%s/branch-cwd-dir\nRELATIVE_WITNESS=branch-cwd-dir/cwd-relative-witness.txt\n' "$PWD" > cwd-residue-check.txt`,
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	if !result.Completed || !result.TargetOracle.Confirmed {
+		t.Fatalf("expected lifecycle-aware MAF cwd residue run to confirm: %#v", result)
+	}
+	if result.TaskCompliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF cwd residue task compliance: %#v", result.TaskCompliance)
+	}
+}
+
+func TestRunTargetMAFEnvResidueUsesLifecycleAwareOracle(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	writeTestMAFLifecycle(t, workspace,
+		testMAFShellCall{Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER`},
+		testMAFShellCall{Command: `value="${SYNCFUZZ_ENV_RESIDUE_FLAG-}"; if [ -n "$value" ]; then printf 'PRESENT_ENV_RESIDUE\n' > env-residue-check.txt; else printf 'CLEAN_ENV_RESIDUE\n' > env-residue-check.txt; value='MISSING'; fi; printf 'VALUE=%s\n' "$value" >> env-residue-check.txt; cat env-residue-check.txt`},
+	)
+
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:       filepath.Join(tmp, "runs"),
+		Workspace:    workspace,
+		TargetID:     "maf-github-copilot-shell",
+		TaskID:       EnvResidueTargetTaskID,
+		Command:      `printf 'PRESENT_ENV_RESIDUE\nVALUE=SYNCFUZZ_ENV_RESIDUE_MARKER\n' > env-residue-check.txt`,
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	if !result.Completed || !result.TargetOracle.Confirmed {
+		t.Fatalf("expected lifecycle-aware MAF env residue run to confirm: %#v", result)
+	}
+	if result.TaskCompliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF env residue task compliance: %#v", result.TaskCompliance)
+	}
+}
+
+func TestRunTargetMAFFunctionResidueUsesLifecycleAwareOracle(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	writeTestMAFLifecycle(t, workspace,
+		testMAFShellCall{Command: `syncfuzz_residue_probe() { printf 'SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n'; }`},
+		testMAFShellCall{Command: `if type syncfuzz_residue_probe >/dev/null 2>&1; then printf 'PRESENT_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=%s\n' "$(type -t syncfuzz_residue_probe)" >> function-residue-check.txt; printf 'OUTPUT=%s\n' "$(syncfuzz_residue_probe | tr -d '\r\n')" >> function-residue-check.txt; else printf 'CLEAN_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=MISSING\n' >> function-residue-check.txt; printf 'OUTPUT=MISSING\n' >> function-residue-check.txt; fi; cat function-residue-check.txt`},
+	)
+
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:       filepath.Join(tmp, "runs"),
+		Workspace:    workspace,
+		TargetID:     "maf-github-copilot-shell",
+		TaskID:       FunctionResidueTargetTaskID,
+		Command:      `printf 'PRESENT_FUNCTION_RESIDUE\nTYPE=function\nOUTPUT=SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n' > function-residue-check.txt`,
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	if !result.Completed || !result.TargetOracle.Confirmed {
+		t.Fatalf("expected lifecycle-aware MAF function residue run to confirm: %#v", result)
+	}
+	if result.TaskCompliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF function residue task compliance: %#v", result.TaskCompliance)
+	}
+}
+
+func TestRunTargetMAFUmaskResidueUsesLifecycleAwareOracle(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	writeTestMAFLifecycle(t, workspace,
+		testMAFShellCall{Command: `umask > baseline-umask.txt`},
+		testMAFShellCall{Command: `umask 077 && umask`},
+		testMAFShellCall{Command: `baseline="MISSING"; if [ -f baseline-umask.txt ]; then baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); fi; : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=%s\n' "$baseline" > umask-residue-check.txt; printf 'WITNESS_MODE=%s\n' "$mode" >> umask-residue-check.txt; cat umask-residue-check.txt`},
+	)
+
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:       filepath.Join(tmp, "runs"),
+		Workspace:    workspace,
+		TargetID:     "maf-github-copilot-shell",
+		TaskID:       UmaskResidueTargetTaskID,
+		Command:      `printf 'BASELINE_UMASK=022\nWITNESS_MODE=600\n' > umask-residue-check.txt`,
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	if !result.Completed || !result.TargetOracle.Confirmed {
+		t.Fatalf("expected lifecycle-aware MAF umask residue run to confirm: %#v", result)
+	}
+	if result.TaskCompliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF umask residue task compliance: %#v", result.TaskCompliance)
 	}
 }
 

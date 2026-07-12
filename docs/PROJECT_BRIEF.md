@@ -50,7 +50,7 @@ seed primitive
   -> reproducible mismatch signature
 ```
 
-只要这个闭环稳定，后续才能安全地扩展到 LangGraph persistent shell、AutoGen command executor、OpenHands sandbox，以及真实 LLM 诱导阶段。
+只要这个闭环稳定，后续才能安全地扩展到 LangGraph persistent shell、MAF Workflow / GitHubCopilotAgent、OpenHands sandbox，以及真实 LLM 诱导阶段。AutoGen 保留为历史架构对照，而不是第二个主线 target。
 
 ## 运行环境策略
 

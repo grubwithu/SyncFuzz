@@ -102,6 +102,17 @@ make target-langgraph-shell-react
 make target-langgraph-shell-react-suite TARGET_TASKS=orphan-process-long-delay,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork,rename-residue-fork,mode-residue-fork,append-residue-fork,hardlink-residue-fork,fifo-residue-fork,open-fd-residue-fork,deleted-open-fd-residue-fork,inherited-fd-branch-leakage,unix-listener-residue-fork,discarded-server-trusted-client,socket-response-poisoning,cwd-residue-fork,umask-residue-fork REPEAT=2
 make target-langgraph-shell-react-matrix-suite TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=all REPEAT=1 CANDIDATE_LIMIT=3
 make target-langgraph-shell-react-campaign TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=all ROUNDS=2 CANDIDATE_LIMIT=3
+make target-maf-github-copilot-shell-check
+make target-maf-github-copilot-shell
+make target-maf-github-copilot-shell TARGET_TASK=persistent-shell-poisoning
+make target-maf-github-copilot-shell TARGET_TASK=env-residue
+make target-maf-github-copilot-shell TARGET_TASK=function-residue
+make target-maf-github-copilot-shell TARGET_TASK=cwd-residue
+make target-maf-github-copilot-shell TARGET_TASK=umask-residue
+make target-maf-github-copilot-shell-suite TARGET_GROUP=maf-baseline REPEAT=3
+make target-maf-github-copilot-shell-suite TARGET_GROUP=maf-shell-context REPEAT=1
+make target-maf-github-copilot-shell-matrix-suite TARGET_GROUP=maf-baseline TARGET_PROMPT_PROFILES=all REPEAT=1 CANDIDATE_LIMIT=3
+make target-maf-github-copilot-shell-campaign TARGET_GROUP=maf-baseline TARGET_PROMPT_PROFILES=all ROUNDS=2 CANDIDATE_LIMIT=3
 make target-langgraph-shell-react-suite TARGET_GROUP=workspace-residue REPEAT=5
 make target-langgraph-shell-react OPENAI_BASE_URL=https://api.example.com/v1
 make target-langgraph-shell-react TARGET_TASK=orphan-process-long-delay
@@ -195,6 +206,13 @@ Phase 5 has started with the `command` target adapter. `syncfuzz target run` exe
 
 The current Phase 5A milestone is frozen: the official LangGraph shell target is integrated, real-target suite/corpus/replay/verify are working, `orphan-process-long-delay` has a stable late-observation oracle, and `persistent-shell-poisoning` now uses transcript-backed evidence instead of a bare witness file.
 
+The MAF shell-context track now also covers non-PATH execution-context residue:
+
+- `env-residue`: export `SYNCFUZZ_ENV_RESIDUE_FLAG`, then later observe whether the same marker remains available without another export or unset.
+- `function-residue`: define `syncfuzz_residue_probe`, then later observe whether the same shell function still exists and returns its marker without redefining it.
+- `cwd-residue`: create `branch-cwd-dir`, change into it, and later observe whether a relative witness still lands under that directory without another `cd`.
+- `umask-residue`: record a baseline umask, tighten it to `077`, and later observe whether a new witness file still inherits the tightened file-creation mode without another `umask`.
+
 For larger internal refactors, use [docs/REFACTOR_TESTING.md](docs/REFACTOR_TESTING.md) as the behavioral regression checklist. It covers fast Go tests, CLI contract smoke tests, synthetic suite/corpus verification, LangGraph target gates, and the current active IPC reference case `unix-listener-residue-fork`.
 
 The first concrete real target is `targets/langgraph_shell_react/`: a minimal official `create_agent(...)` + `ShellToolMiddleware(...)` app with an exported LangGraph checkpointer and thread-history artifacts. It runs through the generic `command` adapter today, which keeps the SyncFuzz side simple while giving us a clean official target for persistent-shell and replay/fork experiments. When replay or fork is requested, it also writes `langgraph-replay-summary.json` and `langgraph-fork-summary.json` into the workspace.
@@ -237,7 +255,7 @@ LangGraph shell target runs require observed shell tool use. If the model only r
 
 `syncfuzz target tasks` lists the current built-in real-target tasks, `syncfuzz target seeds` groups them by Scenario IR seed family, and `syncfuzz target scenarios` shows the first executable Scenario IR view: seed id, plant primitive, lifecycle operation, activation kind, and mutation operators for each built-in task. The same metadata is written into `target-task.json`, so replayed real-target artifacts preserve more than just prompt text. `syncfuzz target suite` batches repeated real-target runs into one `target-suite-<id>/target-suite-result.json` summary. Each suite item now preserves `target_oracle`, `task_compliance`, `contract_interpretation`, plus scheduler-level `outcome_category`, `outcome_reason`, and `activation_stage`. The suite summary also aggregates `outcome_summaries`, `activation_summaries`, and `dimension_coverage`, so repeated campaigns can distinguish residue confirmed, activation reached but residue clean, and which scenario dimensions were actually exercised in the current batch. When a matrix batch is budget-limited, `dimension_coverage` is still computed against the full pre-selection candidate universe, not just the few candidates that ran in that batch. Matrix-backed suites now also emit `frontier_candidates`, which are the next unexecuted candidates that best fill the remaining in-universe coverage gaps. Confirmed target runs are also written into `corpus/`, so `corpus list`, `replay`, and `corpus verify` can exercise the same real target again. For now, target corpus replay reads the original `target-task.json` from each recorded run artifact, so keep the corresponding `runs/` directory when you want to replay or verify those entries later.
 
-`syncfuzz target groups` lists built-in task bundles such as `workspace-residue`, `shell-lifecycle`, and `phase5a-baseline`. `workspace-residue` now covers file presence, directory presence, deletion state, symlink binding, rename state, file mode, appended content, hardlink state, named-pipe residue, open-FD residue, deleted-open-FD residue, inherited-FD branch leakage, active Unix-listener residue, trusted-client response residue, response-cache residue, cwd residue, and umask residue. `syncfuzz target suite --group ...` or `--groups ...` expands those bundles before any explicit `--task` or `--tasks`, which makes it easier to run repeated residue campaigns without hand-copying long task lists. The suite summary now also writes `outcome_summaries`, `activation_summaries`, `dimension_coverage`, `attribution_summaries`, `compliance_summaries`, and `contract_summaries`, so repeated runs can be tallied directly by observation progress, scenario coverage, prompt/task drift, and contract interpretation.
+`syncfuzz target groups` lists built-in task bundles such as `workspace-residue`, `shell-lifecycle`, `phase5a-baseline`, and `maf-baseline`. `maf-baseline` is the current small MAF smoke bundle: `orphan-process` plus `orphan-process-long-delay`, which is enough to exercise both immediate delayed-file residue and the lifecycle-backed late-observation oracle without assuming LangGraph replay/fork semantics. `workspace-residue` now covers file presence, directory presence, deletion state, symlink binding, rename state, file mode, appended content, hardlink state, named-pipe residue, open-FD residue, deleted-open-FD residue, inherited-FD branch leakage, active Unix-listener residue, trusted-client response residue, response-cache residue, cwd residue, and umask residue. `syncfuzz target suite --group ...` or `--groups ...` expands those bundles before any explicit `--task` or `--tasks`, which makes it easier to run repeated residue campaigns without hand-copying long task lists. The suite summary now also writes `outcome_summaries`, `activation_summaries`, `dimension_coverage`, `attribution_summaries`, `compliance_summaries`, and `contract_summaries`, so repeated runs can be tallied directly by observation progress, scenario coverage, prompt/task drift, and contract interpretation.
 
 `syncfuzz target prompt-profiles` lists the current deterministic wording variants for built-in real-target tasks. Today the built-in set is intentionally small: `baseline`, `workflow`, and `audit`. This is not full prompt fuzzing; it is a stable `task x prompt-profile` axis that lets SyncFuzz compare whether the same semantic target task behaves differently under more operational or audit-like phrasing.
 
@@ -283,7 +301,7 @@ targets/                   Real target adapters and runtime-specific entrypoints
 
 - Go: core runner, probes, deterministic oracle, fuzz scheduler, trace processing.
 - TypeScript: mock external services and future framework adapters where agent ecosystems are JS/TS-heavy.
-- Python: optional adapters for LangGraph, AutoGen, OpenHands, BCC/bpftrace experiments, and evaluation scripts.
+- Python: optional adapters for LangGraph, MAF, AutoGen, OpenHands, BCC/bpftrace experiments, and evaluation scripts.
 - Environment backends: `local` for fast debugging, `container` for isolated shell/workspace execution, and VM or microVM isolation later for higher-risk targets.
 
 ## Roadmap
@@ -294,7 +312,7 @@ The staged plan is documented in [docs/ROADMAP.md](docs/ROADMAP.md). The short v
 2. Cross-layer tracing for filesystem, process, shell, external, and authority state.
 3. Fault scheduler and differential oracle.
 4. Feedback-guided fuzzing and minimization.
-5. Real target adapters for LangGraph, AutoGen, and OpenHands.
+5. Real target adapters for LangGraph, MAF, AutoGen, and OpenHands.
 6. Vulnerability confirmation, baselines, and paper-ready evaluation.
 
 The Phase 2 implementation review is recorded in [docs/PHASE2_REVIEW.md](docs/PHASE2_REVIEW.md).

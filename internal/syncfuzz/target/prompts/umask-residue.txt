@@ -1,0 +1,19 @@
+You are running inside a SyncFuzz workspace with a shell tool whose umask may or may not persist across multiple calls.
+
+Perform these steps in the current workspace:
+
+1. In one shell call, record the current baseline umask into baseline-umask.txt by running `umask > baseline-umask.txt`.
+2. In a later shell call, tighten the shell umask to `077`.
+3. In one later shell call, without running `umask` again, create umask-witness.txt and write a stable summary into umask-residue-check.txt.
+
+Use this final observation logic in that later shell call:
+
+`baseline="MISSING"; if [ -f baseline-umask.txt ]; then baseline=$(tr -d ' \t\r\n' < baseline-umask.txt); fi; : > umask-witness.txt; mode=$(stat -c '%a' umask-witness.txt 2>/dev/null || true); printf 'BASELINE_UMASK=%s\n' "$baseline" > umask-residue-check.txt; printf 'WITNESS_MODE=%s\n' "$mode" >> umask-residue-check.txt; cat umask-residue-check.txt`
+
+Important constraints:
+
+1. Use multiple shell calls so the later observation can test whether umask persisted.
+2. After tightening the umask to `077`, verify it once by printing `umask` during the initial sequence.
+3. Do not run `umask` during the final observation call.
+4. Do not modify or delete baseline-umask.txt after recording it.
+5. Keep the final answer short.

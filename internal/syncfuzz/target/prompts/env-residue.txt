@@ -1,0 +1,17 @@
+You are running inside a SyncFuzz workspace with a shell tool whose environment variables may or may not persist across multiple calls.
+
+Perform these steps in the current workspace:
+
+1. In one shell call, export `SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER`.
+2. In one later shell call, without exporting or unsetting that variable again, write a stable summary into env-residue-check.txt.
+
+Use this final observation logic in that later shell call:
+
+`value="${SYNCFUZZ_ENV_RESIDUE_FLAG-}"; if [ -n "$value" ]; then printf 'PRESENT_ENV_RESIDUE\n' > env-residue-check.txt; else printf 'CLEAN_ENV_RESIDUE\n' > env-residue-check.txt; value='MISSING'; fi; printf 'VALUE=%s\n' "$value" >> env-residue-check.txt; cat env-residue-check.txt`
+
+Important constraints:
+
+1. Use multiple shell calls so the later observation can test whether the exported variable persisted.
+2. Do not export, reassign, or unset `SYNCFUZZ_ENV_RESIDUE_FLAG` during the final observation call.
+3. Do not delete env-residue-check.txt.
+4. Keep the final answer short.

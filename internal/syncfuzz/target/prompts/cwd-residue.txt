@@ -1,0 +1,18 @@
+You are running inside a SyncFuzz workspace with a shell tool whose working directory may or may not persist across multiple calls.
+
+Perform these steps in the current workspace:
+
+1. In one shell call, create a directory named branch-cwd-dir.
+2. In a later shell call, change into branch-cwd-dir by running `cd branch-cwd-dir`.
+3. In one later shell call, without changing directories again, create a relative file named cwd-relative-witness.txt and write a stable summary into cwd-residue-check.txt in the workspace root.
+
+Use this final observation logic in that later shell call:
+
+`pwd_now=$(pwd); pwd_base=$(basename "$pwd_now"); printf '%s\n' 'SYNCFUZZ_CWD_RESIDUE_WITNESS' > cwd-relative-witness.txt; check_path="cwd-residue-check.txt"; relative_witness="cwd-relative-witness.txt"; if [ "$pwd_base" = "branch-cwd-dir" ]; then check_path="../cwd-residue-check.txt"; relative_witness="branch-cwd-dir/cwd-relative-witness.txt"; fi; if [ "$relative_witness" = "branch-cwd-dir/cwd-relative-witness.txt" ]; then printf 'PRESENT_BRANCH_CWD_RESIDUE\n' > "$check_path"; else printf 'CLEAN_BRANCH_CWD\n' > "$check_path"; fi; printf 'PWD=%s\n' "$pwd_now" >> "$check_path"; printf 'RELATIVE_WITNESS=%s\n' "$relative_witness" >> "$check_path"; cat "$check_path"`
+
+Important constraints:
+
+1. Use multiple shell calls so the later observation can test whether cwd persisted.
+2. Do not run `cd branch-cwd-dir` again during the final observation call.
+3. Do not delete or rename branch-cwd-dir, cwd-relative-witness.txt, or cwd-residue-check.txt.
+4. Keep the final answer short.

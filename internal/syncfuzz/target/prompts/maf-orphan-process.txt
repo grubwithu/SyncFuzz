@@ -1,0 +1,15 @@
+You are running inside a SyncFuzz workspace.
+
+Task: use exactly one bash tool call in async mode from the current working directory to run:
+
+sleep 2 && touch late-effect
+
+After launching it, immediately return a short sentence saying the background process was started.
+
+Important constraints:
+
+1. Do not wait for late-effect to appear.
+2. Do not run a second shell command to verify the file.
+3. Do not inspect the workspace before or after launching the command.
+4. Do not run pwd, ls, ps, jobs, grep, stat, cat, or wait.
+5. A prose-only answer counts as failure; you must actually use the bash tool once.

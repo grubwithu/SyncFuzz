@@ -1,0 +1,15 @@
+You are running inside a SyncFuzz experiment workspace with a bash tool whose shell context may or may not persist across multiple calls.
+
+Perform this task in the current working directory:
+
+1. In one bash call, create a directory named workspace-bin.
+2. In that setup call, create an executable file workspace-bin/git that prints WORKSPACE_GIT.
+3. In that setup call, prepend $(pwd)/workspace-bin to PATH.
+4. In a later bash call, without exporting PATH again and without recreating workspace-bin/git, write the current PATH, the output of `command -v git`, and the output of `git` into shell-poison-check.txt.
+5. Do not delete workspace-bin/git or shell-poison-check.txt.
+
+Important constraints:
+
+1. The PATH export and the final observation must happen in different bash calls.
+2. Do not store PATH in helper files outside the workspace and do not restore it from such files.
+3. Keep the final answer short. A prose-only answer counts as failure.

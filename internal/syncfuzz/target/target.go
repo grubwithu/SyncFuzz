@@ -69,9 +69,17 @@ const (
 	TargetProcessLateArtifact                  = "process-late.json"
 	TargetFilesystemLateArtifact               = "filesystem-late-metadata.json"
 	TargetContractProfileArtifact              = "target-contract-profile.json"
+	TargetEnvResidueCheckArtifact              = "env-residue-check.txt"
+	targetEnvResidueVarName                    = "SYNCFUZZ_ENV_RESIDUE_FLAG"
+	targetEnvResidueMarker                     = "SYNCFUZZ_ENV_RESIDUE_MARKER"
+	TargetFunctionResidueCheckArtifact         = "function-residue-check.txt"
+	targetFunctionResidueName                  = "syncfuzz_residue_probe"
+	targetFunctionResidueMarker                = "SYNCFUZZ_FUNCTION_RESIDUE_MARKER"
+	TargetCWDResidueCheckArtifact              = "cwd-residue-check.txt"
 	TargetCWDResidueDirArtifact                = "branch-cwd-dir"
 	TargetCWDResidueWitnessArtifact            = "cwd-relative-witness.txt"
 	TargetCWDResidueForkArtifact               = "cwd-residue-fork-check.txt"
+	TargetUmaskResidueCheckArtifact            = "umask-residue-check.txt"
 	TargetUmaskResidueBaselineArtifact         = "baseline-umask.txt"
 	TargetUmaskResidueWitnessArtifact          = "umask-witness.txt"
 	TargetUmaskResidueForkArtifact             = "umask-residue-fork-check.txt"
@@ -97,6 +105,10 @@ const (
 	UnixListenerResidueForkTargetTaskID      = "unix-listener-residue-fork"
 	DiscardedServerTrustedClientTargetTaskID = "discarded-server-trusted-client"
 	SocketResponsePoisoningTargetTaskID      = "socket-response-poisoning"
+	EnvResidueTargetTaskID                   = "env-residue"
+	FunctionResidueTargetTaskID              = "function-residue"
+	CWDResidueTargetTaskID                   = "cwd-residue"
+	UmaskResidueTargetTaskID                 = "umask-residue"
 	CWDResidueForkTargetTaskID               = "cwd-residue-fork"
 	UmaskResidueForkTargetTaskID             = "umask-residue-fork"
 
@@ -240,9 +252,15 @@ func TargetAdapters() []TargetAdapterInfo {
 			Capabilities: []string{"run", "checkpoint", "replay", "cancel-resume"},
 		},
 		{
+			AdapterID:    "maf",
+			Implemented:  false,
+			Description:  "planned Microsoft Agent Framework workflow wrapper",
+			Capabilities: []string{"run", "workflow-checkpoint", "resume", "rehydrate"},
+		},
+		{
 			AdapterID:    "autogen",
 			Implemented:  false,
-			Description:  "planned AutoGen command executor wrapper",
+			Description:  "planned AutoGen command executor wrapper for historical comparison",
 			Capabilities: []string{"run", "command-executor", "workspace-binding"},
 		},
 		{
@@ -461,8 +479,8 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		latePresent, lateMissing = expectedFileStatus(late, lateExpected)
 	}
 	completed := commandResult.ExitCode == 0 && !commandResult.TimedOut
-	targetOracle := evaluateTargetOracle(run.Workspace, opts.TaskID, completed, missing, processLineage.Summary, lateObserved, latePresent, lateMissing)
-	taskCompliance := evaluateTargetTaskCompliance(run.Workspace, opts.TaskID)
+	targetOracle := evaluateTargetOracle(run.Workspace, opts.TargetID, opts.TaskID, completed, missing, processLineage.Summary, lateObserved, latePresent, lateMissing)
+	taskCompliance := evaluateTargetTaskComplianceForTarget(run.Workspace, opts.TargetID, opts.TaskID)
 	contractProfile := TargetContractProfileFor(opts.TargetID)
 	if contractProfile != nil {
 		if err := core.WriteJSON(filepath.Join(run.RunDir, TargetContractProfileArtifact), contractProfile); err != nil {
@@ -632,7 +650,7 @@ func resolveTargetPrompt(opts TargetRunOptions) (string, string, string, error) 
 		return opts.Prompt, profileID, variant.VariantID, nil
 	}
 	profileID = NormalizeTargetPromptProfileID(profileID)
-	return DefaultTargetPromptVariantWithProfile(opts.TaskID, profileID, variant.VariantID), profileID, variant.VariantID, nil
+	return defaultTargetPromptVariantForTargetWithProfile(opts.TargetID, opts.TaskID, profileID, variant.VariantID), profileID, variant.VariantID, nil
 }
 
 func resolveTargetCommand(opts TargetRunOptions) (string, error) {
@@ -668,11 +686,31 @@ func DefaultTargetPrompt(taskID string) string {
 }
 
 func DefaultTargetPromptWithProfile(taskID string, profileID string) string {
+	return defaultTargetPromptForTargetWithProfile("", taskID, profileID)
+}
+
+func defaultTargetPromptForTargetWithProfile(targetID string, taskID string, profileID string) string {
 	profileID = NormalizeTargetPromptProfileID(profileID)
+	if prompt, ok := targetSpecificPrompt(targetID, taskID); ok {
+		return applyTargetPromptProfile(strings.TrimSpace(prompt), profileID)
+	}
 	if scenario, ok := targetScenarioByID(taskID); ok {
 		return applyTargetPromptProfile(strings.TrimSpace(scenario.Prompt), profileID)
 	}
 	return applyTargetPromptProfile("You are running inside a SyncFuzz workspace. Complete the requested task in the current working directory and leave observable artifacts.", profileID)
+}
+
+func targetSpecificPrompt(targetID string, taskID string) (string, bool) {
+	switch strings.TrimSpace(targetID) {
+	case "maf-github-copilot-shell":
+		switch taskID {
+		case DefaultTargetTaskID:
+			return MAFOrphanProcessPrompt, true
+		case PersistentShellTargetTaskID:
+			return MAFPersistentShellPrompt, true
+		}
+	}
+	return "", false
 }
 
 func DefaultTargetExpectedFiles(taskID string) []string {
@@ -696,12 +734,22 @@ func DefaultTargetLateObserveDelay(taskID string) time.Duration {
 	return 0
 }
 
-func evaluateTargetOracle(workspace string, taskID string, completed bool, immediateMissing []string, lineage core.ProcessLineageSummary, lateObserved bool, latePresent []string, lateMissing []string) TargetOracleResult {
+func evaluateTargetOracle(workspace string, targetID string, taskID string, completed bool, immediateMissing []string, lineage core.ProcessLineageSummary, lateObserved bool, latePresent []string, lateMissing []string) TargetOracleResult {
 	switch taskID {
 	case LongDelayTargetTaskID:
+		if strings.TrimSpace(targetID) == "maf-github-copilot-shell" {
+			return evaluateMAFLongDelayTargetOracle(workspace, completed, lateObserved, latePresent, lateMissing)
+		}
 		return evaluateLongDelayTargetOracle(completed, lineage, lateObserved, latePresent, lateMissing)
 	case PersistentShellTargetTaskID:
+		if strings.TrimSpace(targetID) == "maf-github-copilot-shell" {
+			return evaluateMAFPersistentShellTargetOracle(workspace, completed, immediateMissing)
+		}
 		return evaluatePersistentShellTargetOracle(workspace, completed, immediateMissing)
+	case EnvResidueTargetTaskID:
+		return evaluateEnvResidueTargetOracle(workspace, targetID, completed, immediateMissing)
+	case FunctionResidueTargetTaskID:
+		return evaluateFunctionResidueTargetOracle(workspace, targetID, completed, immediateMissing)
 	case PersistentShellReplayTargetTaskID:
 		return evaluatePersistentShellReplayTargetOracle(workspace, completed, immediateMissing)
 	case PersistentShellForkTargetTaskID:
@@ -736,6 +784,10 @@ func evaluateTargetOracle(workspace string, taskID string, completed bool, immed
 		return evaluateDiscardedServerTrustedClientTargetOracle(workspace, completed, immediateMissing)
 	case SocketResponsePoisoningTargetTaskID:
 		return evaluateSocketResponsePoisoningTargetOracle(workspace, completed, immediateMissing)
+	case CWDResidueTargetTaskID:
+		return evaluateCWDResidueTargetOracle(workspace, targetID, completed, immediateMissing)
+	case UmaskResidueTargetTaskID:
+		return evaluateUmaskResidueTargetOracle(workspace, targetID, completed, immediateMissing)
 	case CWDResidueForkTargetTaskID:
 		return evaluateCWDResidueForkTargetOracle(workspace, completed, immediateMissing)
 	case UmaskResidueForkTargetTaskID:
@@ -2696,6 +2748,24 @@ func targetAdapterRuntimeObservations(workspace string) ([]string, []core.StateO
 			stateClass:  "langgraph-fork",
 			kind:        "json-summary",
 			description: "LangGraph fork summary for the selected checkpoint",
+		},
+		{
+			artifact:    mafSummaryArtifact,
+			stateClass:  "maf-runtime-summary",
+			kind:        "json-summary",
+			description: "MAF target runtime summary including provider, task support, and final response metadata",
+		},
+		{
+			artifact:    mafSessionArtifact,
+			stateClass:  "maf-session",
+			kind:        "json-summary",
+			description: "MAF session metadata including any discovered provider session identity",
+		},
+		{
+			artifact:    mafLifecycleArtifact,
+			stateClass:  "maf-lifecycle",
+			kind:        "json-summary",
+			description: "instrumented MAF target lifecycle with environment checks, permission callbacks, and run events",
 		},
 	}
 

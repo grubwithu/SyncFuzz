@@ -1,0 +1,142 @@
+# PRD: MAF Target Integration
+
+## Goal
+
+把 Microsoft Agent Framework（MAF）接入 SyncFuzz，作为第二个框架级真实 target。
+
+这条线的目标不是重复 LangGraph 的 persistent shell residue，而是验证：
+
+```text
+executor effect
+  -> superstep barrier
+  -> checkpoint
+  -> resume / rehydrate
+```
+
+之间是否会出现跨层状态失同步。
+
+## Why MAF
+
+MAF 的官方 Workflow 模型提供了与 LangGraph 明显不同的恢复语义：
+
+- `Executor`
+- `Message + Edge`
+- `Superstep`
+- `CheckpointStorage`
+
+其中最关键的是：
+
+> checkpoint 发生在 superstep 完成之后，而不是每个 tool call 之后。
+
+这让 MAF 很适合测试：
+
+- external effect replay
+- partial commit across parallel executors
+- pending approval / request replay
+- same-instance resume vs new-instance rehydrate
+
+## Non-Goals
+
+- 不自己实现一个复杂 Shell runtime
+- 不把 MAF 接入做成新的 exploit framework
+- 不把 documented unsafe reuse 直接当成未知漏洞
+
+## Target Ladder
+
+### MAF-1
+
+对象：
+
+- 官方 `GitHubCopilotAgent` shell sample
+
+目的：
+
+- 验证官方 shell-enabled target 可以被 SyncFuzz `command` adapter 稳定驱动
+- 明确 artifact contract、workspace 绑定、stdout/stderr、prompt/task 注入方式
+
+最小验收：
+
+- 能稳定跑通至少一个 shell task
+- 能产出 `target-result.json`
+- 能确认 shell command 的实际执行痕迹
+
+### MAF-2
+
+对象：
+
+- 官方 shell sample
+- 官方 session restore
+
+目的：
+
+- 区分 Copilot session state 与 OS/workspace state
+- 建立 `same logical session, different runtime object` 这条实验线
+
+最小验收：
+
+- 能保存并恢复 session identity
+- 恢复前后 artifact 可比较
+- 至少有一条 clean negative 或 residue evidence
+
+### MAF-3
+
+对象：
+
+- 官方 shell-capable agent
+- 最小 Workflow
+- `CheckpointStorage`
+
+目的：
+
+- 正式进入 MAF 的 `superstep / checkpoint / resume / rehydrate` 语义
+
+首批场景：
+
+1. `external-effect-replay`
+2. `parallel-partial-commit`
+3. `approval-pending-replay`
+4. `resume-vs-rehydrate-divergence`
+
+最小验收：
+
+- 至少一个场景能稳定给出 contract-aware result
+- 至少一个场景能形成 honest negative 或 clean replay 基线
+
+## Oracle Plan
+
+MAF 线的 oracle 分三层：
+
+1. `target_oracle`
+   是否观测到 residue / replay / replay-negative
+2. `task_compliance`
+   任务是否真的按要求执行
+3. `contract_interpretation`
+   是否违反 MAF Workflow / session / checkpoint 的恢复契约
+
+需要单独记录：
+
+- `resume_mode`: `same-instance` / `rehydrate`
+- `checkpoint_backend`
+- `superstep_boundary`
+- `effect_phase`
+
+## Deliverables
+
+1. `targets/maf_*` 目录下的最小接入对象
+2. 一份 MAF `Recovery Contract Profile`
+3. 至少一组 `target task`
+4. 对应 suite / campaign 可消费的 target metadata
+5. 文档与 README 更新
+
+## Priority
+
+1. MAF-1 smoke path
+2. MAF-2 session restore
+3. MAF-3 workflow checkpoint
+4. contract-aware oracle refinement
+
+## Exit Criteria
+
+- SyncFuzz 已经不只覆盖 LangGraph
+- 第二个 target 的架构差异明确来自 `superstep/checkpoint`
+- 至少有一条可复现的 MAF contract-aware 结果

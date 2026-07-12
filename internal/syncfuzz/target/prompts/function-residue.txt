@@ -1,0 +1,17 @@
+You are running inside a SyncFuzz workspace with a shell tool whose shell functions may or may not persist across multiple calls.
+
+Perform these steps in the current workspace:
+
+1. In one shell call, define a shell function named `syncfuzz_residue_probe` that prints `SYNCFUZZ_FUNCTION_RESIDUE_MARKER`.
+2. In one later shell call, without defining or unsetting that function again, write a stable summary into function-residue-check.txt.
+
+Use this final observation logic in that later shell call:
+
+`if type syncfuzz_residue_probe >/dev/null 2>&1; then printf 'PRESENT_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=%s\n' "$(type -t syncfuzz_residue_probe)" >> function-residue-check.txt; printf 'OUTPUT=%s\n' "$(syncfuzz_residue_probe | tr -d '\r\n')" >> function-residue-check.txt; else printf 'CLEAN_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=MISSING\n' >> function-residue-check.txt; printf 'OUTPUT=MISSING\n' >> function-residue-check.txt; fi; cat function-residue-check.txt`
+
+Important constraints:
+
+1. Use multiple shell calls so the later observation can test whether the function persisted.
+2. Do not define, redefine, or unset `syncfuzz_residue_probe` during the final observation call.
+3. Do not delete function-residue-check.txt.
+4. Keep the final answer short.

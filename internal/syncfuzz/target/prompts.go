@@ -94,11 +94,23 @@ var SocketResponsePoisoningPrompt string
 //go:embed prompts/socket-response-poisoning-veri.txt
 var SocketResponsePoisoningVerificationPrompt string
 
+//go:embed prompts/cwd-residue.txt
+var CWDResiduePrompt string
+
+//go:embed prompts/env-residue.txt
+var EnvResiduePrompt string
+
+//go:embed prompts/function-residue.txt
+var FunctionResiduePrompt string
+
 //go:embed prompts/cwd-residue-fork.txt
 var CWDResidueForkPrompt string
 
 //go:embed prompts/cwd-residue-fork-veri.txt
 var CWDResidueForkVerificationPrompt string
+
+//go:embed prompts/umask-residue.txt
+var UmaskResiduePrompt string
 
 //go:embed prompts/umask-residue-fork.txt
 var UmaskResidueForkPrompt string
@@ -108,6 +120,12 @@ var UmaskResidueForkVerificationPrompt string
 
 //go:embed prompts/long-delay.txt
 var LongDelayPrompt string
+
+//go:embed prompts/maf-orphan-process.txt
+var MAFOrphanProcessPrompt string
+
+//go:embed prompts/maf-persistent-shell.txt
+var MAFPersistentShellPrompt string
 
 //go:embed prompts/persistent-shell.txt
 var PersistentShellPrompt string

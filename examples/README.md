@@ -19,6 +19,7 @@ LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target la
 LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --task persistent-shell-poisoning-replay --command-file examples/target-commands/langgraph-shell-react.sh --observe-delay 500ms --out runs
 LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target run --target langgraph-shell-react --task persistent-shell-poisoning-fork --command-file examples/target-commands/langgraph-shell-react.sh --observe-delay 500ms --out runs
 LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target suite --target langgraph-shell-react --tasks orphan-process-long-delay,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork --command-file examples/target-commands/langgraph-shell-react.sh --repeat 2 --observe-delay 500ms --out runs --corpus corpus
+go run ./cmd/syncfuzz target run --target maf-github-copilot-shell --task orphan-process --command-file examples/target-commands/maf-github-copilot-shell.sh --observe-delay 500ms --out runs
 ```
 
 Future examples should include:

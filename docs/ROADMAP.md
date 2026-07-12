@@ -193,7 +193,7 @@ Phase 4 之后：
 
 目标：从最小 harness 迁移到真实 Agent runtime。
 
-状态：Phase 5A 观察里程碑已冻结，Phase 5B 现在正式转入 **contract-aware validation**。当前已经有一条稳定的 observation-first 路线：通用 `command` target adapter 把任意本地或容器内可见的真实 Agent CLI 放进 SyncFuzz workspace 运行，并复用 Phase 2 的 filesystem/process/state-trace artifact contract。它已经可以把 `target-prompt.txt` 和 `target-task.json` 直接写进 workspace、传递 prompt/task file path、捕获 stdout/stderr、通过 `--observe-delay` 等待 immediate observation、通过 `--late-observe-delay` 捕获 delayed effect、检查 expected files、写出 `target-result.json`，为 LangGraph、AutoGen、OpenHands 的专用 lifecycle adapter 打底。
+状态：Phase 5A 观察里程碑已冻结，Phase 5B 现在正式转入 **contract-aware validation**。当前已经有一条稳定的 observation-first 路线：通用 `command` target adapter 把任意本地或容器内可见的真实 Agent CLI 放进 SyncFuzz workspace 运行，并复用 Phase 2 的 filesystem/process/state-trace artifact contract。它已经可以把 `target-prompt.txt` 和 `target-task.json` 直接写进 workspace、传递 prompt/task file path、捕获 stdout/stderr、通过 `--observe-delay` 等待 immediate observation、通过 `--late-observe-delay` 捕获 delayed effect、检查 expected files、写出 `target-result.json`，为 LangGraph、MAF、OpenHands 的专用 lifecycle adapter 打底。
 
 最新校准：
 
@@ -206,9 +206,10 @@ Phase 4 之后：
 顺序：
 
 1. LangGraph + persistent shell；
-2. AutoGen command executor；
+2. Microsoft Agent Framework（MAF）Workflow / GitHubCopilotAgent；
 3. OpenHands runtime/sandbox；
-4. Crab、Shepherd、Cordon、DeltaBox 等研究原型。
+4. AutoGen command executor；
+5. Crab、Shepherd、Cordon、DeltaBox 等研究原型。
 
 每个 adapter 至少统一：
 
@@ -221,7 +222,7 @@ Phase 4 之后：
 
 已实现：
 
-- `syncfuzz target list`：列出真实 target adapter，当前 `command` 已可用，LangGraph / AutoGen / OpenHands 为 planned；
+- `syncfuzz target list`：列出真实 target adapter，当前 `command` 已可用，LangGraph / MAF / AutoGen / OpenHands 为 planned；
 - `syncfuzz target run --command ...` / `--command-file ...`：在 SyncFuzz workspace 中运行真实 target 命令；
 - target task 环境变量：`SYNCFUZZ_PROMPT`、`SYNCFUZZ_PROMPT_FILE`、`SYNCFUZZ_TASK_FILE`、`SYNCFUZZ_REPO_ROOT`、`SYNCFUZZ_WORKSPACE`、`SYNCFUZZ_RUN_ID`、`SYNCFUZZ_TARGET_ID`；
 - target artifacts：`target-task.json`、`target-prompt.txt`、`target-output.txt`、`target-result.json`；
@@ -271,7 +272,8 @@ Phase 5B 主线：
 - 在 target oracle 之上增加 contract interpretation 层，把结果区分为 residue observation、contract-consistent、contract-violation 和 contract-unknown；
 - 继续保留少量 activation 验证实验，但不把 exploit generation 变成框架主目标；
 - 把 `targets/langgraph_shell_react/` 从“单进程内 durable checkpointer”继续推进到“跨进程恢复可消费的 durable checkpointer”；
-- 为 AutoGen command executor 增加真实 shell tool 包装；
+- 启动 MAF 三阶段接入：官方 shell sample、session restore、最小 Workflow + `CheckpointStorage`；
+- 把第二个真实 target 的重点放到 superstep/checkpoint 边界，而不是重复 LangGraph 的 persistent shell residue；
 - 已把 target run 接入 real-target matrix / suite / campaign：`syncfuzz target matrix`、`target suite --matrix`、`target campaign` 已可对 `target/task` candidate 做 feedback-ranked exploration；
 - 已增加第一条 deterministic wording 维度：真实 target candidate 现在可以扩成 `target/task/prompt-profile`，用少量稳定 prompt profile 比较“同一语义任务、不同操作表述”对 runtime residue 的影响；
 - 把 replay / verify 的失败原因细化成 taxonomy，而不再只停留在 failed / unconfirmed / error。
@@ -301,7 +303,7 @@ Phase 5B 退出标准：
 - verify failure taxonomy 稳定；
 - 至少一个真实 target 可以消费 matrix/campaign；
 - 至少形成一个非手写真实 target discovery，或一个可重复的强负结论；
-- 第二个真实 target adapter 启动。
+- 第二个真实 target adapter 启动，并完成 MAF-1 smoke path。
 
 完成标准：
 

@@ -1,0 +1,3 @@
+--pre
+agent-framework
+agent-framework-github-copilot

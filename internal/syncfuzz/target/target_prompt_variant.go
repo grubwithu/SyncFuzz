@@ -52,9 +52,13 @@ func resolveTargetPromptVariant(variantID string) (TargetPromptVariantInfo, erro
 }
 
 func DefaultTargetPromptVariantWithProfile(taskID string, profileID string, variantID string) string {
+	return defaultTargetPromptVariantForTargetWithProfile("", taskID, profileID, variantID)
+}
+
+func defaultTargetPromptVariantForTargetWithProfile(targetID string, taskID string, profileID string, variantID string) string {
 	profileID = NormalizeTargetPromptProfileID(profileID)
 	variantID = NormalizeTargetPromptVariantID(variantID)
-	prompt := DefaultTargetPromptWithProfile(taskID, profileID)
+	prompt := defaultTargetPromptForTargetWithProfile(targetID, taskID, profileID)
 	switch variantID {
 	case TargetPromptVariantBaseID:
 		return prompt

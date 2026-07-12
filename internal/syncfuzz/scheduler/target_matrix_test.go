@@ -97,6 +97,75 @@ func TestBuildTargetScheduleMatrixAddsMutationFocusDerivedCandidates(t *testing.
 	}
 }
 
+func TestBuildTargetScheduleMatrixSupportsMAFBaselineGroup(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID:   "maf-github-copilot-shell",
+		TaskGroups: []string{"maf-baseline"},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	if len(matrix.TaskGroups) != 1 || matrix.TaskGroups[0] != "maf-baseline" {
+		t.Fatalf("unexpected MAF task groups: %#v", matrix.TaskGroups)
+	}
+	if len(matrix.Tasks) != 2 {
+		t.Fatalf("expected two MAF baseline tasks, got %#v", matrix.Tasks)
+	}
+	if matrix.TotalCandidates != 3 {
+		t.Fatalf("expected base orphan-process plus long-delay base/mutation candidates, got %#v", matrix)
+	}
+	late, err := findTargetMatrixCandidate(matrix, target.LongDelayTargetTaskID)
+	if err != nil {
+		t.Fatalf("findTargetMatrixCandidate failed: %v", err)
+	}
+	if late.TargetID != "maf-github-copilot-shell" || late.SeedID != "delayed-effect" {
+		t.Fatalf("unexpected MAF long-delay candidate metadata: %#v", late)
+	}
+	if late.ContractProfileID != "" || late.ContractRuleID != "" {
+		t.Fatalf("expected no contract metadata for current MAF baseline: %#v", late)
+	}
+}
+
+func TestBuildTargetScheduleMatrixSupportsMAFShellContextGroup(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID:   "maf-github-copilot-shell",
+		TaskGroups: []string{"maf-shell-context"},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	if len(matrix.TaskGroups) != 1 || matrix.TaskGroups[0] != "maf-shell-context" {
+		t.Fatalf("unexpected MAF shell-context groups: %#v", matrix.TaskGroups)
+	}
+	if len(matrix.Tasks) != 7 {
+		t.Fatalf("expected seven MAF shell-context tasks, got %#v", matrix.Tasks)
+	}
+	if matrix.TotalCandidates != 12 {
+		t.Fatalf("expected delayed-effect plus PATH/env/function/cwd/umask shell-context candidates, got %#v", matrix)
+	}
+	persistent, err := findTargetMatrixCandidate(matrix, target.PersistentShellTargetTaskID)
+	if err != nil {
+		t.Fatalf("findTargetMatrixCandidate failed: %v", err)
+	}
+	if persistent.TargetID != "maf-github-copilot-shell" || persistent.SeedID != "shell-path-residue" {
+		t.Fatalf("unexpected MAF persistent-shell candidate metadata: %#v", persistent)
+	}
+	cwd, err := findTargetMatrixCandidate(matrix, target.CWDResidueTargetTaskID)
+	if err != nil {
+		t.Fatalf("findTargetMatrixCandidate failed: %v", err)
+	}
+	if cwd.TargetID != "maf-github-copilot-shell" || cwd.SeedID != "shell-execution-context-residue" {
+		t.Fatalf("unexpected MAF cwd residue candidate metadata: %#v", cwd)
+	}
+	envResidue, err := findTargetMatrixCandidate(matrix, target.EnvResidueTargetTaskID)
+	if err != nil {
+		t.Fatalf("findTargetMatrixCandidate failed: %v", err)
+	}
+	if envResidue.TargetID != "maf-github-copilot-shell" || envResidue.SeedID != "shell-execution-context-residue" {
+		t.Fatalf("unexpected MAF env residue candidate metadata: %#v", envResidue)
+	}
+}
+
 func TestRunTargetSuiteMatrixWritesArtifacts(t *testing.T) {
 	tmp := t.TempDir()
 	command := `case "$SYNCFUZZ_TASK_ID" in

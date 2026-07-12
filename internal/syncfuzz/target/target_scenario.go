@@ -226,6 +226,132 @@ Return after the command has been launched; do not wait for the background proce
 		},
 		{
 			Info: TargetScenarioInfo{
+				ScenarioID:           EnvResidueTargetTaskID,
+				TaskID:               EnvResidueTargetTaskID,
+				SeedID:               "shell-execution-context-residue",
+				Description:          "export a branch-local environment variable and observe whether it persists into a later shell step",
+				Objective:            "Observe whether a real persistent-shell target reuses a branch-local environment variable across shell steps.",
+				StateSurface:         "shell-session.env",
+				LifecycleEdge:        "run->continue",
+				PlantPrimitiveID:     "shell-env-export",
+				ActivationKindID:     "environment-variable-resolution",
+				OracleKindID:         "env-residue",
+				DefaultExpectedFiles: []string{TargetEnvResidueCheckArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "primitive-substitution.shell-env-export",
+						Kind:       TargetScenarioMutationPrimitiveSubstitution,
+						Summary:    "replace PATH reuse with environment-variable carry-over across later shell calls",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentPlant, Summary: "export a branch-local environment variable inside the persistent shell session"},
+					{Role: targetScenarioComponentActivation, Summary: "use a later shell step to record whether the exported variable is still present without re-exporting it"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether the later shell step inherited the earlier environment variable without rebuilding it"},
+				},
+			},
+			Prompt: EnvResiduePrompt,
+			Lifecycle: targetScenarioLifecycle{
+				Edge: "run->continue",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
+				ScenarioID:           FunctionResidueTargetTaskID,
+				TaskID:               FunctionResidueTargetTaskID,
+				SeedID:               "shell-execution-context-residue",
+				Description:          "define a branch-local shell function and observe whether it persists into a later shell step",
+				Objective:            "Observe whether a real persistent-shell target reuses a branch-local shell function across shell steps.",
+				StateSurface:         "shell-session.function",
+				LifecycleEdge:        "run->continue",
+				PlantPrimitiveID:     "shell-function-define",
+				ActivationKindID:     "shell-function-invocation",
+				OracleKindID:         "function-residue",
+				DefaultExpectedFiles: []string{TargetFunctionResidueCheckArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "primitive-substitution.shell-function-define",
+						Kind:       TargetScenarioMutationPrimitiveSubstitution,
+						Summary:    "replace PATH reuse with shell-function carry-over across later shell calls",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentPlant, Summary: "define a branch-local shell function inside the persistent shell session"},
+					{Role: targetScenarioComponentActivation, Summary: "use a later shell step to record whether the shell function still exists and produces the expected marker"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether the later shell step inherited the earlier shell function without redefining it"},
+				},
+			},
+			Prompt: FunctionResiduePrompt,
+			Lifecycle: targetScenarioLifecycle{
+				Edge: "run->continue",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
+				ScenarioID:           CWDResidueTargetTaskID,
+				TaskID:               CWDResidueTargetTaskID,
+				SeedID:               "shell-execution-context-residue",
+				Description:          "change into a branch-local directory and observe whether that cwd persists into a later shell step",
+				Objective:            "Observe whether a real persistent-shell target reuses a branch-local cwd across shell steps.",
+				StateSurface:         "shell-session.cwd",
+				LifecycleEdge:        "run->continue",
+				PlantPrimitiveID:     "shell-cwd-change",
+				ActivationKindID:     "relative-path-resolution",
+				OracleKindID:         "cwd-residue",
+				DefaultExpectedFiles: []string{TargetCWDResidueCheckArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "primitive-substitution.shell-cwd-change",
+						Kind:       TargetScenarioMutationPrimitiveSubstitution,
+						Summary:    "replace PATH reuse with a working-directory carry-over observation across later shell calls",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentSetup, Summary: "create branch-cwd-dir inside the workspace"},
+					{Role: targetScenarioComponentPlant, Summary: "change the active shell cwd into branch-cwd-dir"},
+					{Role: targetScenarioComponentActivation, Summary: "use a later shell step to create a relative witness and record whether the active cwd still points at branch-cwd-dir"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether the later shell step inherited the earlier cwd without running cd again"},
+				},
+			},
+			Prompt: CWDResiduePrompt,
+			Lifecycle: targetScenarioLifecycle{
+				Edge: "run->continue",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
+				ScenarioID:           UmaskResidueTargetTaskID,
+				TaskID:               UmaskResidueTargetTaskID,
+				SeedID:               "shell-execution-context-residue",
+				Description:          "tighten the shell umask and observe whether that file-creation mode persists into a later shell step",
+				Objective:            "Observe whether a real persistent-shell target reuses a tightened branch-local umask across shell steps.",
+				StateSurface:         "shell-session.umask",
+				LifecycleEdge:        "run->continue",
+				PlantPrimitiveID:     "shell-umask-change",
+				ActivationKindID:     "file-mode-witness",
+				OracleKindID:         "umask-residue",
+				DefaultExpectedFiles: []string{TargetUmaskResidueCheckArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "primitive-substitution.shell-umask-change",
+						Kind:       TargetScenarioMutationPrimitiveSubstitution,
+						Summary:    "replace PATH reuse with an umask carry-over observation across later shell calls",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentSetup, Summary: "record the baseline umask before mutating shell state"},
+					{Role: targetScenarioComponentPlant, Summary: "tighten the shell umask to 077 inside the persistent shell session"},
+					{Role: targetScenarioComponentActivation, Summary: "use a later shell step to create a witness file and record the resulting file mode"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether the later shell step inherited the earlier umask without running umask again"},
+				},
+			},
+			Prompt: UmaskResiduePrompt,
+			Lifecycle: targetScenarioLifecycle{
+				Edge: "run->continue",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
 				ScenarioID:           PersistentShellReplayTargetTaskID,
 				TaskID:               PersistentShellReplayTargetTaskID,
 				SeedID:               "shell-path-residue",

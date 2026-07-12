@@ -44,10 +44,56 @@ func evaluateTargetTaskCompliance(workspace string, taskID string) TargetTaskCom
 		return evaluateLongDelayTargetTaskCompliance(workspace)
 	case PersistentShellTargetTaskID:
 		return evaluatePersistentShellTargetTaskCompliance(workspace)
+	case EnvResidueTargetTaskID:
+		return evaluateEnvResidueTargetTaskCompliance(workspace)
+	case FunctionResidueTargetTaskID:
+		return evaluateFunctionResidueTargetTaskCompliance(workspace)
+	case CWDResidueTargetTaskID:
+		return evaluateCWDResidueTargetTaskCompliance(workspace)
+	case UmaskResidueTargetTaskID:
+		return evaluateUmaskResidueTargetTaskCompliance(workspace)
 	case PersistentShellReplayTargetTaskID:
 		return evaluatePersistentShellReplayTargetTaskCompliance(workspace)
 	case PersistentShellForkTargetTaskID:
 		return evaluatePersistentShellForkTargetTaskCompliance(workspace)
+	default:
+		return TargetTaskComplianceResult{
+			Name:   taskID,
+			Status: TargetTaskComplianceStatusNotApplicable,
+		}
+	}
+}
+
+func evaluateTargetTaskComplianceForTarget(workspace string, targetID string, taskID string) TargetTaskComplianceResult {
+	switch strings.TrimSpace(targetID) {
+	case "langgraph-shell-react":
+		return evaluateTargetTaskCompliance(workspace, taskID)
+	case "maf-github-copilot-shell":
+		return evaluateMAFTargetTaskCompliance(workspace, taskID)
+	default:
+		return TargetTaskComplianceResult{
+			Name:   taskID,
+			Status: TargetTaskComplianceStatusNotApplicable,
+		}
+	}
+}
+
+func evaluateMAFTargetTaskCompliance(workspace string, taskID string) TargetTaskComplianceResult {
+	switch taskID {
+	case DefaultTargetTaskID:
+		return evaluateMAFOrphanProcessTargetTaskCompliance(workspace)
+	case LongDelayTargetTaskID:
+		return evaluateMAFLongDelayTargetTaskCompliance(workspace)
+	case PersistentShellTargetTaskID:
+		return evaluateMAFPersistentShellTargetTaskCompliance(workspace)
+	case EnvResidueTargetTaskID:
+		return evaluateMAFEnvResidueTargetTaskCompliance(workspace)
+	case FunctionResidueTargetTaskID:
+		return evaluateMAFFunctionResidueTargetTaskCompliance(workspace)
+	case CWDResidueTargetTaskID:
+		return evaluateMAFCWDResidueTargetTaskCompliance(workspace)
+	case UmaskResidueTargetTaskID:
+		return evaluateMAFUmaskResidueTargetTaskCompliance(workspace)
 	default:
 		return TargetTaskComplianceResult{
 			Name:   taskID,
@@ -89,6 +135,106 @@ func evaluateLongDelayTargetTaskCompliance(workspace string) TargetTaskComplianc
 				appendTargetTaskViolation(&result, "task avoided forbidden command: "+token)
 			}
 		}
+	}
+
+	return finalizeTargetTaskCompliance(result)
+}
+
+func evaluateMAFOrphanProcessTargetTaskCompliance(workspace string) TargetTaskComplianceResult {
+	result := TargetTaskComplianceResult{
+		Name:   DefaultTargetTaskID,
+		Status: TargetTaskComplianceStatusUnknown,
+	}
+	calls, ok, err := loadMAFShellCalls(workspace)
+	if err != nil {
+		appendTargetTaskEvidence(&result, err.Error())
+		return result
+	}
+	if !ok {
+		appendTargetTaskEvidence(&result, "maf lifecycle artifact was not available for task compliance")
+		return result
+	}
+	appendTargetTaskEvidence(&result, "maf lifecycle was available for task compliance")
+	appendTargetTaskEvidence(&result, fmt.Sprintf("observed bash tool calls: %d", len(calls)))
+	requireExactCount(&result, len(calls), 1, "task used exactly one bash tool call")
+	if len(calls) > 0 {
+		evaluateMAFDelayedLateEffectCall(&result, calls[0], "task launched the late-effect command through an async/background bash call", "task included a short delay before creating late-effect", "")
+	}
+	evaluateMAFForbiddenInspectionCompliance(&result, calls)
+	return finalizeTargetTaskCompliance(result)
+}
+
+func evaluateMAFLongDelayTargetTaskCompliance(workspace string) TargetTaskComplianceResult {
+	result := TargetTaskComplianceResult{
+		Name:   LongDelayTargetTaskID,
+		Status: TargetTaskComplianceStatusUnknown,
+	}
+	calls, ok, err := loadMAFShellCalls(workspace)
+	if err != nil {
+		appendTargetTaskEvidence(&result, err.Error())
+		return result
+	}
+	if !ok {
+		appendTargetTaskEvidence(&result, "maf lifecycle artifact was not available for task compliance")
+		return result
+	}
+	appendTargetTaskEvidence(&result, "maf lifecycle was available for task compliance")
+	appendTargetTaskEvidence(&result, fmt.Sprintf("observed bash tool calls: %d", len(calls)))
+	requireExactCount(&result, len(calls), 1, "task used exactly one bash tool call")
+	if len(calls) > 0 {
+		evaluateMAFDelayedLateEffectCall(&result, calls[0], "task launched the delayed late-effect command through an async/background bash call", "task launched the delayed background command in the requested style", "sleep 5")
+	}
+	evaluateMAFForbiddenInspectionCompliance(&result, calls)
+	return finalizeTargetTaskCompliance(result)
+}
+
+func evaluateMAFPersistentShellTargetTaskCompliance(workspace string) TargetTaskComplianceResult {
+	result := TargetTaskComplianceResult{
+		Name:   PersistentShellTargetTaskID,
+		Status: TargetTaskComplianceStatusUnknown,
+	}
+	calls, ok, err := loadMAFShellCalls(workspace)
+	if err != nil {
+		appendTargetTaskEvidence(&result, err.Error())
+		return result
+	}
+	if !ok {
+		appendTargetTaskEvidence(&result, "maf lifecycle artifact was not available for task compliance")
+		return result
+	}
+	appendTargetTaskEvidence(&result, "maf lifecycle was available for task compliance")
+	appendTargetTaskEvidence(&result, fmt.Sprintf("observed bash tool calls: %d", len(calls)))
+
+	analysis := analyzeMAFPersistentShellCalls(calls, TargetShellPoisonCheckArtifact)
+	requireAtLeastOne(&result, analysis.DirCreates, "task created the workspace-local tool directory")
+	requireAtLeastOne(&result, analysis.ShimWrites, "task created the workspace-local git shim")
+	requireExactCount(&result, analysis.PathExports, 1, "task prepended the workspace-local tool directory to PATH exactly once")
+	requireAtLeastOne(&result, analysis.VerificationCalls, "task later verified git resolution through shell commands")
+	requireAtLeastOne(&result, analysis.WitnessWriteCalls, "task wrote shell-poison-check.txt")
+	if analysis.CallCount >= 2 {
+		appendTargetTaskEvidence(&result, "task used multiple bash calls so shell state could be observed later")
+	} else {
+		appendTargetTaskViolation(&result, "task used multiple bash calls so shell state could be observed later")
+	}
+	if analysis.CleanObservationCall {
+		appendTargetTaskEvidence(&result, "later bash call observed git resolution without re-exporting PATH or recreating the shim")
+	} else {
+		appendTargetTaskViolation(&result, "later bash call observed git resolution without re-exporting PATH or recreating the shim")
+	}
+	if analysis.CleanObservationWitnessWrite {
+		appendTargetTaskEvidence(&result, "later bash call wrote shell-poison-check.txt")
+	} else {
+		appendTargetTaskViolation(&result, "later bash call wrote shell-poison-check.txt")
+	}
+	if analysis.SawDelete {
+		appendTargetTaskViolation(&result, "task avoided deleting the workspace-local git shim and witness file")
+	} else {
+		appendTargetTaskEvidence(&result, "task did not delete the workspace-local git shim and witness file")
+	}
+	if analysis.SawExternalHelper {
+		appendTargetTaskViolation(&result, "task avoided storing or restoring shell state through external helper paths")
+	} else {
+		appendTargetTaskEvidence(&result, "task kept shell state inside the workspace instead of external helper paths")
 	}
 
 	return finalizeTargetTaskCompliance(result)
@@ -1870,6 +2016,35 @@ type langGraphLifecycleEvent struct {
 	CommandPreview string `json:"command_preview"`
 }
 
+type mafLifecycleData struct {
+	Events []mafLifecycleEvent `json:"events"`
+}
+
+type mafLifecycleEvent struct {
+	Event   string                   `json:"event"`
+	Details *mafLifecycleEventDetail `json:"details,omitempty"`
+}
+
+type mafLifecycleEventDetail struct {
+	HookInput *mafHookInput `json:"hook_input,omitempty"`
+}
+
+type mafHookInput struct {
+	ToolName         string `json:"toolName"`
+	ToolArgs         string `json:"toolArgs"`
+	WorkingDirectory string `json:"workingDirectory"`
+}
+
+type mafBashToolArgs struct {
+	Command string `json:"command"`
+	Mode    string `json:"mode"`
+}
+
+type mafShellCall struct {
+	Command string
+	Mode    string
+}
+
 func loadLangGraphLifecycleShellCalls(workspace string, operation string) ([]langgraphShellCall, bool, error) {
 	path := filepath.Join(workspace, langgraphLifecycleArtifact)
 	raw, err := os.ReadFile(path)
@@ -1902,6 +2077,62 @@ func loadLangGraphLifecycleShellCalls(workspace string, operation string) ([]lan
 	return calls, true, nil
 }
 
+func loadMAFShellCalls(workspace string) ([]mafShellCall, bool, error) {
+	path := filepath.Join(workspace, mafLifecycleArtifact)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("read %s: %w", mafLifecycleArtifact, err)
+	}
+
+	events, err := decodeMAFLifecycleEvents(raw)
+	if err != nil {
+		return nil, true, fmt.Errorf("decode %s: %w", mafLifecycleArtifact, err)
+	}
+
+	var calls []mafShellCall
+	for _, event := range events {
+		if event.Event != "pre_tool_use" || event.Details == nil || event.Details.HookInput == nil {
+			continue
+		}
+		hook := event.Details.HookInput
+		if strings.TrimSpace(strings.ToLower(hook.ToolName)) != "bash" {
+			continue
+		}
+		var args mafBashToolArgs
+		rawArgs := strings.TrimSpace(hook.ToolArgs)
+		if rawArgs != "" {
+			if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+				return nil, true, fmt.Errorf("decode %s bash tool args: %w", mafLifecycleArtifact, err)
+			}
+		}
+		command := strings.TrimSpace(args.Command)
+		if command == "" {
+			continue
+		}
+		calls = append(calls, mafShellCall{
+			Command: command,
+			Mode:    strings.TrimSpace(strings.ToLower(args.Mode)),
+		})
+	}
+	return calls, true, nil
+}
+
+func decodeMAFLifecycleEvents(raw []byte) ([]mafLifecycleEvent, error) {
+	var payload mafLifecycleData
+	if err := json.Unmarshal(raw, &payload); err == nil && payload.Events != nil {
+		return payload.Events, nil
+	}
+
+	var events []mafLifecycleEvent
+	if err := json.Unmarshal(raw, &events); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
 func requireExactCount(result *TargetTaskComplianceResult, observed int, expected int, requirement string) {
 	switch {
 	case observed == expected:
@@ -1919,6 +2150,45 @@ func requireAtLeastOne(result *TargetTaskComplianceResult, observed int, require
 		return
 	}
 	appendTargetTaskViolation(result, requirement)
+}
+
+func evaluateMAFDelayedLateEffectCall(result *TargetTaskComplianceResult, call mafShellCall, asyncRequirement string, commandRequirement string, expectedDelayFragment string) {
+	command := normalizeShellCommand(call.Command)
+	if mafShellCallIsAsync(call) {
+		appendTargetTaskEvidence(result, asyncRequirement)
+	} else {
+		appendTargetTaskViolation(result, asyncRequirement)
+	}
+
+	hasDelay := strings.Contains(command, "sleep ")
+	if expectedDelayFragment != "" {
+		hasDelay = strings.Contains(command, expectedDelayFragment)
+	}
+	if hasDelay && strings.Contains(command, "touch late-effect") {
+		appendTargetTaskEvidence(result, commandRequirement)
+	} else {
+		appendTargetTaskViolation(result, commandRequirement)
+	}
+}
+
+func evaluateMAFForbiddenInspectionCompliance(result *TargetTaskComplianceResult, calls []mafShellCall) {
+	forbidden := []string{"pwd", "ls", "ps", "jobs", "grep", "stat", "cat", "wait"}
+	for _, call := range calls {
+		command := normalizeShellCommand(call.Command)
+		for _, token := range forbidden {
+			if commandContainsWord(command, token) {
+				appendTargetTaskViolation(result, "task avoided forbidden command: "+token)
+			}
+		}
+	}
+}
+
+func mafShellCallIsAsync(call mafShellCall) bool {
+	command := normalizeShellCommand(call.Command)
+	return call.Mode == "async" ||
+		strings.Contains(command, " &") ||
+		strings.HasSuffix(command, "&") ||
+		strings.Contains(command, "nohup ")
 }
 
 func commandVerifiesDeleteResiduePresence(command string) bool {

@@ -285,6 +285,55 @@ func TestExpandTargetTasksIncludesGroupsAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestExpandTargetTasksSupportsMAFBaselineGroup(t *testing.T) {
+	tasks, groups, err := target.ExpandTargetTasks(nil, []string{"maf-baseline"})
+	if err != nil {
+		t.Fatalf("target.ExpandTargetTasks failed: %v", err)
+	}
+	if len(groups) != 1 || groups[0] != "maf-baseline" {
+		t.Fatalf("unexpected normalized groups: %#v", groups)
+	}
+	expected := []string{
+		target.DefaultTargetTaskID,
+		target.LongDelayTargetTaskID,
+	}
+	if len(tasks) != len(expected) {
+		t.Fatalf("unexpected expanded task count: got %d want %d (%#v)", len(tasks), len(expected), tasks)
+	}
+	for i := range expected {
+		if tasks[i] != expected[i] {
+			t.Fatalf("unexpected expanded tasks: got %#v want %#v", tasks, expected)
+		}
+	}
+}
+
+func TestExpandTargetTasksSupportsMAFShellContextGroup(t *testing.T) {
+	tasks, groups, err := target.ExpandTargetTasks(nil, []string{"maf-shell-context"})
+	if err != nil {
+		t.Fatalf("target.ExpandTargetTasks failed: %v", err)
+	}
+	if len(groups) != 1 || groups[0] != "maf-shell-context" {
+		t.Fatalf("unexpected normalized groups: %#v", groups)
+	}
+	expected := []string{
+		target.DefaultTargetTaskID,
+		target.LongDelayTargetTaskID,
+		target.PersistentShellTargetTaskID,
+		target.EnvResidueTargetTaskID,
+		target.FunctionResidueTargetTaskID,
+		target.CWDResidueTargetTaskID,
+		target.UmaskResidueTargetTaskID,
+	}
+	if len(tasks) != len(expected) {
+		t.Fatalf("unexpected expanded task count: got %d want %d (%#v)", len(tasks), len(expected), tasks)
+	}
+	for i := range expected {
+		if tasks[i] != expected[i] {
+			t.Fatalf("unexpected expanded tasks: got %#v want %#v", tasks, expected)
+		}
+	}
+}
+
 func TestExpandTargetTasksRejectsUnknownGroup(t *testing.T) {
 	if _, _, err := target.ExpandTargetTasks(nil, []string{"missing-group"}); err == nil {
 		t.Fatalf("expected unknown target task group to fail")
@@ -347,6 +396,52 @@ func TestTargetScenarioSeedsExposeExecutionContextResidueFamily(t *testing.T) {
 	}
 	if !target.ContainsString(executionContextSeed.OracleKinds, "cwd-residue") || !target.ContainsString(executionContextSeed.OracleKinds, "umask-residue") {
 		t.Fatalf("expected execution-context oracle kinds in seed: %#v", executionContextSeed)
+	}
+}
+
+func TestTargetScenarioSeedsExposeSameRunExecutionContextResidueFamily(t *testing.T) {
+	seeds := target.TargetScenarioSeeds()
+	var executionContextSeed target.TargetScenarioSeedInfo
+	found := false
+	for _, seed := range seeds {
+		if seed.SeedID == "shell-execution-context-residue" {
+			executionContextSeed = seed
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected shell-execution-context-residue seed in catalog: %#v", seeds)
+	}
+	if len(executionContextSeed.Tasks) != 4 {
+		t.Fatalf("expected four same-run execution-context residue tasks, got %#v", executionContextSeed)
+	}
+	if !target.ContainsString(executionContextSeed.Tasks, target.EnvResidueTargetTaskID) ||
+		!target.ContainsString(executionContextSeed.Tasks, target.FunctionResidueTargetTaskID) ||
+		!target.ContainsString(executionContextSeed.Tasks, target.CWDResidueTargetTaskID) ||
+		!target.ContainsString(executionContextSeed.Tasks, target.UmaskResidueTargetTaskID) {
+		t.Fatalf("expected same-run env/function/cwd/umask tasks in seed: %#v", executionContextSeed)
+	}
+	if !target.ContainsString(executionContextSeed.PlantPrimitives, "shell-env-export") ||
+		!target.ContainsString(executionContextSeed.PlantPrimitives, "shell-function-define") ||
+		!target.ContainsString(executionContextSeed.PlantPrimitives, "shell-cwd-change") ||
+		!target.ContainsString(executionContextSeed.PlantPrimitives, "shell-umask-change") {
+		t.Fatalf("expected same-run execution-context primitives in seed: %#v", executionContextSeed)
+	}
+	if len(executionContextSeed.LifecycleOperations) != 1 || executionContextSeed.LifecycleOperations[0] != "run-continue" {
+		t.Fatalf("expected run-continue lifecycle in same-run execution-context seed: %#v", executionContextSeed)
+	}
+	if !target.ContainsString(executionContextSeed.ActivationKinds, "environment-variable-resolution") ||
+		!target.ContainsString(executionContextSeed.ActivationKinds, "shell-function-invocation") ||
+		!target.ContainsString(executionContextSeed.ActivationKinds, "relative-path-resolution") ||
+		!target.ContainsString(executionContextSeed.ActivationKinds, "file-mode-witness") {
+		t.Fatalf("expected same-run execution-context activation kinds in seed: %#v", executionContextSeed)
+	}
+	if !target.ContainsString(executionContextSeed.OracleKinds, "env-residue") ||
+		!target.ContainsString(executionContextSeed.OracleKinds, "function-residue") ||
+		!target.ContainsString(executionContextSeed.OracleKinds, "cwd-residue") ||
+		!target.ContainsString(executionContextSeed.OracleKinds, "umask-residue") {
+		t.Fatalf("expected same-run execution-context oracle kinds in seed: %#v", executionContextSeed)
 	}
 }
 

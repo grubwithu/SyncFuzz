@@ -105,6 +105,12 @@ make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TAS
 make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=directory-residue-fork
 make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=delete-residue-fork
 make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini TARGET_TASK=symlink-residue-fork
+make target-maf-github-copilot-shell TARGET_TASK=persistent-shell-poisoning
+make target-maf-github-copilot-shell TARGET_TASK=env-residue
+make target-maf-github-copilot-shell TARGET_TASK=function-residue
+make target-maf-github-copilot-shell TARGET_TASK=cwd-residue
+make target-maf-github-copilot-shell TARGET_TASK=umask-residue
+make target-maf-github-copilot-shell-suite TARGET_GROUP=maf-shell-context REPEAT=1
 make corpus-list
 make corpus-analyze
 make corpus-verify

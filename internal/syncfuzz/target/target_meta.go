@@ -85,6 +85,27 @@ func TargetTaskByID(taskID string) (TargetTaskInfo, bool) {
 func TargetTaskGroups() []TargetTaskGroupInfo {
 	return []TargetTaskGroupInfo{
 		{
+			GroupID:     "maf-baseline",
+			Description: "current MAF baseline covering the single-step delayed-effect smoke path and the lifecycle-backed long-delay observation path",
+			Tasks: []string{
+				DefaultTargetTaskID,
+				LongDelayTargetTaskID,
+			},
+		},
+		{
+			GroupID:     "maf-shell-context",
+			Description: "MAF shell-context tasks covering delayed-effect smoke paths plus cross-call PATH, cwd, env, function, and umask residue observation",
+			Tasks: []string{
+				DefaultTargetTaskID,
+				LongDelayTargetTaskID,
+				PersistentShellTargetTaskID,
+				EnvResidueTargetTaskID,
+				FunctionResidueTargetTaskID,
+				CWDResidueTargetTaskID,
+				UmaskResidueTargetTaskID,
+			},
+		},
+		{
 			GroupID:     "phase5a-baseline",
 			Description: "current Phase 5A LangGraph baseline covering delayed process, persistent shell, replay/fork shell checks, and workspace residue forks across multiple OS state surfaces",
 			Tasks: append([]string{
@@ -281,6 +302,8 @@ func targetSeedDescription(seedID string) string {
 		return "delayed background effect seed with boundary and late-observation variants"
 	case "shell-path-residue":
 		return "persistent shell PATH residue seed with same-run, replay, and fork lifecycle variants"
+	case "shell-execution-context-residue":
+		return "persistent shell execution-context residue seed covering same-run cwd, env, function, and umask carry-over across later shell calls"
 	case "workspace-object-residue-fork":
 		return "workspace object residue seed expanded through primitive substitution across fork observation"
 	case "capability-residue-fork":
