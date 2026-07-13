@@ -40,6 +40,15 @@ func TestBuildTargetScheduleMatrixExpandsGroupsAndContracts(t *testing.T) {
 	if replay.LifecycleOperationID != "checkpoint-replay" || replay.ActivationKindID != "git-resolution" || replay.OracleKindID != "replay-path-residue" {
 		t.Fatalf("unexpected replay scenario execution metadata: %#v", replay)
 	}
+	if replay.Objective == "" {
+		t.Fatalf("expected replay objective metadata: %#v", replay)
+	}
+	if replay.ExecutionPlan == nil || replay.ExecutionPlan.CheckpointSelector != "before-path-export" || !replay.ExecutionPlan.Replay {
+		t.Fatalf("expected replay execution plan metadata: %#v", replay)
+	}
+	if len(replay.Components) < 4 {
+		t.Fatalf("expected replay structured components: %#v", replay)
+	}
 	if replay.MutationFocusID != "lifecycle-splice.checkpoint-replay" || replay.MutationFocusKind != target.TargetScenarioMutationLifecycleSplice {
 		t.Fatalf("unexpected replay mutation focus: %#v", replay)
 	}

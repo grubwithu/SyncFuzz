@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
@@ -230,6 +231,18 @@ func targetDimensionCoverageDescriptors() []targetDimensionDescriptor {
 		{name: "lifecycle_operation_id", values: func(candidate TargetScheduleCandidate) []string {
 			return targetDimensionSingle(candidate.LifecycleOperationID)
 		}},
+		{name: "checkpoint_selector", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionSingle(targetCandidateCheckpointSelector(candidate))
+		}},
+		{name: "checkpoint_backend", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionSingle(targetCandidateCheckpointBackend(candidate))
+		}},
+		{name: "process_mode", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionSingle(targetCandidateProcessMode(candidate))
+		}},
+		{name: "lifecycle_mode_id", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionSingle(targetCandidateLifecycleModeID(candidate))
+		}},
 		{name: "plant_primitive_id", values: func(candidate TargetScheduleCandidate) []string {
 			return targetDimensionSingle(candidate.PlantPrimitiveID)
 		}},
@@ -245,9 +258,21 @@ func targetDimensionCoverageDescriptors() []targetDimensionDescriptor {
 		{name: "lifecycle_to_activation", values: func(candidate TargetScheduleCandidate) []string {
 			return targetDimensionPair(candidate.LifecycleOperationID, candidate.ActivationKindID)
 		}},
+		{name: "selector_to_activation", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionPair(targetCandidateCheckpointSelector(candidate), candidate.ActivationKindID)
+		}},
 		{name: "oracle_kind_id", values: func(candidate TargetScheduleCandidate) []string { return targetDimensionSingle(candidate.OracleKindID) }},
 		{name: "activation_to_oracle", values: func(candidate TargetScheduleCandidate) []string {
 			return targetDimensionPair(candidate.ActivationKindID, candidate.OracleKindID)
+		}},
+		{name: "activation_path_id", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionSingle(targetCandidateActivationPathID(candidate))
+		}},
+		{name: "observation_path_id", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionSingle(targetCandidateObservationPathID(candidate))
+		}},
+		{name: "transition_signature", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionSingle(targetCandidateTransitionSignature(candidate))
 		}},
 		{name: "mutation_focus_id", values: func(candidate TargetScheduleCandidate) []string {
 			return targetDimensionSingle(targetCandidateMutationFocusID(candidate))
@@ -277,4 +302,100 @@ func targetDimensionPairValue(left string, right string) string {
 		return ""
 	}
 	return left + "->" + right
+}
+
+func targetDimensionChainValue(parts ...string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	trimmed := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return ""
+		}
+		trimmed = append(trimmed, part)
+	}
+	return strings.Join(trimmed, "=>")
+}
+
+func targetCandidateCheckpointSelector(candidate TargetScheduleCandidate) string {
+	if candidate.ExecutionPlan == nil {
+		return ""
+	}
+	return strings.TrimSpace(candidate.ExecutionPlan.CheckpointSelector)
+}
+
+func targetCandidateCheckpointBackend(candidate TargetScheduleCandidate) string {
+	if candidate.ExecutionPlan == nil {
+		return ""
+	}
+	return strings.TrimSpace(candidate.ExecutionPlan.CheckpointBackend)
+}
+
+func targetCandidateProcessMode(candidate TargetScheduleCandidate) string {
+	if candidate.ExecutionPlan == nil {
+		return ""
+	}
+	return strings.TrimSpace(candidate.ExecutionPlan.ProcessMode)
+}
+
+func targetCandidateLifecycleModeID(candidate TargetScheduleCandidate) string {
+	if candidate.ExecutionPlan == nil {
+		return ""
+	}
+	mode := "continue"
+	switch {
+	case candidate.ExecutionPlan.Replay:
+		mode = "replay"
+	case candidate.ExecutionPlan.ForkFollowup:
+		mode = "fork-followup"
+	}
+	parts := []string{mode}
+	if selector := targetCandidateCheckpointSelector(candidate); selector != "" {
+		parts = append(parts, selector)
+	}
+	if backend := targetCandidateCheckpointBackend(candidate); backend != "" {
+		parts = append(parts, backend)
+	}
+	if processMode := targetCandidateProcessMode(candidate); processMode != "" {
+		parts = append(parts, processMode)
+	}
+	return strings.Join(parts, "|")
+}
+
+func targetCandidateActivationPathID(candidate TargetScheduleCandidate) string {
+	lifecycleKey := candidate.LifecycleOperationID
+	if mode := targetCandidateLifecycleModeID(candidate); mode != "" {
+		lifecycleKey = mode
+	}
+	return targetDimensionChainValue(
+		lifecycleKey,
+		candidate.ActivationKindID,
+	)
+}
+
+func targetCandidateObservationPathID(candidate TargetScheduleCandidate) string {
+	lifecycleKey := candidate.LifecycleOperationID
+	if mode := targetCandidateLifecycleModeID(candidate); mode != "" {
+		lifecycleKey = mode
+	}
+	return targetDimensionChainValue(
+		lifecycleKey,
+		candidate.ActivationKindID,
+		candidate.OracleKindID,
+	)
+}
+
+func targetCandidateTransitionSignature(candidate TargetScheduleCandidate) string {
+	lifecycleKey := candidate.LifecycleOperationID
+	if mode := targetCandidateLifecycleModeID(candidate); mode != "" {
+		lifecycleKey = mode
+	}
+	return targetDimensionChainValue(
+		candidate.StateSurface,
+		lifecycleKey,
+		candidate.ActivationKindID,
+		candidate.OracleKindID,
+	)
 }

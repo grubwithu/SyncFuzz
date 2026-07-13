@@ -29,6 +29,7 @@ type TargetScheduleCandidate struct {
 	PromptVariantDescription string                              `json:"prompt_variant_description,omitempty"`
 	Generated                bool                                `json:"generated,omitempty"`
 	Description              string                              `json:"description,omitempty"`
+	Objective                string                              `json:"objective,omitempty"`
 	DefaultExpectedFiles     []string                            `json:"default_expected_files,omitempty"`
 	UsesLateObservation      bool                                `json:"uses_late_observation,omitempty"`
 	DefaultLateObserveDelay  int64                               `json:"default_late_observe_delay_ms,omitempty"`
@@ -40,6 +41,8 @@ type TargetScheduleCandidate struct {
 	StateSurface             string                              `json:"state_surface,omitempty"`
 	LifecycleEdge            string                              `json:"lifecycle_edge,omitempty"`
 	LifecycleOperationID     string                              `json:"lifecycle_operation_id,omitempty"`
+	Components               []target.TargetScenarioComponent    `json:"components,omitempty"`
+	ExecutionPlan            *target.TargetScenarioExecutionPlan `json:"execution_plan,omitempty"`
 	PlantPrimitiveID         string                              `json:"plant_primitive_id,omitempty"`
 	ActivationKindID         string                              `json:"activation_kind_id,omitempty"`
 	OracleKindID             string                              `json:"oracle_kind_id,omitempty"`
@@ -106,6 +109,7 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 				candidate.ScenarioID = taskInfo.ScenarioID
 				candidate.SeedID = taskInfo.SeedID
 				candidate.Description = taskInfo.Description
+				candidate.Objective = taskInfo.Objective
 				if len(taskInfo.DefaultExpectedFiles) > 0 {
 					candidate.DefaultExpectedFiles = append([]string{}, taskInfo.DefaultExpectedFiles...)
 				}
@@ -113,6 +117,11 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 				candidate.StateSurface = taskInfo.StateSurface
 				candidate.LifecycleEdge = taskInfo.LifecycleEdge
 				candidate.LifecycleOperationID = taskInfo.LifecycleOperationID
+				candidate.Components = append([]target.TargetScenarioComponent{}, taskInfo.Components...)
+				if taskInfo.ExecutionPlan != nil {
+					plan := *taskInfo.ExecutionPlan
+					candidate.ExecutionPlan = &plan
+				}
 				candidate.PlantPrimitiveID = taskInfo.PlantPrimitiveID
 				candidate.ActivationKindID = taskInfo.ActivationKindID
 				candidate.OracleKindID = taskInfo.OracleKindID

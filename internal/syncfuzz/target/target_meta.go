@@ -9,21 +9,24 @@ import (
 )
 
 type TargetTaskInfo struct {
-	TaskID               string                     `json:"task_id"`
-	ScenarioID           string                     `json:"scenario_id,omitempty"`
-	SeedID               string                     `json:"seed_id,omitempty"`
-	Description          string                     `json:"description"`
-	PlantPrimitiveID     string                     `json:"plant_primitive_id,omitempty"`
-	ActivationKindID     string                     `json:"activation_kind_id,omitempty"`
-	OracleKindID         string                     `json:"oracle_kind_id,omitempty"`
-	DefaultExpectedFiles []string                   `json:"default_expected_files,omitempty"`
-	UsesLateObservation  bool                       `json:"uses_late_observation,omitempty"`
-	StateSurface         string                     `json:"state_surface,omitempty"`
-	LifecycleEdge        string                     `json:"lifecycle_edge,omitempty"`
-	LifecycleOperationID string                     `json:"lifecycle_operation_id,omitempty"`
-	MutationFocusID      string                     `json:"mutation_focus_id,omitempty"`
-	MutationFocusKind    TargetScenarioMutationKind `json:"mutation_focus_kind,omitempty"`
-	Mutations            []TargetScenarioMutation   `json:"mutations,omitempty"`
+	TaskID               string                       `json:"task_id"`
+	ScenarioID           string                       `json:"scenario_id,omitempty"`
+	SeedID               string                       `json:"seed_id,omitempty"`
+	Description          string                       `json:"description"`
+	Objective            string                       `json:"objective,omitempty"`
+	PlantPrimitiveID     string                       `json:"plant_primitive_id,omitempty"`
+	ActivationKindID     string                       `json:"activation_kind_id,omitempty"`
+	OracleKindID         string                       `json:"oracle_kind_id,omitempty"`
+	DefaultExpectedFiles []string                     `json:"default_expected_files,omitempty"`
+	UsesLateObservation  bool                         `json:"uses_late_observation,omitempty"`
+	StateSurface         string                       `json:"state_surface,omitempty"`
+	LifecycleEdge        string                       `json:"lifecycle_edge,omitempty"`
+	LifecycleOperationID string                       `json:"lifecycle_operation_id,omitempty"`
+	Components           []TargetScenarioComponent    `json:"components,omitempty"`
+	ExecutionPlan        *TargetScenarioExecutionPlan `json:"execution_plan,omitempty"`
+	MutationFocusID      string                       `json:"mutation_focus_id,omitempty"`
+	MutationFocusKind    TargetScenarioMutationKind   `json:"mutation_focus_kind,omitempty"`
+	Mutations            []TargetScenarioMutation     `json:"mutations,omitempty"`
 }
 
 type TargetTaskGroupInfo struct {
@@ -52,6 +55,7 @@ func TargetTasks() []TargetTaskInfo {
 			TaskID:               scenario.TaskID,
 			SeedID:               scenario.SeedID,
 			Description:          scenario.Description,
+			Objective:            scenario.Objective,
 			PlantPrimitiveID:     scenario.PlantPrimitiveID,
 			ActivationKindID:     scenario.ActivationKindID,
 			OracleKindID:         scenario.OracleKindID,
@@ -59,6 +63,7 @@ func TargetTasks() []TargetTaskInfo {
 			UsesLateObservation:  scenario.UsesLateObservation,
 			StateSurface:         scenario.StateSurface,
 			LifecycleEdge:        scenario.LifecycleEdge,
+			Components:           append([]TargetScenarioComponent{}, scenario.Components...),
 			Mutations:            append([]TargetScenarioMutation{}, scenario.Mutations...),
 		})
 		if hasFocus {
@@ -67,6 +72,8 @@ func TargetTasks() []TargetTaskInfo {
 		}
 		if scenario.ExecutionPlan != nil {
 			tasks[len(tasks)-1].LifecycleOperationID = scenario.ExecutionPlan.LifecycleOperationID
+			plan := *scenario.ExecutionPlan
+			tasks[len(tasks)-1].ExecutionPlan = &plan
 		}
 	}
 	return tasks

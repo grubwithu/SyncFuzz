@@ -28,13 +28,21 @@ type targetExplorationState struct {
 	seenSurfaces       map[string]struct{}
 	seenEdges          map[string]struct{}
 	seenLifecycleOps   map[string]struct{}
+	seenSelectors      map[string]struct{}
+	seenBackends       map[string]struct{}
+	seenProcessModes   map[string]struct{}
+	seenLifecycleModes map[string]struct{}
 	seenActivations    map[string]struct{}
 	seenOracles        map[string]struct{}
 	seenMutations      map[string]struct{}
 	seenSeedPlant      map[string]struct{}
 	seenPlantAct       map[string]struct{}
 	seenLifecycleAct   map[string]struct{}
+	seenSelectorAct    map[string]struct{}
 	seenActOracle      map[string]struct{}
+	seenActivationPath map[string]struct{}
+	seenObservation    map[string]struct{}
+	seenTransitions    map[string]struct{}
 	seenMutationOracle map[string]struct{}
 }
 
@@ -347,12 +355,24 @@ func targetDimensionGapWeight(dimension string) int {
 		return 8
 	case "lifecycle_operation_id":
 		return 8
+	case "checkpoint_selector":
+		return 8
+	case "transition_signature":
+		return 8
 	case "activation_kind_id":
+		return 6
+	case "lifecycle_mode_id":
 		return 6
 	case "plant_to_activation":
 		return 10
 	case "lifecycle_to_activation":
 		return 9
+	case "selector_to_activation":
+		return 8
+	case "activation_path_id":
+		return 9
+	case "observation_path_id":
+		return 8
 	case "mutation_focus_id":
 		return 6
 	case "mutation_focus_to_oracle":
@@ -360,6 +380,10 @@ func targetDimensionGapWeight(dimension string) int {
 	case "state_surface":
 		return 4
 	case "contract_rule_id":
+		return 4
+	case "checkpoint_backend":
+		return 4
+	case "process_mode":
 		return 4
 	case "prompt_profile_id":
 		return 3
@@ -452,13 +476,21 @@ func newTargetExplorationState(capacity int) *targetExplorationState {
 		seenSurfaces:       make(map[string]struct{}, capacity),
 		seenEdges:          make(map[string]struct{}, capacity),
 		seenLifecycleOps:   make(map[string]struct{}, capacity),
+		seenSelectors:      make(map[string]struct{}, capacity),
+		seenBackends:       make(map[string]struct{}, capacity),
+		seenProcessModes:   make(map[string]struct{}, capacity),
+		seenLifecycleModes: make(map[string]struct{}, capacity),
 		seenActivations:    make(map[string]struct{}, capacity),
 		seenOracles:        make(map[string]struct{}, capacity),
 		seenMutations:      make(map[string]struct{}, capacity),
 		seenSeedPlant:      make(map[string]struct{}, capacity),
 		seenPlantAct:       make(map[string]struct{}, capacity),
 		seenLifecycleAct:   make(map[string]struct{}, capacity),
+		seenSelectorAct:    make(map[string]struct{}, capacity),
 		seenActOracle:      make(map[string]struct{}, capacity),
+		seenActivationPath: make(map[string]struct{}, capacity),
+		seenObservation:    make(map[string]struct{}, capacity),
+		seenTransitions:    make(map[string]struct{}, capacity),
 		seenMutationOracle: make(map[string]struct{}, capacity),
 	}
 }
@@ -482,13 +514,21 @@ func (s *targetExplorationState) noveltyScore(candidate TargetScheduleCandidate)
 		s.seenSurfaces,
 		s.seenEdges,
 		s.seenLifecycleOps,
+		s.seenSelectors,
+		s.seenBackends,
+		s.seenProcessModes,
+		s.seenLifecycleModes,
 		s.seenActivations,
 		s.seenOracles,
 		s.seenMutations,
 		s.seenSeedPlant,
 		s.seenPlantAct,
 		s.seenLifecycleAct,
+		s.seenSelectorAct,
 		s.seenActOracle,
+		s.seenActivationPath,
+		s.seenObservation,
+		s.seenTransitions,
 		s.seenMutationOracle,
 	)
 }
@@ -504,13 +544,21 @@ func (s *targetExplorationState) record(candidate TargetScheduleCandidate) {
 		s.seenSurfaces,
 		s.seenEdges,
 		s.seenLifecycleOps,
+		s.seenSelectors,
+		s.seenBackends,
+		s.seenProcessModes,
+		s.seenLifecycleModes,
 		s.seenActivations,
 		s.seenOracles,
 		s.seenMutations,
 		s.seenSeedPlant,
 		s.seenPlantAct,
 		s.seenLifecycleAct,
+		s.seenSelectorAct,
 		s.seenActOracle,
+		s.seenActivationPath,
+		s.seenObservation,
+		s.seenTransitions,
 		s.seenMutationOracle,
 	)
 }
@@ -525,13 +573,21 @@ func targetExplorationNoveltyScore(
 	seenSurfaces map[string]struct{},
 	seenEdges map[string]struct{},
 	seenLifecycleOps map[string]struct{},
+	seenSelectors map[string]struct{},
+	seenBackends map[string]struct{},
+	seenProcessModes map[string]struct{},
+	seenLifecycleModes map[string]struct{},
 	seenActivations map[string]struct{},
 	seenOracles map[string]struct{},
 	seenMutations map[string]struct{},
 	seenSeedPlant map[string]struct{},
 	seenPlantAct map[string]struct{},
 	seenLifecycleAct map[string]struct{},
+	seenSelectorAct map[string]struct{},
 	seenActOracle map[string]struct{},
+	seenActivationPath map[string]struct{},
+	seenObservation map[string]struct{},
+	seenTransitions map[string]struct{},
 	seenMutationOracle map[string]struct{},
 ) int {
 	score := 0
@@ -578,6 +634,26 @@ func targetExplorationNoveltyScore(
 			score += 4
 		}
 	}
+	if selector := targetCandidateCheckpointSelector(candidate); selector != "" {
+		if _, ok := seenSelectors[selector]; !ok {
+			score += 5
+		}
+	}
+	if backend := targetCandidateCheckpointBackend(candidate); backend != "" {
+		if _, ok := seenBackends[backend]; !ok {
+			score += 3
+		}
+	}
+	if processMode := targetCandidateProcessMode(candidate); processMode != "" {
+		if _, ok := seenProcessModes[processMode]; !ok {
+			score += 3
+		}
+	}
+	if lifecycleMode := targetCandidateLifecycleModeID(candidate); lifecycleMode != "" {
+		if _, ok := seenLifecycleModes[lifecycleMode]; !ok {
+			score += 6
+		}
+	}
 	if candidate.ActivationKindID != "" {
 		if _, ok := seenActivations[candidate.ActivationKindID]; !ok {
 			score += 2
@@ -593,6 +669,11 @@ func targetExplorationNoveltyScore(
 			score += 5
 		}
 	}
+	if pair := targetDimensionPairValue(targetCandidateCheckpointSelector(candidate), candidate.ActivationKindID); pair != "" {
+		if _, ok := seenSelectorAct[pair]; !ok {
+			score += 6
+		}
+	}
 	if candidate.OracleKindID != "" {
 		if _, ok := seenOracles[candidate.OracleKindID]; !ok {
 			score += 1
@@ -601,6 +682,21 @@ func targetExplorationNoveltyScore(
 	if pair := targetDimensionPairValue(candidate.ActivationKindID, candidate.OracleKindID); pair != "" {
 		if _, ok := seenActOracle[pair]; !ok {
 			score += 3
+		}
+	}
+	if activationPath := targetCandidateActivationPathID(candidate); activationPath != "" {
+		if _, ok := seenActivationPath[activationPath]; !ok {
+			score += 7
+		}
+	}
+	if observationPath := targetCandidateObservationPathID(candidate); observationPath != "" {
+		if _, ok := seenObservation[observationPath]; !ok {
+			score += 6
+		}
+	}
+	if signature := targetCandidateTransitionSignature(candidate); signature != "" {
+		if _, ok := seenTransitions[signature]; !ok {
+			score += 8
 		}
 	}
 	if mutationID := targetCandidateMutationFocusID(candidate); mutationID != "" {
@@ -626,13 +722,21 @@ func targetRecordExplorationCandidate(
 	seenSurfaces map[string]struct{},
 	seenEdges map[string]struct{},
 	seenLifecycleOps map[string]struct{},
+	seenSelectors map[string]struct{},
+	seenBackends map[string]struct{},
+	seenProcessModes map[string]struct{},
+	seenLifecycleModes map[string]struct{},
 	seenActivations map[string]struct{},
 	seenOracles map[string]struct{},
 	seenMutations map[string]struct{},
 	seenSeedPlant map[string]struct{},
 	seenPlantAct map[string]struct{},
 	seenLifecycleAct map[string]struct{},
+	seenSelectorAct map[string]struct{},
 	seenActOracle map[string]struct{},
+	seenActivationPath map[string]struct{},
+	seenObservation map[string]struct{},
+	seenTransitions map[string]struct{},
 	seenMutationOracle map[string]struct{},
 ) {
 	if candidate.SeedID != "" {
@@ -660,6 +764,18 @@ func targetRecordExplorationCandidate(
 	if candidate.LifecycleOperationID != "" {
 		seenLifecycleOps[candidate.LifecycleOperationID] = struct{}{}
 	}
+	if selector := targetCandidateCheckpointSelector(candidate); selector != "" {
+		seenSelectors[selector] = struct{}{}
+	}
+	if backend := targetCandidateCheckpointBackend(candidate); backend != "" {
+		seenBackends[backend] = struct{}{}
+	}
+	if processMode := targetCandidateProcessMode(candidate); processMode != "" {
+		seenProcessModes[processMode] = struct{}{}
+	}
+	if lifecycleMode := targetCandidateLifecycleModeID(candidate); lifecycleMode != "" {
+		seenLifecycleModes[lifecycleMode] = struct{}{}
+	}
 	if candidate.ActivationKindID != "" {
 		seenActivations[candidate.ActivationKindID] = struct{}{}
 	}
@@ -669,11 +785,23 @@ func targetRecordExplorationCandidate(
 	if pair := targetDimensionPairValue(candidate.LifecycleOperationID, candidate.ActivationKindID); pair != "" {
 		seenLifecycleAct[pair] = struct{}{}
 	}
+	if pair := targetDimensionPairValue(targetCandidateCheckpointSelector(candidate), candidate.ActivationKindID); pair != "" {
+		seenSelectorAct[pair] = struct{}{}
+	}
 	if candidate.OracleKindID != "" {
 		seenOracles[candidate.OracleKindID] = struct{}{}
 	}
 	if pair := targetDimensionPairValue(candidate.ActivationKindID, candidate.OracleKindID); pair != "" {
 		seenActOracle[pair] = struct{}{}
+	}
+	if activationPath := targetCandidateActivationPathID(candidate); activationPath != "" {
+		seenActivationPath[activationPath] = struct{}{}
+	}
+	if observationPath := targetCandidateObservationPathID(candidate); observationPath != "" {
+		seenObservation[observationPath] = struct{}{}
+	}
+	if signature := targetCandidateTransitionSignature(candidate); signature != "" {
+		seenTransitions[signature] = struct{}{}
 	}
 	if mutationID := targetCandidateMutationFocusID(candidate); mutationID != "" {
 		seenMutations[mutationID] = struct{}{}

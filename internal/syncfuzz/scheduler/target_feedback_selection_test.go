@@ -125,6 +125,72 @@ func TestSelectTargetMatrixCandidatesPrefersNewSeedsBeforeSameSeedVariants(t *te
 	}
 }
 
+func TestSelectTargetMatrixCandidatesPrefersNewExecutionTransitionBeforeDuplicatePath(t *testing.T) {
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates: []TargetScheduleCandidate{
+			func() TargetScheduleCandidate {
+				item := testTargetScenarioCandidateWithProfile("task-a", "seed-shared", "primitive-shared", target.TargetPromptProfileBaselineID)
+				item.LifecycleOperationID = "checkpoint-replay"
+				item.ActivationKindID = "activation-shared"
+				item.OracleKindID = "oracle-shared"
+				item.ExecutionPlan = &target.TargetScenarioExecutionPlan{
+					LifecycleOperationID: "checkpoint-replay",
+					CheckpointSelector:   "before-a",
+					Replay:               true,
+					CheckpointBackend:    "disk",
+					ProcessMode:          "split-process",
+				}
+				return item
+			}(),
+			func() TargetScheduleCandidate {
+				item := testTargetScenarioCandidateWithProfile("task-z", "seed-shared", "primitive-shared", target.TargetPromptProfileBaselineID)
+				item.LifecycleOperationID = "checkpoint-replay"
+				item.ActivationKindID = "activation-shared"
+				item.OracleKindID = "oracle-shared"
+				item.ExecutionPlan = &target.TargetScenarioExecutionPlan{
+					LifecycleOperationID: "checkpoint-replay",
+					CheckpointSelector:   "before-b",
+					Replay:               true,
+					CheckpointBackend:    "disk",
+					ProcessMode:          "split-process",
+				}
+				return item
+			}(),
+			func() TargetScheduleCandidate {
+				item := testTargetScenarioCandidateWithProfile("task-b", "seed-shared", "primitive-shared", target.TargetPromptProfileBaselineID)
+				item.LifecycleOperationID = "checkpoint-replay"
+				item.ActivationKindID = "activation-shared"
+				item.OracleKindID = "oracle-shared"
+				item.ExecutionPlan = &target.TargetScenarioExecutionPlan{
+					LifecycleOperationID: "checkpoint-replay",
+					CheckpointSelector:   "before-a",
+					Replay:               true,
+					CheckpointBackend:    "disk",
+					ProcessMode:          "split-process",
+				}
+				return item
+			}(),
+		},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	selected, err := selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{Limit: 2})
+	if err != nil {
+		t.Fatalf("selectTargetMatrixCandidates failed: %v", err)
+	}
+	if len(selected.Candidates) != 2 {
+		t.Fatalf("expected 2 selected candidates, got %d", len(selected.Candidates))
+	}
+	if selected.Candidates[0].TaskID != "task-a" {
+		t.Fatalf("expected first candidate to preserve base ordering, got %#v", selected.Candidates[0])
+	}
+	if selected.Candidates[1].TaskID != "task-z" {
+		t.Fatalf("expected second candidate to prioritize a new execution transition, got %#v", selected.Candidates[1])
+	}
+}
+
 func TestSelectTargetMatrixCandidatesUsesCoverageGapsToPrioritizeUnseenCandidates(t *testing.T) {
 	matrix := &TargetScheduleMatrix{
 		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",

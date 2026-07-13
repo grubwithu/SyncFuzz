@@ -22,6 +22,13 @@ func TestSummarizeTargetDimensionCoverageTracksMissingValuesAndProgress(t *testi
 			PlantPrimitiveID:     "primitive-a",
 			ActivationKindID:     "activation-a",
 			OracleKindID:         "oracle-a",
+			ExecutionPlan: &target.TargetScenarioExecutionPlan{
+				LifecycleOperationID: "checkpoint-fork",
+				CheckpointSelector:   "before-a",
+				ForkFollowup:         true,
+				CheckpointBackend:    "disk",
+				ProcessMode:          "split-process",
+			},
 			Mutations: []target.TargetScenarioMutation{
 				{MutationID: "mutation-a"},
 			},
@@ -40,6 +47,13 @@ func TestSummarizeTargetDimensionCoverageTracksMissingValuesAndProgress(t *testi
 			PlantPrimitiveID:     "primitive-b",
 			ActivationKindID:     "activation-b",
 			OracleKindID:         "oracle-b",
+			ExecutionPlan: &target.TargetScenarioExecutionPlan{
+				LifecycleOperationID: "checkpoint-replay",
+				CheckpointSelector:   "before-b",
+				Replay:               true,
+				CheckpointBackend:    "disk",
+				ProcessMode:          "split-process",
+			},
 			Mutations: []target.TargetScenarioMutation{
 				{MutationID: "mutation-b"},
 			},
@@ -82,6 +96,22 @@ func TestSummarizeTargetDimensionCoverageTracksMissingValuesAndProgress(t *testi
 		t.Fatalf("unexpected transition coverage gaps: %#v", transitionCoverage.MissingValues)
 	}
 
+	selectorCoverage := findTargetDimensionCoverage(t, summaries, "checkpoint_selector")
+	if selectorCoverage.TotalValues != 2 || selectorCoverage.ExecutedValues != 1 {
+		t.Fatalf("unexpected checkpoint selector coverage summary: %#v", selectorCoverage)
+	}
+	if len(selectorCoverage.MissingValues) != 1 || selectorCoverage.MissingValues[0] != "before-b" {
+		t.Fatalf("unexpected checkpoint selector gaps: %#v", selectorCoverage.MissingValues)
+	}
+
+	signatureCoverage := findTargetDimensionCoverage(t, summaries, "transition_signature")
+	if signatureCoverage.TotalValues != 2 || signatureCoverage.ExecutedValues != 1 {
+		t.Fatalf("unexpected transition signature coverage summary: %#v", signatureCoverage)
+	}
+	if len(signatureCoverage.MissingValues) != 1 || signatureCoverage.MissingValues[0] != "workspace.socket=>replay|before-b|disk|split-process=>activation-b=>oracle-b" {
+		t.Fatalf("unexpected transition signature gaps: %#v", signatureCoverage.MissingValues)
+	}
+
 	promptVariantCoverage := findTargetDimensionCoverage(t, summaries, "prompt_variant_id")
 	if promptVariantCoverage.TotalValues != 2 || promptVariantCoverage.ExecutedValues != 1 {
 		t.Fatalf("unexpected prompt variant coverage summary: %#v", promptVariantCoverage)
@@ -107,6 +137,13 @@ func TestSummarizeTargetDimensionCoverageGainTracksNewValuesAndTransitions(t *te
 			PlantPrimitiveID:     "primitive-a",
 			ActivationKindID:     "activation-a",
 			OracleKindID:         "oracle-a",
+			ExecutionPlan: &target.TargetScenarioExecutionPlan{
+				LifecycleOperationID: "checkpoint-fork",
+				CheckpointSelector:   "before-a",
+				ForkFollowup:         true,
+				CheckpointBackend:    "disk",
+				ProcessMode:          "split-process",
+			},
 			Mutations: []target.TargetScenarioMutation{
 				{MutationID: "mutation-a"},
 			},
@@ -125,6 +162,13 @@ func TestSummarizeTargetDimensionCoverageGainTracksNewValuesAndTransitions(t *te
 			PlantPrimitiveID:     "primitive-b",
 			ActivationKindID:     "activation-b",
 			OracleKindID:         "oracle-b",
+			ExecutionPlan: &target.TargetScenarioExecutionPlan{
+				LifecycleOperationID: "checkpoint-replay",
+				CheckpointSelector:   "before-b",
+				Replay:               true,
+				CheckpointBackend:    "disk",
+				ProcessMode:          "split-process",
+			},
 			Mutations: []target.TargetScenarioMutation{
 				{MutationID: "mutation-b"},
 			},
@@ -168,6 +212,22 @@ func TestSummarizeTargetDimensionCoverageGainTracksNewValuesAndTransitions(t *te
 	}
 	if len(transitionGain.NewConfirmedValues) != 1 || transitionGain.NewConfirmedValues[0] != "activation-a->oracle-a" {
 		t.Fatalf("unexpected transition confirmation gain: %#v", transitionGain)
+	}
+
+	selectorGain := findTargetDimensionCoverageGain(t, gains, "checkpoint_selector")
+	if len(selectorGain.NewExecutedValues) != 1 || selectorGain.NewExecutedValues[0] != "before-b" {
+		t.Fatalf("unexpected selector execution gain: %#v", selectorGain)
+	}
+	if len(selectorGain.NewConfirmedValues) != 1 || selectorGain.NewConfirmedValues[0] != "before-a" {
+		t.Fatalf("unexpected selector confirmation gain: %#v", selectorGain)
+	}
+
+	signatureGain := findTargetDimensionCoverageGain(t, gains, "transition_signature")
+	if len(signatureGain.NewExecutedValues) != 1 || signatureGain.NewExecutedValues[0] != "workspace.socket=>replay|before-b|disk|split-process=>activation-b=>oracle-b" {
+		t.Fatalf("unexpected transition signature execution gain: %#v", signatureGain)
+	}
+	if len(signatureGain.NewConfirmedValues) != 1 || signatureGain.NewConfirmedValues[0] != "workspace.file=>fork-followup|before-a|disk|split-process=>activation-a=>oracle-a" {
+		t.Fatalf("unexpected transition signature confirmation gain: %#v", signatureGain)
 	}
 }
 
