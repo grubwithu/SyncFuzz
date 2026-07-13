@@ -18,11 +18,13 @@ EFFECT_ARTIFACT = "maf-workflow-effect.txt"
 WITNESS_ARTIFACT = "maf-workflow-continuity-check.txt"
 EXTERNAL_LEDGER_ARTIFACT = "maf-workflow-external-ledger.jsonl"
 EXTERNAL_REPLAY_ARTIFACT = "maf-workflow-external-replay-check.txt"
+PARTIAL_COMMIT_ARTIFACT = "maf-workflow-partial-commit-check.txt"
 SUMMARY_ARTIFACT = "maf-workflow-summary.json"
 CHECKPOINT_DIR = "maf-workflow-checkpoints"
 CHECKPOINT_CONTINUITY_TASK = "maf-workflow-checkpoint-continuity"
 EXTERNAL_EFFECT_REPLAY_TASK = "maf-workflow-external-effect-replay"
-SUPPORTED_TASKS = {CHECKPOINT_CONTINUITY_TASK, EXTERNAL_EFFECT_REPLAY_TASK}
+PARTIAL_COMMIT_REPLAY_TASK = "maf-workflow-partial-commit-replay"
+SUPPORTED_TASKS = {CHECKPOINT_CONTINUITY_TASK, EXTERNAL_EFFECT_REPLAY_TASK, PARTIAL_COMMIT_REPLAY_TASK}
 EXTERNAL_MARKER = "SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT"
 
 
@@ -46,6 +48,8 @@ async def run_probe(workspace: Path, task_id: str, pre_timeout: float, restore_t
         raise ValueError(f"unsupported MAF workflow task: {task_id}")
     if task_id == EXTERNAL_EFFECT_REPLAY_TASK:
         return await run_external_effect_replay(workspace, pre_timeout, restore_timeout)
+    if task_id == PARTIAL_COMMIT_REPLAY_TASK:
+        return await run_partial_commit_replay(workspace, pre_timeout, restore_timeout)
     return await run_checkpoint_continuity(workspace, pre_timeout, restore_timeout)
 
 
@@ -323,6 +327,195 @@ async def run_external_effect_replay(workspace: Path, pre_timeout: float, restor
     summary["duplicate_effect_observed"] = len(operation_entries) >= 2
     write_json(workspace / SUMMARY_ARTIFACT, summary)
     if summary["restored"] and summary["duplicate_effect_observed"]:
+        return 0
+    return 1
+
+
+async def run_partial_commit_replay(workspace: Path, pre_timeout: float, restore_timeout: float) -> int:
+    from agent_framework import Executor, FileCheckpointStorage, WorkflowBuilder, WorkflowContext, handler
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir = workspace / CHECKPOINT_DIR
+    storage = FileCheckpointStorage(checkpoint_dir)
+    ledger_path = workspace / EXTERNAL_LEDGER_ARTIFACT
+    witness_path = workspace / PARTIAL_COMMIT_ARTIFACT
+    operation_id = "syncfuzz-maf-workflow-partial-operation-1"
+    events: list[dict[str, Any]] = []
+
+    def ledger_entries() -> list[dict[str, Any]]:
+        if not ledger_path.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        for line in ledger_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                entries.append(json.loads(line))
+        return entries
+
+    def append_commit(source: str) -> None:
+        entries = ledger_entries()
+        entry = {
+            "index": len(entries) + 1,
+            "operation_id": operation_id,
+            "marker": EXTERNAL_MARKER,
+            "source": source,
+            "branch": "commit",
+        }
+        with ledger_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, sort_keys=True) + "\n")
+        events.append({"phase": "parallel-commit", "source": source, "entry_index": entry["index"]})
+
+    class StartExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="partial-start")
+
+        @handler
+        async def process(self, message: str, ctx: WorkflowContext[str]) -> None:
+            events.append({"phase": "partial-start", "message": message})
+            await ctx.send_message(operation_id)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            return {"operation_id": operation_id}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "partial-start-restore", "state": state})
+
+    class CommitExecutor(Executor):
+        def __init__(self, *, source: str) -> None:
+            super().__init__(id="partial-commit")
+            self.source = source
+
+        @handler
+        async def process(self, op_id: str, ctx: WorkflowContext[str]) -> None:
+            append_commit(self.source)
+            await ctx.send_message(op_id)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            return {"ledger_entries": len(ledger_entries())}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "partial-commit-restore", "state": state})
+
+    class GateExecutor(Executor):
+        def __init__(self, *, fail: bool, write_witness: bool) -> None:
+            super().__init__(id="partial-gate")
+            self.fail = fail
+            self.write_witness = write_witness
+
+        @handler
+        async def process(self, op_id: str, ctx: WorkflowContext[Never, str]) -> None:
+            await asyncio.sleep(0.05)
+            if self.fail:
+                events.append({"phase": "partial-gate-fail", "operation_id": op_id})
+                raise RuntimeError("syncfuzz intentional partial-commit branch failure")
+            entries = [entry for entry in ledger_entries() if entry.get("operation_id") == op_id]
+            duplicate = len(entries) >= 2
+            if self.write_witness:
+                label = "DUPLICATE_PARTIAL_COMMIT_COMMIT" if duplicate else "SINGLE_PARTIAL_COMMIT_COMMIT"
+                witness_path.write_text(
+                    f"{label}\nOPERATION_ID={op_id}\nMARKER={EXTERNAL_MARKER}\nENTRIES={len(entries)}\n",
+                    encoding="utf-8",
+                )
+                await ctx.yield_output(label)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            return {"failed_branch": self.fail, "witness_exists": witness_path.exists()}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "partial-gate-restore", "state": state})
+
+    def build_workflow(max_iterations: int, *, source: str, fail: bool, write_witness: bool):
+        start = StartExecutor()
+        commit = CommitExecutor(source=source)
+        gate = GateExecutor(fail=fail, write_witness=write_witness)
+        return (
+            WorkflowBuilder(
+                start_executor=start,
+                name=WORKFLOW_NAME + "-partial-commit",
+                checkpoint_storage=storage,
+                max_iterations=max_iterations,
+                output_from=[gate],
+            )
+            .add_edge(start, commit)
+            .add_edge(commit, gate)
+            .build()
+        )
+
+    summary: dict[str, Any] = {
+        "schema_version": "syncfuzz.maf-workflow-checkpoint.v1",
+        "task_id": PARTIAL_COMMIT_REPLAY_TASK,
+        "workflow_name": WORKFLOW_NAME + "-partial-commit",
+        "checkpoint_backend": "file",
+        "checkpoint_dir": str(checkpoint_dir),
+        "checkpoint_ids": [],
+        "selected_checkpoint_id": "",
+        "selected_checkpoint_iteration": 0,
+        "restored": False,
+        "runtime_object_recreated": False,
+        "pre_restore_timed_out": False,
+        "post_restore_timed_out": False,
+        "initial_failure_observed": False,
+        "partial_commit_observed": False,
+        "duplicate_effect_observed": False,
+        "external_effect_entries": 0,
+        "operation_id": operation_id,
+        "post_restore_outputs": [],
+        "events": events,
+    }
+
+    try:
+        await asyncio.wait_for(
+            build_workflow(100, source="initial-run", fail=True, write_witness=False).run("syncfuzz-start"),
+            timeout=pre_timeout,
+        )
+    except asyncio.TimeoutError:
+        summary["pre_restore_timed_out"] = True
+    except Exception as exc:
+        summary["initial_failure_observed"] = True
+        summary["pre_restore_error"] = f"{type(exc).__name__}: {exc}"
+
+    ids = checkpoint_ids(checkpoint_dir)
+    summary["checkpoint_ids"] = ids
+    entries_after_failure = [entry for entry in ledger_entries() if entry.get("operation_id") == operation_id]
+    summary["partial_commit_observed"] = len(entries_after_failure) == 1
+    if summary["pre_restore_timed_out"] and summary["partial_commit_observed"]:
+        summary["initial_failure_observed"] = True
+    if witness_path.exists():
+        witness_path.unlink()
+
+    if ids:
+        selected = ids[-1]
+        summary["selected_checkpoint_id"] = selected
+        try:
+            result = await asyncio.wait_for(
+                build_workflow(100, source="restored-run", fail=False, write_witness=True).run(
+                    checkpoint_id=selected,
+                    checkpoint_storage=storage,
+                ),
+                timeout=restore_timeout,
+            )
+            summary["post_restore_outputs"] = [str(value) for value in result.get_outputs()]
+            summary["restored"] = True
+        except asyncio.TimeoutError:
+            summary["post_restore_timed_out"] = True
+            summary["restored"] = witness_path.exists()
+        except Exception as exc:
+            summary["post_restore_error"] = f"{type(exc).__name__}: {exc}"
+            summary["post_restore_traceback"] = traceback.format_exc(limit=4)
+            summary["restored"] = witness_path.exists()
+        summary["runtime_object_recreated"] = True
+
+    operation_entries = [entry for entry in ledger_entries() if entry.get("operation_id") == operation_id]
+    summary["external_effect_entries"] = len(operation_entries)
+    summary["duplicate_effect_observed"] = len(operation_entries) >= 2
+    if summary["duplicate_effect_observed"] and not witness_path.exists():
+        witness_path.write_text(
+            f"DUPLICATE_PARTIAL_COMMIT_REPLAY\nOPERATION_ID={operation_id}\nMARKER={EXTERNAL_MARKER}\nENTRIES={len(operation_entries)}\n",
+            encoding="utf-8",
+        )
+    if summary["duplicate_effect_observed"]:
+        summary["restored"] = True
+    write_json(workspace / SUMMARY_ARTIFACT, summary)
+    if summary["restored"] and summary["initial_failure_observed"] and summary["partial_commit_observed"] and summary["duplicate_effect_observed"]:
         return 0
     return 1
 

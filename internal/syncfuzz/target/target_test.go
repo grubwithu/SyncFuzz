@@ -2599,6 +2599,44 @@ func TestEvaluateMAFWorkflowExternalReplayTargetOracleConfirmed(t *testing.T) {
 	}
 }
 
+func TestEvaluateMAFWorkflowPartialCommitTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetMAFWorkflowPartialCommitArtifact), []byte("DUPLICATE_PARTIAL_COMMIT_REPLAY\nOPERATION_ID=syncfuzz-maf-workflow-partial-operation-1\nMARKER=SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT\nENTRIES=2\n"), 0o644); err != nil {
+		t.Fatalf("write MAF workflow partial commit witness: %v", err)
+	}
+	summary := mafWorkflowCheckpointArtifactData{
+		SchemaVersion:           "syncfuzz.maf-workflow-checkpoint.v1",
+		WorkflowName:            "syncfuzz-maf-workflow-checkpoint-partial-commit",
+		CheckpointBackend:       "file",
+		CheckpointDir:           filepath.Join(tmp, "maf-workflow-checkpoints"),
+		CheckpointIDs:           []string{"checkpoint-a"},
+		SelectedCheckpointID:    "checkpoint-a",
+		Restored:                true,
+		RuntimeObjectRecreated:  true,
+		DuplicateEffectObserved: true,
+		ExternalEffectEntries:   2,
+		InitialFailureObserved:  true,
+		PartialCommitObserved:   true,
+		OperationID:             "syncfuzz-maf-workflow-partial-operation-1",
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("marshal MAF workflow artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, mafWorkflowArtifact), raw, 0o644); err != nil {
+		t.Fatalf("write MAF workflow artifact: %v", err)
+	}
+
+	oracle := evaluateTargetOracle(tmp, "maf-workflow-checkpoint", MAFWorkflowPartialCommitTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed MAF workflow partial commit oracle: %#v", oracle)
+	}
+	compliance := evaluateTargetTaskComplianceForTarget(tmp, "maf-workflow-checkpoint", MAFWorkflowPartialCommitTargetTaskID)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF workflow partial commit task: %#v", compliance)
+	}
+}
+
 func TestRunTargetExportsUsableWorkspacePathsForRelativeOutDir(t *testing.T) {
 	tmp := t.TempDir()
 	cwd, err := os.Getwd()

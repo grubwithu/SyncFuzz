@@ -186,6 +186,9 @@ func TestTargetTaskGroupsExposeMAFWorkspaceResidueBundle(t *testing.T) {
 	if !ContainsString(workflowGroup.Tasks, MAFWorkflowExternalReplayTargetTaskID) {
 		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowExternalReplayTargetTaskID, workflowGroup)
 	}
+	if !ContainsString(workflowGroup.Tasks, MAFWorkflowPartialCommitTargetTaskID) {
+		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowPartialCommitTargetTaskID, workflowGroup)
+	}
 }
 
 func TestTargetScenariosExposeMAFSessionContinuity(t *testing.T) {
@@ -205,6 +208,26 @@ func TestTargetScenariosExposeMAFSessionContinuity(t *testing.T) {
 	}
 	if plan := targetScenarioExecutionPlanInfo(scenario.Lifecycle); plan == nil || plan.LifecycleOperationID != "session-restore" || plan.CheckpointBackend != "agent-session-json" {
 		t.Fatalf("expected executable MAF session restore plan: %#v", plan)
+	}
+}
+
+func TestTargetScenariosExposeMAFWorkflowPartialCommit(t *testing.T) {
+	scenario, ok := targetScenarioByID(MAFWorkflowPartialCommitTargetTaskID)
+	if !ok {
+		t.Fatalf("expected MAF workflow partial commit scenario")
+	}
+	info := scenario.Info
+	if info.SeedID != "maf-workflow-checkpoint" || info.LifecycleEdge != "superstep->checkpoint->restore" {
+		t.Fatalf("unexpected MAF workflow partial commit metadata: %#v", info)
+	}
+	if info.StateSurface != "external.partial-commit-ledger" || info.OracleKindID != "maf-workflow-partial-commit-replay" {
+		t.Fatalf("unexpected MAF workflow partial commit state/oracle metadata: %#v", info)
+	}
+	if !ContainsString(info.DefaultExpectedFiles, TargetMAFWorkflowPartialCommitArtifact) {
+		t.Fatalf("expected MAF workflow partial commit witness: %#v", info.DefaultExpectedFiles)
+	}
+	if focus, ok := TargetScenarioMutationFocus(info.Mutations); !ok || focus.Kind != TargetScenarioMutationPhaseShift {
+		t.Fatalf("expected phase-shift focus for partial commit: %#v", info.Mutations)
 	}
 }
 

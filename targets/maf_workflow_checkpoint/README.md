@@ -8,6 +8,7 @@ Current task:
 
 - `maf-workflow-checkpoint-continuity`
 - `maf-workflow-external-effect-replay`
+- `maf-workflow-partial-commit-replay`
 
 The wrapper writes:
 
@@ -17,6 +18,7 @@ The wrapper writes:
 - `maf-workflow-checkpoints/*.json`
 - `maf-workflow-external-ledger.jsonl` for the external-effect replay task
 - `maf-workflow-external-replay-check.txt` for the external-effect replay task
+- `maf-workflow-partial-commit-check.txt` for the partial-commit replay task
 
 Run the import check:
 
@@ -29,6 +31,7 @@ Run the target:
 ```bash
 make target-maf-workflow-checkpoint
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-external-effect-replay
+make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-partial-commit-replay
 ```
 
 This target reuses `MAF_PYTHON` when set. Otherwise it falls back to the Python

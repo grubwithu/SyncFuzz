@@ -24,6 +24,8 @@ type mafWorkflowCheckpointArtifactData struct {
 	ContinuityObserved          bool     `json:"continuity_observed"`
 	DuplicateEffectObserved     bool     `json:"duplicate_effect_observed"`
 	ExternalEffectEntries       int      `json:"external_effect_entries"`
+	InitialFailureObserved      bool     `json:"initial_failure_observed"`
+	PartialCommitObserved       bool     `json:"partial_commit_observed"`
 	OperationID                 string   `json:"operation_id"`
 	PostRestoreOutputs          []string `json:"post_restore_outputs"`
 }
@@ -146,6 +148,65 @@ func evaluateMAFWorkflowExternalReplayTargetOracle(workspace string, completed b
 	return finalizeTargetOracle(oracle)
 }
 
+func evaluateMAFWorkflowPartialCommitTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := newTargetOracleResult("maf-workflow-partial-commit-replay")
+	oracle.Attribution = TargetOracleAttributionUnknown
+	if !completed {
+		markTargetOracleInconclusive(&oracle, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		markTargetOracleInconclusive(&oracle, immediateMissing...)
+		return finalizeTargetOracle(oracle)
+	}
+
+	witness, err := readTargetOracleFile(workspace, TargetMAFWorkflowPartialCommitArtifact)
+	if err != nil {
+		markTargetOracleInconclusive(&oracle, "read "+TargetMAFWorkflowPartialCommitArtifact)
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		return finalizeTargetOracle(oracle)
+	}
+	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
+	oracle.Evidence = append(oracle.Evidence, "observed MAF workflow partial commit witness: "+witness)
+	if !strings.Contains(witness, "DUPLICATE_PARTIAL_COMMIT_REPLAY") || !strings.Contains(witness, targetMAFWorkflowExternalMarker) {
+		markTargetOracleNegative(&oracle, "restored MAF workflow replayed a partially committed parallel effect")
+		return finalizeTargetOracle(oracle)
+	}
+
+	summary, ok, err := loadMAFWorkflowArtifact(workspace)
+	switch {
+	case err != nil:
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		markTargetOracleInconclusive(&oracle, "maf workflow summary proved partial commit replay replay")
+	case !ok:
+		oracle.Evidence = append(oracle.Evidence, "maf workflow summary artifact was not available for partial commit oracle")
+		markTargetOracleInconclusive(&oracle, "maf workflow summary proved partial commit replay replay")
+	default:
+		oracle.Evidence = append(oracle.Evidence, fmt.Sprintf("maf workflow summary recorded %d external effect entries", summary.ExternalEffectEntries))
+		if summary.InitialFailureObserved && summary.PartialCommitObserved {
+			oracle.Evidence = append(oracle.Evidence, "maf workflow summary recorded initial branch failure after one partial external commit")
+		} else {
+			markTargetOracleInconclusive(&oracle, "maf workflow summary recorded initial branch failure after one partial external commit")
+		}
+		if summary.Restored && summary.RuntimeObjectRecreated {
+			oracle.Evidence = append(oracle.Evidence, "maf workflow summary recorded restore on a recreated workflow object")
+		} else {
+			markTargetOracleInconclusive(&oracle, "maf workflow summary recorded restore on a recreated workflow object")
+		}
+		if summary.DuplicateEffectObserved && summary.ExternalEffectEntries >= 2 {
+			oracle.Evidence = append(oracle.Evidence, "maf workflow summary recorded duplicate external commits after restore")
+		} else {
+			markTargetOracleNegative(&oracle, "maf workflow summary recorded duplicate external commits after restore")
+		}
+	}
+
+	if oracle.Confirmed && oracle.Attribution == TargetOracleAttributionUnknown {
+		oracle.Attribution = TargetOracleAttributionRuntimeResidue
+	}
+	return finalizeTargetOracle(oracle)
+}
+
 func evaluateMAFWorkflowCheckpointTargetTaskCompliance(workspace string) TargetTaskComplianceResult {
 	result := TargetTaskComplianceResult{
 		Name:   MAFWorkflowCheckpointTargetTaskID,
@@ -177,6 +238,41 @@ func evaluateMAFWorkflowCheckpointTargetTaskCompliance(workspace string) TargetT
 		appendTargetTaskEvidence(&result, "post-restore executor observed the pre-restore workspace effect")
 	} else {
 		appendTargetTaskViolation(&result, "post-restore executor observed the pre-restore workspace effect")
+	}
+	return finalizeTargetTaskCompliance(result)
+}
+
+func evaluateMAFWorkflowPartialCommitTargetTaskCompliance(workspace string) TargetTaskComplianceResult {
+	result := TargetTaskComplianceResult{
+		Name:   MAFWorkflowPartialCommitTargetTaskID,
+		Status: TargetTaskComplianceStatusUnknown,
+	}
+	summary, ok, err := loadMAFWorkflowArtifact(workspace)
+	if err != nil {
+		appendTargetTaskEvidence(&result, err.Error())
+		return result
+	}
+	if !ok {
+		appendTargetTaskViolation(&result, "maf workflow summary artifact recorded partial commit replay")
+		return finalizeTargetTaskCompliance(result)
+	}
+	appendTargetTaskEvidence(&result, "maf workflow summary artifact was available")
+	appendTargetTaskEvidence(&result, fmt.Sprintf("external effect entries: %d", summary.ExternalEffectEntries))
+	requireAtLeastOne(&result, len(summary.CheckpointIDs), "workflow created at least one file checkpoint")
+	if summary.InitialFailureObserved && summary.PartialCommitObserved {
+		appendTargetTaskEvidence(&result, "initial workflow run failed after one partial external commit")
+	} else {
+		appendTargetTaskViolation(&result, "initial workflow run failed after one partial external commit")
+	}
+	if summary.Restored && summary.RuntimeObjectRecreated {
+		appendTargetTaskEvidence(&result, "workflow restore ran on a recreated workflow object")
+	} else {
+		appendTargetTaskViolation(&result, "workflow restore ran on a recreated workflow object")
+	}
+	if summary.DuplicateEffectObserved && summary.ExternalEffectEntries >= 2 {
+		appendTargetTaskEvidence(&result, "restored workflow duplicated the partially committed external effect")
+	} else {
+		appendTargetTaskViolation(&result, "restored workflow duplicated the partially committed external effect")
 	}
 	return finalizeTargetTaskCompliance(result)
 }

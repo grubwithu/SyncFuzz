@@ -96,6 +96,8 @@ func evaluateTargetTaskComplianceForTarget(workspace string, targetID string, ta
 			return evaluateMAFWorkflowCheckpointTargetTaskCompliance(workspace)
 		case MAFWorkflowExternalReplayTargetTaskID:
 			return evaluateMAFWorkflowExternalReplayTargetTaskCompliance(workspace)
+		case MAFWorkflowPartialCommitTargetTaskID:
+			return evaluateMAFWorkflowPartialCommitTargetTaskCompliance(workspace)
 		}
 		return TargetTaskComplianceResult{
 			Name:   taskID,

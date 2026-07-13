@@ -99,6 +99,7 @@ const (
 	TargetMAFWorkflowContinuityArtifact        = "maf-workflow-continuity-check.txt"
 	TargetMAFWorkflowExternalLedgerArtifact    = "maf-workflow-external-ledger.jsonl"
 	TargetMAFWorkflowExternalReplayArtifact    = "maf-workflow-external-replay-check.txt"
+	TargetMAFWorkflowPartialCommitArtifact     = "maf-workflow-partial-commit-check.txt"
 	targetFileResidueMarker                    = "SYNCFUZZ_FILE_RESIDUE_MARKER"
 	targetAppendResidueBaseMarker              = "SYNCFUZZ_APPEND_BASE"
 	targetAppendResidueMarker                  = "SYNCFUZZ_APPEND_MARKER"
@@ -147,6 +148,7 @@ const (
 	MAFSessionContinuityTargetTaskID         = "maf-session-continuity"
 	MAFWorkflowCheckpointTargetTaskID        = "maf-workflow-checkpoint-continuity"
 	MAFWorkflowExternalReplayTargetTaskID    = "maf-workflow-external-effect-replay"
+	MAFWorkflowPartialCommitTargetTaskID     = "maf-workflow-partial-commit-replay"
 
 	longDelayTargetLateEffectArtifact = "late-effect"
 	DefaultLongDelayLateObserveDelay  = 7 * time.Second
@@ -788,6 +790,8 @@ func evaluateTargetOracle(workspace string, targetID string, taskID string, comp
 		return evaluateMAFWorkflowCheckpointTargetOracle(workspace, completed, immediateMissing)
 	case MAFWorkflowExternalReplayTargetTaskID:
 		return evaluateMAFWorkflowExternalReplayTargetOracle(workspace, completed, immediateMissing)
+	case MAFWorkflowPartialCommitTargetTaskID:
+		return evaluateMAFWorkflowPartialCommitTargetOracle(workspace, completed, immediateMissing)
 	case FileResidueTargetTaskID, DirectoryResidueTargetTaskID, DeleteResidueTargetTaskID,
 		SymlinkResidueTargetTaskID, RenameResidueTargetTaskID, ModeResidueTargetTaskID,
 		AppendResidueTargetTaskID, HardlinkResidueTargetTaskID, FifoResidueTargetTaskID:

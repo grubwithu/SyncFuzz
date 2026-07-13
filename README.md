@@ -122,6 +122,7 @@ make target-maf-github-copilot-shell-campaign TARGET_GROUP=maf-baseline TARGET_P
 make target-maf-workflow-checkpoint-check
 make target-maf-workflow-checkpoint
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-external-effect-replay
+make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-partial-commit-replay
 make target-maf-workflow-checkpoint-suite TARGET_GROUP=maf-workflow REPEAT=1
 make target-langgraph-shell-react-suite TARGET_GROUP=workspace-residue REPEAT=5
 make target-langgraph-shell-react OPENAI_BASE_URL=https://api.example.com/v1
@@ -226,7 +227,7 @@ The MAF same-run residue track now covers both execution-context residue and wor
 - `rename-residue`, `mode-residue`, and `append-residue`: check whether filename bindings, mode bits, and appended content remain observable in a later bash call without a second rename, chmod, or append.
 - `hardlink-residue` and `fifo-residue`: check whether special workspace objects survive into later bash calls without being relinked or recreated.
 
-MAF also has the first lightweight session-restore task, `maf-session-continuity`. It serializes a MAF `AgentSession` after one turn, restores it into a newly constructed `GitHubCopilotAgent` runtime object, and checks whether the restored turn can observe the pre-restore workspace marker. The separate `maf-workflow-checkpoint` target starts the MAF-3 line: it uses the official Workflow API plus file checkpoint storage to restore a recreated workflow object and continue from a checkpointed executor message. Its first two tasks cover passive checkpoint continuity and a non-idempotent external-effect replay ledger.
+MAF also has the first lightweight session-restore task, `maf-session-continuity`. It serializes a MAF `AgentSession` after one turn, restores it into a newly constructed `GitHubCopilotAgent` runtime object, and checks whether the restored turn can observe the pre-restore workspace marker. The separate `maf-workflow-checkpoint` target starts the MAF-3 line: it uses the official Workflow API plus file checkpoint storage to restore a recreated workflow object and continue from a checkpointed executor message. Its first tasks cover passive checkpoint continuity, non-idempotent external-effect replay, and replay after a partial external commit followed by downstream workflow failure.
 
 For larger internal refactors, use [docs/REFACTOR_TESTING.md](docs/REFACTOR_TESTING.md) as the behavioral regression checklist. It covers fast Go tests, CLI contract smoke tests, synthetic suite/corpus verification, LangGraph target gates, and the current active IPC reference case `unix-listener-residue-fork`.
 

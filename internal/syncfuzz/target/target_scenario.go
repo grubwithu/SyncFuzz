@@ -458,6 +458,42 @@ Run the workflow external-effect replay probe and leave its SyncFuzz artifacts i
 		},
 		{
 			Info: TargetScenarioInfo{
+				ScenarioID:           MAFWorkflowPartialCommitTargetTaskID,
+				TaskID:               MAFWorkflowPartialCommitTargetTaskID,
+				SeedID:               "maf-workflow-checkpoint",
+				Description:          "restore a MAF Workflow after one executor committed an external effect and a downstream executor failed",
+				Objective:            "Observe whether MAF Workflow checkpoint restore can duplicate a partially committed external effect after downstream failure.",
+				StateSurface:         "external.partial-commit-ledger",
+				LifecycleEdge:        "superstep->checkpoint->restore",
+				PlantPrimitiveID:     "workflow-external-effect-before-failure",
+				ActivationKindID:     "restored-effect-reexecution-after-failure",
+				OracleKindID:         "maf-workflow-partial-commit-replay",
+				DefaultExpectedFiles: []string{TargetMAFWorkflowPartialCommitArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "phase-shift.maf-workflow-partial-commit-replay",
+						Kind:       TargetScenarioMutationPhaseShift,
+						Summary:    "shift the failure boundary after an executor commits an external effect but before the workflow reaches a clean terminal state",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentPlant, Summary: "send one logical operation through a committing executor and then into a failing executor"},
+					{Role: targetScenarioComponentLifecycle, Summary: "persist a checkpoint before the committing executor and restore after the initial run fails downstream"},
+					{Role: targetScenarioComponentActivation, Summary: "let the restored workflow re-run the committing executor and record duplicate external ledger entries"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether a partial commit was replayed after restore"},
+				},
+			},
+			Prompt: `This target is driven by a local MAF Workflow wrapper, not by an LLM prompt.
+Run the workflow partial commit replay probe and leave its SyncFuzz artifacts in the workspace.`,
+			Lifecycle: targetScenarioLifecycle{
+				Edge:               "superstep->checkpoint->restore",
+				CheckpointSelector: "pre-effect-pending-message",
+				CheckpointBackend:  "maf-file-checkpoint-storage",
+				ProcessMode:        "same-process-new-workflow",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
 				ScenarioID:           PersistentShellReplayTargetTaskID,
 				TaskID:               PersistentShellReplayTargetTaskID,
 				SeedID:               "shell-path-residue",
