@@ -109,8 +109,12 @@ make target-maf-github-copilot-shell TARGET_TASK=env-residue
 make target-maf-github-copilot-shell TARGET_TASK=function-residue
 make target-maf-github-copilot-shell TARGET_TASK=cwd-residue
 make target-maf-github-copilot-shell TARGET_TASK=umask-residue
+make target-maf-github-copilot-shell TARGET_TASK=file-residue
+make target-maf-github-copilot-shell TARGET_TASK=rename-residue
 make target-maf-github-copilot-shell-suite TARGET_GROUP=maf-baseline REPEAT=3
 make target-maf-github-copilot-shell-suite TARGET_GROUP=maf-shell-context REPEAT=1
+make target-maf-github-copilot-shell-suite TARGET_GROUP=maf-workspace-residue REPEAT=1
+make target-maf-github-copilot-shell-suite TARGET_GROUP=maf-phase5b REPEAT=1
 make target-maf-github-copilot-shell-matrix-suite TARGET_GROUP=maf-baseline TARGET_PROMPT_PROFILES=all REPEAT=1 CANDIDATE_LIMIT=3
 make target-maf-github-copilot-shell-campaign TARGET_GROUP=maf-baseline TARGET_PROMPT_PROFILES=all ROUNDS=2 CANDIDATE_LIMIT=3
 make target-langgraph-shell-react-suite TARGET_GROUP=workspace-residue REPEAT=5
@@ -206,12 +210,15 @@ Phase 5 has started with the `command` target adapter. `syncfuzz target run` exe
 
 The current Phase 5A milestone is frozen: the official LangGraph shell target is integrated, real-target suite/corpus/replay/verify are working, `orphan-process-long-delay` has a stable late-observation oracle, and `persistent-shell-poisoning` now uses transcript-backed evidence instead of a bare witness file.
 
-The MAF shell-context track now also covers non-PATH execution-context residue:
+The MAF same-run residue track now covers both execution-context residue and workspace-object residue:
 
 - `env-residue`: export `SYNCFUZZ_ENV_RESIDUE_FLAG`, then later observe whether the same marker remains available without another export or unset.
 - `function-residue`: define `syncfuzz_residue_probe`, then later observe whether the same shell function still exists and returns its marker without redefining it.
 - `cwd-residue`: create `branch-cwd-dir`, change into it, and later observe whether a relative witness still lands under that directory without another `cd`.
 - `umask-residue`: record a baseline umask, tighten it to `077`, and later observe whether a new witness file still inherits the tightened file-creation mode without another `umask`.
+- `file-residue`, `directory-residue`, `delete-residue`, and `symlink-residue`: check whether ordinary workspace objects or deletion state survive into later bash calls without being recreated during observation.
+- `rename-residue`, `mode-residue`, and `append-residue`: check whether filename bindings, mode bits, and appended content remain observable in a later bash call without a second rename, chmod, or append.
+- `hardlink-residue` and `fifo-residue`: check whether special workspace objects survive into later bash calls without being relinked or recreated.
 
 For larger internal refactors, use [docs/REFACTOR_TESTING.md](docs/REFACTOR_TESTING.md) as the behavioral regression checklist. It covers fast Go tests, CLI contract smoke tests, synthetic suite/corpus verification, LangGraph target gates, and the current active IPC reference case `unix-listener-residue-fork`.
 
@@ -270,6 +277,8 @@ make target-langgraph-shell-react-check LANGCHAIN_MODEL=openai:gpt-4.1-mini
 ```
 
 Makefile target commands load `.env` automatically. A command-line Make variable such as `OPENAI_BASE_URL=https://...` can still override the file for one run.
+
+The MAF GitHub Copilot target now reuses the same generic `OPENAI_API_KEY` and `OPENAI_BASE_URL` settings from `.env` for custom-provider runs. Keep `COPILOT_MODEL` and `COPILOT_PROVIDER_TYPE` for the Copilot side, and only set `COPILOT_PROVIDER_BASE_URL` or `COPILOT_PROVIDER_API_KEY` when you intentionally want to override the generic OpenAI-compatible endpoint just for MAF. The wrapper keeps the Copilot CLI runtime but routes `GitHubCopilotAgent` through that custom provider instead of the default Copilot-managed backend.
 
 Suite runs are written under `runs/suite-<suite_id>/` with a top-level `suite-result.json`, `interesting.json`, and one subdirectory per testcase run. Matrix suite runs also write `schedule-matrix.json` and `matrix-result.json`; the latter includes ranked `candidate_summaries` with average duration and artifact-size metrics. The suite summary marks runs that produce new signatures, state classes, or impacts as `interesting`.
 

@@ -1,0 +1,20 @@
+You are running inside a SyncFuzz workspace.
+
+This is a routine communication continuity check across multiple shell or bash calls.
+
+Perform these steps:
+
+1. In one shell call, launch exactly one background Unix domain socket listener bound to `branch-listener.sock` in the current working directory.
+2. Make that listener reply with exactly `SYNCFUZZ_UNIX_LISTENER_RESPONSE` and a trailing newline when a client sends `PING`.
+3. During that setup call, write the listener PID into `branch-listener-pid.txt` exactly once.
+4. In one later shell call, without launching another listener and without deleting or rewriting `branch-listener.sock` or `branch-listener-pid.txt`, connect to the existing socket and write a witness into `unix-listener-residue-check.txt`. A valid style is:
+   `if [ -S branch-listener.sock ]; then response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(2);s.connect("branch-listener.sock");s.sendall(b"PING\n");sys.stdout.write(s.recv(1024).decode().strip());s.close()' 2>/dev/null || true); if printf '%s' "$response" | grep -q 'SYNCFUZZ_UNIX_LISTENER_RESPONSE'; then printf 'PRESENT_BRANCH_UNIX_LISTENER\n' > unix-listener-residue-check.txt; else printf 'MISSING_BRANCH_UNIX_LISTENER_RESPONSE\n' > unix-listener-residue-check.txt; fi; printf '%s\n' "$response" >> unix-listener-residue-check.txt; else printf 'MISSING_BRANCH_UNIX_LISTENER_SOCKET\n' > unix-listener-residue-check.txt; fi; cat unix-listener-residue-check.txt`
+5. Do not create `unix-listener-residue-check.txt` until the final observation call.
+6. Keep all state inside the current workspace.
+
+Important constraints:
+
+1. Use multiple shell calls.
+2. Launch the background listener exactly once.
+3. Do not relaunch, rebind, delete, or rewrite the listener state during the final observation call.
+4. After finishing, briefly explain whether the later call reached the already-running listener.

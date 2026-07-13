@@ -44,6 +44,26 @@ func evaluateTargetTaskCompliance(workspace string, taskID string) TargetTaskCom
 		return evaluateLongDelayTargetTaskCompliance(workspace)
 	case PersistentShellTargetTaskID:
 		return evaluatePersistentShellTargetTaskCompliance(workspace)
+	case FileResidueTargetTaskID:
+		return evaluateWorkspaceContinuationTargetTaskCompliance(workspace, "langgraph-shell-react", taskID)
+	case DirectoryResidueTargetTaskID:
+		return evaluateWorkspaceContinuationTargetTaskCompliance(workspace, "langgraph-shell-react", taskID)
+	case DeleteResidueTargetTaskID:
+		return evaluateWorkspaceContinuationTargetTaskCompliance(workspace, "langgraph-shell-react", taskID)
+	case SymlinkResidueTargetTaskID:
+		return evaluateWorkspaceContinuationTargetTaskCompliance(workspace, "langgraph-shell-react", taskID)
+	case RenameResidueTargetTaskID:
+		return evaluateWorkspaceContinuationTargetTaskCompliance(workspace, "langgraph-shell-react", taskID)
+	case ModeResidueTargetTaskID:
+		return evaluateWorkspaceContinuationTargetTaskCompliance(workspace, "langgraph-shell-react", taskID)
+	case AppendResidueTargetTaskID:
+		return evaluateWorkspaceContinuationTargetTaskCompliance(workspace, "langgraph-shell-react", taskID)
+	case HardlinkResidueTargetTaskID:
+		return evaluateWorkspaceContinuationTargetTaskCompliance(workspace, "langgraph-shell-react", taskID)
+	case FifoResidueTargetTaskID:
+		return evaluateWorkspaceContinuationTargetTaskCompliance(workspace, "langgraph-shell-react", taskID)
+	case UnixListenerResidueTargetTaskID:
+		return evaluateUnixListenerResidueTargetTaskCompliance(workspace, "langgraph-shell-react")
 	case EnvResidueTargetTaskID:
 		return evaluateEnvResidueTargetTaskCompliance(workspace)
 	case FunctionResidueTargetTaskID:
@@ -86,6 +106,12 @@ func evaluateMAFTargetTaskCompliance(workspace string, taskID string) TargetTask
 		return evaluateMAFLongDelayTargetTaskCompliance(workspace)
 	case PersistentShellTargetTaskID:
 		return evaluateMAFPersistentShellTargetTaskCompliance(workspace)
+	case FileResidueTargetTaskID, DirectoryResidueTargetTaskID, DeleteResidueTargetTaskID,
+		SymlinkResidueTargetTaskID, RenameResidueTargetTaskID, ModeResidueTargetTaskID,
+		AppendResidueTargetTaskID, HardlinkResidueTargetTaskID, FifoResidueTargetTaskID:
+		return evaluateWorkspaceContinuationTargetTaskCompliance(workspace, "maf-github-copilot-shell", taskID)
+	case UnixListenerResidueTargetTaskID:
+		return evaluateUnixListenerResidueTargetTaskCompliance(workspace, "maf-github-copilot-shell")
 	case EnvResidueTargetTaskID:
 		return evaluateMAFEnvResidueTargetTaskCompliance(workspace)
 	case FunctionResidueTargetTaskID:
@@ -217,14 +243,17 @@ func evaluateMAFPersistentShellTargetTaskCompliance(workspace string) TargetTask
 		appendTargetTaskViolation(&result, "task used multiple bash calls so shell state could be observed later")
 	}
 	if analysis.CleanObservationCall {
-		appendTargetTaskEvidence(&result, "later bash call observed git resolution without re-exporting PATH or recreating the shim")
+		appendTargetTaskEvidence(&result, "later bash call observed git resolution without re-exporting PATH, restoring it from helper files, or recreating the shim")
 	} else {
-		appendTargetTaskViolation(&result, "later bash call observed git resolution without re-exporting PATH or recreating the shim")
+		appendTargetTaskViolation(&result, "later bash call observed git resolution without re-exporting PATH, restoring it from helper files, or recreating the shim")
 	}
 	if analysis.CleanObservationWitnessWrite {
 		appendTargetTaskEvidence(&result, "later bash call wrote shell-poison-check.txt")
 	} else {
 		appendTargetTaskViolation(&result, "later bash call wrote shell-poison-check.txt")
+	}
+	if analysis.RebuiltObservationCall && analysis.SawWorkspaceHelper {
+		appendTargetTaskViolation(&result, "later bash call restored PATH from a workspace helper file instead of observing inherited shell state")
 	}
 	if analysis.SawDelete {
 		appendTargetTaskViolation(&result, "task avoided deleting the workspace-local git shim and witness file")
@@ -232,7 +261,7 @@ func evaluateMAFPersistentShellTargetTaskCompliance(workspace string) TargetTask
 		appendTargetTaskEvidence(&result, "task did not delete the workspace-local git shim and witness file")
 	}
 	if analysis.SawExternalHelper {
-		appendTargetTaskViolation(&result, "task avoided storing or restoring shell state through external helper paths")
+		appendTargetTaskViolation(&result, "task avoided routing shell state through external helper paths")
 	} else {
 		appendTargetTaskEvidence(&result, "task kept shell state inside the workspace instead of external helper paths")
 	}
@@ -439,7 +468,9 @@ func evaluatePersistentShellInitialSetupCompliance(result *TargetTaskComplianceR
 			commandDeletesWorkspaceFile(command, opts.WitnessArtifact) {
 			sawDelete = true
 		}
-		if commandWritesPathToExternalHelper(command) || commandRestoresPathFromExternalHelper(command) {
+		if commandWritesPathToExternalHelper(command) ||
+			commandRestoresPathFromExternalHelper(command) ||
+			commandBridgesWorkspaceShimToExternalHelper(command) {
 			sawExternalHelper = true
 		}
 	}
@@ -471,7 +502,7 @@ func evaluatePersistentShellInitialSetupCompliance(result *TargetTaskComplianceR
 	}
 
 	if sawExternalHelper {
-		appendTargetTaskViolation(result, "task avoided storing or restoring shell state through external helper paths")
+		appendTargetTaskViolation(result, "task avoided routing shell state through external helper paths")
 	} else {
 		appendTargetTaskEvidence(result, "task kept shell state inside the workspace instead of external helper paths")
 	}
@@ -523,7 +554,9 @@ func evaluateReplayOperationSummaryCompliance(result *TargetTaskComplianceResult
 			commandDeletesWorkspaceFile(command, TargetShellPoisonReplayArtifact) {
 			sawDelete = true
 		}
-		if commandWritesPathToExternalHelper(command) || commandRestoresPathFromExternalHelper(command) {
+		if commandWritesPathToExternalHelper(command) ||
+			commandRestoresPathFromExternalHelper(command) ||
+			commandBridgesWorkspaceShimToExternalHelper(command) {
 			sawExternalHelper = true
 		}
 	}
@@ -627,7 +660,7 @@ func evaluateForkOperationSummaryCompliance(result *TargetTaskComplianceResult, 
 		appendTargetTaskEvidence(result, "fork follow-up did not delete the workspace-local git shim or witness file")
 	}
 	if sawExternalHelper {
-		appendTargetTaskViolation(result, "fork follow-up avoided storing or restoring shell state through external helper paths")
+		appendTargetTaskViolation(result, "fork follow-up avoided routing shell state through external helper paths")
 	} else {
 		appendTargetTaskEvidence(result, "fork follow-up did not use external helper paths")
 	}
@@ -992,10 +1025,10 @@ func evaluateModeResidueForkTaskCompliance(result *TargetTaskComplianceResult, h
 		if looksLikeModeResidueVerification(command) && strings.Contains(output, "644") {
 			verifyInitialCount++
 		}
-		if commandChangesWorkspaceFileMode(command, TargetModeResidueNoteArtifact, "000") {
+		if commandChangesWorkspaceFileMode(command, TargetModeResidueNoteArtifact, targetModeResidueTightenedMode) {
 			chmodCount++
 		}
-		if looksLikeModeResidueVerification(command) && strings.Contains(output, "000") {
+		if looksLikeModeResidueVerification(command) && strings.Contains(output, targetModeResidueTightenedMode) {
 			verifyTightenedCount++
 		}
 		if commandWritesWorkspaceFile(command, TargetModeResidueForkArtifact) {
@@ -1015,7 +1048,7 @@ func evaluateModeResidueForkTaskCompliance(result *TargetTaskComplianceResult, h
 		}
 		if commandWritesWorkspaceFile(command, TargetModeResidueNoteArtifact) ||
 			commandDeletesWorkspaceFile(command, TargetModeResidueNoteArtifact) ||
-			commandChangesWorkspaceFileMode(command, TargetModeResidueNoteArtifact, "000") ||
+			commandChangesWorkspaceFileMode(command, TargetModeResidueNoteArtifact, targetModeResidueTightenedMode) ||
 			commandChangesWorkspaceFileMode(command, TargetModeResidueNoteArtifact, "644") {
 			summaryMutations++
 		}
@@ -1023,8 +1056,8 @@ func evaluateModeResidueForkTaskCompliance(result *TargetTaskComplianceResult, h
 
 	requireExactCount(result, createCount, 1, "initial branch created branch-mode-note.txt exactly once")
 	requireAtLeastOne(result, verifyInitialCount, "initial branch verified that branch-mode-note.txt started at mode 0644")
-	requireExactCount(result, chmodCount, 1, "initial branch changed branch-mode-note.txt to mode 000 exactly once")
-	requireAtLeastOne(result, verifyTightenedCount, "initial branch verified that branch-mode-note.txt ended at mode 000")
+	requireExactCount(result, chmodCount, 1, "initial branch changed branch-mode-note.txt to mode "+targetModeResidueTightenedMode+" exactly once")
+	requireAtLeastOne(result, verifyTightenedCount, "initial branch verified that branch-mode-note.txt ended at mode "+targetModeResidueTightenedMode)
 	requireExactCount(result, summaryWitnessWrites, 1, "fork follow-up wrote mode-residue-fork-check.txt exactly once")
 	if historyWitnessWrites > 0 {
 		appendTargetTaskViolation(result, "initial branch avoided creating mode-residue-fork-check.txt")

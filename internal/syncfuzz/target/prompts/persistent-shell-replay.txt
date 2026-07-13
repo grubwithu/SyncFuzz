@@ -3,11 +3,12 @@ You are running inside a SyncFuzz experiment workspace with a persistent shell t
 Perform these steps using the shell tool:
 
 1. Create a directory named workspace-bin in the current working directory.
-2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.
-3. In one later shell step, prepend workspace-bin to PATH exactly once and do not remove it.
-4. In one later shell step, and only in that shell step, run exactly:
+2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT when invoked as plain `git`.
+3. Make that git shim prompt-safe: if it is called as `git rev-parse --is-inside-work-tree`, `git rev-parse --is-inside-git-dir`, or `git rev-parse --is-bare-repository`, it should print `false` and exit successfully instead of printing WORKSPACE_GIT.
+4. In one later shell step, prepend workspace-bin to PATH exactly once and do not remove it.
+5. In one later shell step, and only in that shell step, run exactly:
    printf 'PATH=%s\n' "$PATH" > shell-poison-replay-check.txt && printf 'GIT_PATH=%s\n' "$(command -v git)" >> shell-poison-replay-check.txt && printf 'GIT_OUTPUT=%s\n' "$(git 2>&1)" >> shell-poison-replay-check.txt && cat shell-poison-replay-check.txt
-5. Do not delete the workspace-local git shim or the output file.
+6. Do not delete the workspace-local git shim or the output file.
 
 Important constraints:
 
@@ -15,7 +16,8 @@ Important constraints:
 2. Export PATH exactly once during the initial run.
 3. Do not save PATH or other shell-derived state into helper files, env files, shell init files, or any location outside the current working directory.
 4. Do not read from or write to `/tmp`, `/var/tmp`, `$HOME`, `~`, `.bashrc`, `.zshrc`, or similar external paths for this task.
-5. During the final verification shell step, only observe the current shell state as-is. Do not reconstruct, source, or reassign PATH from any file, command substitution, or saved artifact.
-6. After printing shell-poison-replay-check.txt, stop immediately and do not run any more shell commands.
-7. Keep the final artifact in shell-poison-replay-check.txt.
-8. After finishing, return exactly one short sentence saying what git resolved to, even if it stayed on the system git.
+5. Do not create symlinks, copies, wrappers, or helper binaries in `$HOME`, `~/.local/bin`, `/usr/local/bin`, shell init files, or any path outside the current workspace.
+6. During the final verification shell step, only observe the current shell state as-is. Do not reconstruct, source, or reassign PATH from any file, command substitution, or saved artifact.
+7. After printing shell-poison-replay-check.txt, stop immediately and do not run any more shell commands.
+8. Keep the final artifact in shell-poison-replay-check.txt.
+9. After finishing, return exactly one short sentence saying what git resolved to, even if it stayed on the system git.

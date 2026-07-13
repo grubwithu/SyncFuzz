@@ -10,11 +10,17 @@ var FileResidueForkPrompt string
 //go:embed prompts/file-residue-fork-veri.txt
 var FileResidueForkVerificationPrompt string
 
+//go:embed prompts/file-residue.txt
+var FileResiduePrompt string
+
 //go:embed prompts/directory-residue-fork.txt
 var DirectoryResidueForkPrompt string
 
 //go:embed prompts/directory-residue-fork-veri.txt
 var DirectoryResidueForkVerificationPrompt string
+
+//go:embed prompts/directory-residue.txt
+var DirectoryResiduePrompt string
 
 //go:embed prompts/delete-residue-fork.txt
 var DeleteResidueForkPrompt string
@@ -22,11 +28,17 @@ var DeleteResidueForkPrompt string
 //go:embed prompts/delete-residue-fork-veri.txt
 var DeleteResidueForkVerificationPrompt string
 
+//go:embed prompts/delete-residue.txt
+var DeleteResiduePrompt string
+
 //go:embed prompts/symlink-residue-fork.txt
 var SymlinkResidueForkPrompt string
 
 //go:embed prompts/symlink-residue-fork-veri.txt
 var SymlinkResidueForkVerificationPrompt string
+
+//go:embed prompts/symlink-residue.txt
+var SymlinkResiduePrompt string
 
 //go:embed prompts/rename-residue-fork.txt
 var RenameResidueForkPrompt string
@@ -34,11 +46,17 @@ var RenameResidueForkPrompt string
 //go:embed prompts/rename-residue-fork-veri.txt
 var RenameResidueForkVerificationPrompt string
 
+//go:embed prompts/rename-residue.txt
+var RenameResiduePrompt string
+
 //go:embed prompts/mode-residue-fork.txt
 var ModeResidueForkPrompt string
 
 //go:embed prompts/mode-residue-fork-veri.txt
 var ModeResidueForkVerificationPrompt string
+
+//go:embed prompts/mode-residue.txt
+var ModeResiduePrompt string
 
 //go:embed prompts/append-residue-fork.txt
 var AppendResidueForkPrompt string
@@ -46,17 +64,26 @@ var AppendResidueForkPrompt string
 //go:embed prompts/append-residue-fork-veri.txt
 var AppendResidueForkVerificationPrompt string
 
+//go:embed prompts/append-residue.txt
+var AppendResiduePrompt string
+
 //go:embed prompts/hardlink-residue-fork.txt
 var HardlinkResidueForkPrompt string
 
 //go:embed prompts/hardlink-residue-fork-veri.txt
 var HardlinkResidueForkVerificationPrompt string
 
+//go:embed prompts/hardlink-residue.txt
+var HardlinkResiduePrompt string
+
 //go:embed prompts/fifo-residue-fork.txt
 var FifoResidueForkPrompt string
 
 //go:embed prompts/fifo-residue-fork-veri.txt
 var FifoResidueForkVerificationPrompt string
+
+//go:embed prompts/fifo-residue.txt
+var FifoResiduePrompt string
 
 //go:embed prompts/openfd-residue-fork.txt
 var OpenFDResidueForkPrompt string
@@ -75,6 +102,9 @@ var InheritedFDLeakPrompt string
 
 //go:embed prompts/inherited-fd-leak-veri.txt
 var InheritedFDLeakVerificationPrompt string
+
+//go:embed prompts/unix-listener-residue.txt
+var UnixListenerResiduePrompt string
 
 //go:embed prompts/unix-listener-residue-fork.txt
 var UnixListenerResidueForkPrompt string

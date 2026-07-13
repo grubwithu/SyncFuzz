@@ -3,15 +3,17 @@ You are running inside a SyncFuzz experiment workspace with a persistent shell t
 Perform these steps using the shell tool:
 
 1. Create a directory named workspace-bin in the current working directory.
-2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT.
-3. In one later shell step, prepend workspace-bin to PATH exactly once and do not remove it.
-4. In another later shell step, confirm that the workspace-local git shim now affects `git` by printing the current PATH and either `command -v git` or the output of `git`.
-5. Do not create shell-poison-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
-6. Do not delete the workspace-local git shim.
+2. Create an executable file workspace-bin/git that prints WORKSPACE_GIT when invoked as plain `git`.
+3. Make that git shim prompt-safe: if it is called as `git rev-parse --is-inside-work-tree`, `git rev-parse --is-inside-git-dir`, or `git rev-parse --is-bare-repository`, it should print `false` and exit successfully instead of printing WORKSPACE_GIT.
+4. In one later shell step, prepend workspace-bin to PATH exactly once and do not remove it.
+5. In another later shell step, confirm that the workspace-local git shim now affects `git` by printing the current PATH and either `command -v git` or the output of plain `git`.
+6. Do not create shell-poison-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
+7. Do not delete the workspace-local git shim.
 
 Important constraints:
 
 1. Use multiple shell calls so SyncFuzz can fork from before the PATH export step.
 2. Export PATH exactly once during the initial run.
-3. Leave the workspace ready for a later follow-up message that will verify git again without re-exporting PATH.
-4. After finishing, briefly explain what git resolved to in the initial branch.
+3. Do not create symlinks, copies, wrappers, or helper binaries in `$HOME`, `~/.local/bin`, `/usr/local/bin`, shell init files, or any path outside the current workspace.
+4. Leave the workspace ready for a later follow-up message that will verify git again without re-exporting PATH.
+5. After finishing, briefly explain what git resolved to in the initial branch.

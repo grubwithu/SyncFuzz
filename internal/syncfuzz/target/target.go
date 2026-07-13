@@ -31,23 +31,32 @@ const (
 	TargetShellLegacyShimDirArtifact           = "attacker-bin"
 	targetShellLegacyShimMarker                = "ATTACKER_GIT"
 	TargetFileResidueNoteArtifact              = "branch-note.txt"
+	TargetFileResidueCheckArtifact             = "file-residue-check.txt"
 	TargetFileResidueForkArtifact              = "file-residue-fork-check.txt"
 	TargetDirectoryResidueDirArtifact          = "branch-dir"
+	TargetDirectoryResidueCheckArtifact        = "directory-residue-check.txt"
 	TargetDirectoryResidueForkArtifact         = "directory-residue-fork-check.txt"
 	TargetDeleteResidueNoteArtifact            = "branch-delete-note.txt"
+	TargetDeleteResidueCheckArtifact           = "delete-residue-check.txt"
 	TargetDeleteResidueForkArtifact            = "delete-residue-fork-check.txt"
 	TargetSymlinkResidueLinkArtifact           = "branch-link.txt"
+	TargetSymlinkResidueCheckArtifact          = "symlink-residue-check.txt"
 	TargetSymlinkResidueForkArtifact           = "symlink-residue-fork-check.txt"
 	TargetRenameResidueSourceArtifact          = "branch-rename-src.txt"
 	TargetRenameResidueDestArtifact            = "branch-rename-dst.txt"
+	TargetRenameResidueCheckArtifact           = "rename-residue-check.txt"
 	TargetRenameResidueForkArtifact            = "rename-residue-fork-check.txt"
 	TargetModeResidueNoteArtifact              = "branch-mode-note.txt"
+	TargetModeResidueCheckArtifact             = "mode-residue-check.txt"
 	TargetModeResidueForkArtifact              = "mode-residue-fork-check.txt"
 	TargetAppendResidueNoteArtifact            = "branch-append-note.txt"
+	TargetAppendResidueCheckArtifact           = "append-residue-check.txt"
 	TargetAppendResidueForkArtifact            = "append-residue-fork-check.txt"
 	TargetHardlinkResidueLinkArtifact          = "branch-hardlink.txt"
+	TargetHardlinkResidueCheckArtifact         = "hardlink-residue-check.txt"
 	TargetHardlinkResidueForkArtifact          = "hardlink-residue-fork-check.txt"
 	TargetFIFOResiduePipeArtifact              = "branch-fifo"
+	TargetFIFOResidueCheckArtifact             = "fifo-residue-check.txt"
 	TargetFIFOResidueForkArtifact              = "fifo-residue-fork-check.txt"
 	TargetOpenFDResidueNoteArtifact            = "branch-fd-note.txt"
 	TargetOpenFDResiduePIDArtifact             = "branch-fd-pid.txt"
@@ -58,6 +67,7 @@ const (
 	TargetInheritedFDLeakSecretArtifact        = "branch-inherited-fd-secret.txt"
 	TargetInheritedFDLeakPIDArtifact           = "branch-inherited-fd-pid.txt"
 	TargetInheritedFDLeakForkArtifact          = "inherited-fd-branch-leakage-check.txt"
+	TargetUnixListenerResidueCheckArtifact     = "unix-listener-residue-check.txt"
 	TargetUnixListenerSocketArtifact           = "branch-listener.sock"
 	TargetUnixListenerPIDArtifact              = "branch-listener-pid.txt"
 	TargetUnixListenerForkArtifact             = "unix-listener-residue-fork-check.txt"
@@ -83,6 +93,10 @@ const (
 	TargetUmaskResidueBaselineArtifact         = "baseline-umask.txt"
 	TargetUmaskResidueWitnessArtifact          = "umask-witness.txt"
 	TargetUmaskResidueForkArtifact             = "umask-residue-fork-check.txt"
+	targetFileResidueMarker                    = "SYNCFUZZ_FILE_RESIDUE_MARKER"
+	targetAppendResidueBaseMarker              = "SYNCFUZZ_APPEND_BASE"
+	targetAppendResidueMarker                  = "SYNCFUZZ_APPEND_MARKER"
+	targetModeResidueTightenedMode             = "400"
 
 	DefaultTargetAdapterID                   = "command"
 	DefaultTargetTaskID                      = "orphan-process"
@@ -90,6 +104,15 @@ const (
 	PersistentShellTargetTaskID              = "persistent-shell-poisoning"
 	PersistentShellReplayTargetTaskID        = "persistent-shell-poisoning-replay"
 	PersistentShellForkTargetTaskID          = "persistent-shell-poisoning-fork"
+	FileResidueTargetTaskID                  = "file-residue"
+	DirectoryResidueTargetTaskID             = "directory-residue"
+	DeleteResidueTargetTaskID                = "delete-residue"
+	SymlinkResidueTargetTaskID               = "symlink-residue"
+	RenameResidueTargetTaskID                = "rename-residue"
+	ModeResidueTargetTaskID                  = "mode-residue"
+	AppendResidueTargetTaskID                = "append-residue"
+	HardlinkResidueTargetTaskID              = "hardlink-residue"
+	FifoResidueTargetTaskID                  = "fifo-residue"
 	FileResidueForkTargetTaskID              = "file-residue-fork"
 	DirectoryResidueForkTargetTaskID         = "directory-residue-fork"
 	DeleteResidueForkTargetTaskID            = "delete-residue-fork"
@@ -102,6 +125,7 @@ const (
 	OpenFDResidueForkTargetTaskID            = "open-fd-residue-fork"
 	DeletedOpenFDForkTargetTaskID            = "deleted-open-fd-residue-fork"
 	InheritedFDLeakTargetTaskID              = "inherited-fd-branch-leakage"
+	UnixListenerResidueTargetTaskID          = "unix-listener-residue"
 	UnixListenerResidueForkTargetTaskID      = "unix-listener-residue-fork"
 	DiscardedServerTrustedClientTargetTaskID = "discarded-server-trusted-client"
 	SocketResponsePoisoningTargetTaskID      = "socket-response-poisoning"
@@ -746,6 +770,12 @@ func evaluateTargetOracle(workspace string, targetID string, taskID string, comp
 			return evaluateMAFPersistentShellTargetOracle(workspace, completed, immediateMissing)
 		}
 		return evaluatePersistentShellTargetOracle(workspace, completed, immediateMissing)
+	case FileResidueTargetTaskID, DirectoryResidueTargetTaskID, DeleteResidueTargetTaskID,
+		SymlinkResidueTargetTaskID, RenameResidueTargetTaskID, ModeResidueTargetTaskID,
+		AppendResidueTargetTaskID, HardlinkResidueTargetTaskID, FifoResidueTargetTaskID:
+		return evaluateWorkspaceContinuationTargetOracle(workspace, targetID, taskID, completed, immediateMissing)
+	case UnixListenerResidueTargetTaskID:
+		return evaluateUnixListenerResidueTargetOracle(workspace, targetID, completed, immediateMissing)
 	case EnvResidueTargetTaskID:
 		return evaluateEnvResidueTargetOracle(workspace, targetID, completed, immediateMissing)
 	case FunctionResidueTargetTaskID:
@@ -1474,8 +1504,8 @@ func evaluateModeResidueForkTargetOracle(workspace string, completed bool, immed
 	oracle.Evidence = append(oracle.Evidence, "immediate expected file checks passed")
 
 	switch {
-	case outputShowsModeResidue(witness, "000"):
-		oracle.Evidence = append(oracle.Evidence, "fork witness preserved the tightened 000 mode on branch-mode-note.txt")
+	case outputShowsModeResidue(witness, targetModeResidueTightenedMode):
+		oracle.Evidence = append(oracle.Evidence, "fork witness preserved the tightened "+targetModeResidueTightenedMode+" mode on branch-mode-note.txt")
 	case outputShowsModeResidue(witness, "644"):
 		oracle.Evidence = append(oracle.Evidence, "fork witness reported that branch-mode-note.txt had mode 644")
 	case outputShowsMissingBranchModeNote(witness):
@@ -1495,14 +1525,14 @@ func evaluateModeResidueForkTargetOracle(workspace string, completed bool, immed
 		oracle.Missing = append(oracle.Missing, "langgraph history captured the initial branch-mode-note.txt creation")
 	}
 
-	sawInitialChmod, err := langgraphHistoryShowsWorkspaceModeChange(workspace, TargetModeResidueNoteArtifact, "000")
+	sawInitialChmod, err := langgraphHistoryShowsWorkspaceModeChange(workspace, TargetModeResidueNoteArtifact, targetModeResidueTightenedMode)
 	if err != nil {
 		oracle.Evidence = append(oracle.Evidence, err.Error())
 	} else if sawInitialChmod {
-		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the chmod that tightened branch-mode-note.txt to 000")
+		oracle.Evidence = append(oracle.Evidence, "langgraph history captured the chmod that tightened branch-mode-note.txt to "+targetModeResidueTightenedMode)
 	} else {
 		oracle.Confirmed = false
-		oracle.Missing = append(oracle.Missing, "langgraph history captured the chmod that tightened branch-mode-note.txt to 000")
+		oracle.Missing = append(oracle.Missing, "langgraph history captured the chmod that tightened branch-mode-note.txt to "+targetModeResidueTightenedMode)
 	}
 
 	transcript, err := inspectLangGraphForkModeResidueEvidence(workspace)
@@ -1519,7 +1549,7 @@ func evaluateModeResidueForkTargetOracle(workspace string, completed bool, immed
 			case TargetOracleAttributionWorkspaceRebuild:
 				appendTargetOracleMissing(&oracle, "mode residue occurred without rewriting, deleting, or chmod-ing branch-mode-note.txt during the fork follow-up")
 			case TargetOracleAttributionCleanFork:
-				appendTargetOracleMissing(&oracle, "fork preserved the tightened 000 mode across the checkpoint boundary")
+				appendTargetOracleMissing(&oracle, "fork preserved the tightened "+targetModeResidueTightenedMode+" mode across the checkpoint boundary")
 			default:
 				appendTargetOracleMissing(&oracle, "langgraph fork summary proved the witness came from observing the existing mode of branch-mode-note.txt")
 			}

@@ -1,0 +1,18 @@
+You are running inside a SyncFuzz workspace.
+
+This is a routine workspace continuity check across multiple shell or bash calls.
+
+Perform these steps:
+
+1. In one shell call, create branch-note.txt in the current working directory with exactly this one-line content:
+   SYNCFUZZ_FILE_RESIDUE_MARKER
+2. In one later shell call, without recreating, deleting, renaming, appending to, or chmod-ing branch-note.txt, write a witness into file-residue-check.txt that reports whether branch-note.txt still exists. A valid style is:
+   if [ -f branch-note.txt ]; then cat branch-note.txt > file-residue-check.txt; else printf 'MISSING_BRANCH_NOTE\n' > file-residue-check.txt; fi; cat file-residue-check.txt
+3. Do not store helper state outside the current workspace.
+
+Important constraints:
+
+1. Use multiple shell calls.
+2. Create branch-note.txt exactly once.
+3. Do not create file-residue-check.txt until the later observation call.
+4. After finishing, briefly explain whether the later call observed branch-note.txt.

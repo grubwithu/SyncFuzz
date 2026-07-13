@@ -25,7 +25,7 @@ func TestWorkspaceResidueTaskSpecsIncludeExpandedStateSurfaces(t *testing.T) {
 			taskID:    ModeResidueForkTargetTaskID,
 			selector:  "before-file-chmod",
 			witness:   TargetModeResidueForkArtifact,
-			promptHit: "mode 000",
+			promptHit: "mode 400",
 		},
 		{
 			taskID:    AppendResidueForkTargetTaskID,
@@ -183,8 +183,8 @@ func TestEvaluateModeResidueForkTargetOracleCleanFork(t *testing.T) {
 	writeLangGraphShellHistory(t, tmp,
 		langgraphShellCall{Command: "printf 'SYNCFUZZ_MODE_RESIDUE_MARKER\n' > branch-mode-note.txt && chmod 0644 branch-mode-note.txt", Output: ""},
 		langgraphShellCall{Command: "stat -c '%a' branch-mode-note.txt", Output: "644\n"},
-		langgraphShellCall{Command: "chmod 000 branch-mode-note.txt", Output: ""},
-		langgraphShellCall{Command: "stat -c '%a' branch-mode-note.txt", Output: "000\n"},
+		langgraphShellCall{Command: "chmod 400 branch-mode-note.txt", Output: ""},
+		langgraphShellCall{Command: "stat -c '%a' branch-mode-note.txt", Output: "400\n"},
 	)
 	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-file-chmod",
 		langgraphShellCall{
@@ -200,7 +200,7 @@ func TestEvaluateModeResidueForkTargetOracleCleanFork(t *testing.T) {
 	if oracle.Attribution != TargetOracleAttributionCleanFork {
 		t.Fatalf("expected clean fork attribution: %#v", oracle)
 	}
-	if !ContainsString(oracle.Missing, "fork preserved the tightened 000 mode across the checkpoint boundary") {
+	if !ContainsString(oracle.Missing, "fork preserved the tightened 400 mode across the checkpoint boundary") {
 		t.Fatalf("expected clean-fork missing reason: %#v", oracle)
 	}
 }

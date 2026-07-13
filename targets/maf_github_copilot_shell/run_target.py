@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import sys
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,16 @@ SUPPORTED_TASKS = {
     "orphan-process",
     "orphan-process-long-delay",
     "persistent-shell-poisoning",
+    "unix-listener-residue",
+    "file-residue",
+    "directory-residue",
+    "delete-residue",
+    "symlink-residue",
+    "rename-residue",
+    "mode-residue",
+    "append-residue",
+    "hardlink-residue",
+    "fifo-residue",
     "env-residue",
     "function-residue",
     "cwd-residue",
@@ -57,45 +68,49 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("SYNCFUZZ_MAF_MODEL", "").strip(),
+        default=os.environ.get("COPILOT_MODEL", "").strip(),
         help="Optional provider model override.",
     )
     parser.add_argument(
+        "--copilot-timeout",
+        type=float,
+        default=env_float("MAF_TIMEOUT"),
+        help="Optional GitHub Copilot request timeout in seconds.",
+    )
+    parser.add_argument(
         "--copilot-cli",
-        default=os.environ.get("SYNCFUZZ_MAF_COPILOT_CLI", "").strip(),
+        default=os.environ.get("MAF_COPILOT_CLI", "").strip(),
         help="Optional GitHub Copilot CLI path override.",
     )
     parser.add_argument(
         "--session-home",
-        default=os.environ.get("SYNCFUZZ_MAF_SESSION_HOME", "").strip(),
+        default=os.environ.get("MAF_SESSION_HOME", "").strip(),
         help="Optional session home override for the provider runtime.",
     )
     parser.add_argument(
         "--log-level",
-        default=os.environ.get("SYNCFUZZ_MAF_LOG_LEVEL", "").strip(),
+        default=os.environ.get("MAF_LOG_LEVEL", "").strip(),
         help="Optional log level override for the provider runtime.",
     )
     parser.add_argument(
         "--summary-artifact",
-        default=os.environ.get("SYNCFUZZ_MAF_SUMMARY_ARTIFACT", SUMMARY_ARTIFACT),
+        default=os.environ.get("MAF_SUMMARY_ARTIFACT", SUMMARY_ARTIFACT),
         help="Summary artifact filename written inside the workspace.",
     )
     parser.add_argument(
         "--session-artifact",
-        default=os.environ.get("SYNCFUZZ_MAF_SESSION_ARTIFACT", SESSION_ARTIFACT),
+        default=os.environ.get("MAF_SESSION_ARTIFACT", SESSION_ARTIFACT),
         help="Session artifact filename written inside the workspace.",
     )
     parser.add_argument(
         "--lifecycle-artifact",
-        default=os.environ.get(
-            "SYNCFUZZ_MAF_LIFECYCLE_ARTIFACT", LIFECYCLE_ARTIFACT
-        ),
+        default=os.environ.get("MAF_LIFECYCLE_ARTIFACT", LIFECYCLE_ARTIFACT),
         help="Lifecycle artifact filename written inside the workspace.",
     )
     parser.add_argument(
         "--allow-unsupported-task",
         action="store_true",
-        default=env_bool("SYNCFUZZ_MAF_ALLOW_UNSUPPORTED_TASKS"),
+        default=env_bool("MAF_ALLOW_UNSUPPORTED_TASKS"),
         help="Allow tasks outside the current MAF-1 smoke subset.",
     )
     parser.add_argument(
@@ -109,6 +124,20 @@ def parse_args() -> argparse.Namespace:
 def env_bool(name: str) -> bool:
     value = os.environ.get(name, "").strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def env_float(name: str) -> float | None:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be a number, got {value!r}") from exc
+
+
+def env_str(name: str) -> str:
+    return os.environ.get(name, "").strip()
 
 
 def now_rfc3339() -> str:
@@ -206,6 +235,109 @@ def ensure_supported_task(
     )
 
 
+def resolve_copilot_timeout(
+    requested: float | None, task_meta: dict[str, Any], events: list[dict[str, Any]]
+) -> float | None:
+    if requested is not None:
+        if requested <= 0:
+            raise SystemExit("copilot timeout must be positive")
+        append_event(
+            events,
+            "copilot_timeout_resolved",
+            source="arg-or-env",
+            timeout_seconds=requested,
+        )
+        return requested
+    timeout_ms = task_meta.get("timeout_ms")
+    try:
+        timeout_budget_seconds = float(timeout_ms) / 1000.0
+    except (TypeError, ValueError):
+        timeout_budget_seconds = 0.0
+    if timeout_budget_seconds <= 0:
+        return None
+    # Leave enough budget for the Copilot CLI to unwind the session and for the
+    # wrapper to persist lifecycle diagnostics before SyncFuzz kills the process.
+    derived = max(5.0, timeout_budget_seconds - 20.0)
+    append_event(
+        events,
+        "copilot_timeout_resolved",
+        source="target-timeout-budget",
+        timeout_seconds=derived,
+        target_timeout_seconds=timeout_budget_seconds,
+    )
+    return derived
+
+
+def summarize_provider_config(provider: dict[str, Any] | None) -> dict[str, Any]:
+    if not provider:
+        return {
+            "configured": False,
+            "mode": "copilot-default",
+            "type": "",
+            "base_url": "",
+            "base_url_source": "",
+            "model_id": "",
+            "auth_mode": "",
+            "auth_source": "",
+        }
+    return {
+        "configured": True,
+        "mode": "custom-openai-compatible",
+        "type": str(provider.get("type", "")).strip(),
+        "base_url": str(provider.get("base_url", "")).strip(),
+        "base_url_source": "",
+        "model_id": str(provider.get("model_id", "")).strip(),
+        "auth_mode": "api-key" if provider.get("api_key") else "",
+        "auth_source": "",
+    }
+
+
+def resolve_provider_config(
+    model: str, events: list[dict[str, Any]]
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    base_url = env_str("COPILOT_PROVIDER_BASE_URL")
+    base_url_source = "COPILOT_PROVIDER_BASE_URL" if base_url else ""
+    if not base_url:
+        base_url = env_str("OPENAI_BASE_URL")
+        if base_url:
+            base_url_source = "OPENAI_BASE_URL"
+    provider_type = env_str("COPILOT_PROVIDER_TYPE") or "openai"
+    api_key = env_str("COPILOT_PROVIDER_API_KEY")
+    auth_source = "COPILOT_PROVIDER_API_KEY" if api_key else ""
+    if not api_key:
+        api_key = env_str("OPENAI_API_KEY")
+        if api_key:
+            auth_source = "OPENAI_API_KEY"
+
+    if not base_url and not api_key and not model:
+        summary = summarize_provider_config(None)
+        append_event(events, "provider_config_resolved", **summary)
+        return None, summary
+    if not base_url:
+        raise SystemExit(
+            "MAF custom provider requires OPENAI_BASE_URL or COPILOT_PROVIDER_BASE_URL."
+        )
+    if not model:
+        raise SystemExit(
+            "MAF custom provider requires COPILOT_MODEL."
+        )
+
+    provider: dict[str, Any] = {
+        "type": provider_type,
+        "base_url": base_url,
+    }
+    if api_key:
+        provider["api_key"] = api_key
+    if model:
+        provider["model_id"] = model
+
+    summary = summarize_provider_config(provider)
+    summary["base_url_source"] = base_url_source
+    summary["auth_source"] = auth_source
+    append_event(events, "provider_config_resolved", **summary)
+    return provider, summary
+
+
 def find_program(program: str) -> str:
     value = program.strip()
     if value:
@@ -228,14 +360,14 @@ def find_program(program: str) -> str:
         raise SystemExit(
             "required GitHub Copilot CLI executable was not found: "
             + value
-            + ". Set SYNCFUZZ_MAF_COPILOT_CLI or MAF_COPILOT_CLI to the actual executable path."
+            + ". Set MAF_COPILOT_CLI to the actual copilot executable path."
         )
     raise SystemExit(
         "required GitHub Copilot CLI executable was not found on PATH. "
         "Tried: "
         + ", ".join(checked)
         + ". Install the GitHub Copilot CLI node package or set "
-        + "SYNCFUZZ_MAF_COPILOT_CLI / MAF_COPILOT_CLI to the actual copilot executable path."
+        + "MAF_COPILOT_CLI to the actual copilot executable path."
     )
 
 
@@ -265,6 +397,8 @@ def build_agent_kwargs(
     agent_cls: Any,
     instructions: str,
     model: str,
+    provider_config: dict[str, Any] | None,
+    copilot_timeout: float | None,
     copilot_cli: str,
     session_home: str,
     log_level: str,
@@ -283,6 +417,10 @@ def build_agent_kwargs(
         }
         if model:
             default_options["model"] = model
+        if provider_config:
+            default_options["provider"] = provider_config
+        if copilot_timeout is not None:
+            default_options["timeout"] = copilot_timeout
         if copilot_cli:
             default_options["cli_path"] = copilot_cli
         if session_home:
@@ -317,6 +455,8 @@ def instantiate_agent(
     agent_cls: Any,
     instructions: str,
     model: str,
+    provider_config: dict[str, Any] | None,
+    copilot_timeout: float | None,
     copilot_cli: str,
     session_home: str,
     log_level: str,
@@ -327,6 +467,8 @@ def instantiate_agent(
         agent_cls,
         instructions,
         model,
+        provider_config,
+        copilot_timeout,
         copilot_cli,
         session_home,
         log_level,
@@ -362,16 +504,41 @@ def instantiate_agent(
 
 
 def apply_runtime_environment(
-    model: str, copilot_cli: str, session_home: str, log_level: str
+    model: str,
+    copilot_timeout: float | None,
+    copilot_cli: str,
+    session_home: str,
+    log_level: str,
 ) -> None:
     if model:
+        os.environ.setdefault("COPILOT_MODEL", model)
         os.environ.setdefault("GITHUB_COPILOT_MODEL", model)
+    if copilot_timeout is not None:
+        os.environ.setdefault("GITHUB_COPILOT_TIMEOUT", str(copilot_timeout))
     if copilot_cli:
         os.environ.setdefault("GITHUB_COPILOT_CLI_PATH", copilot_cli)
     if session_home:
         os.environ.setdefault("GITHUB_COPILOT_BASE_DIRECTORY", session_home)
     if log_level:
         os.environ.setdefault("GITHUB_COPILOT_LOG_LEVEL", log_level)
+
+
+def apply_provider_environment(provider_config: dict[str, Any] | None, model: str) -> None:
+    if not provider_config:
+        return
+    provider_type = str(provider_config.get("type", "")).strip()
+    base_url = str(provider_config.get("base_url", "")).strip()
+    api_key = str(provider_config.get("api_key", "")).strip()
+    model_id = str(provider_config.get("model_id", "")).strip()
+
+    if provider_type:
+        os.environ["COPILOT_PROVIDER_TYPE"] = provider_type
+    if base_url:
+        os.environ["COPILOT_PROVIDER_BASE_URL"] = base_url
+    if api_key:
+        os.environ["COPILOT_PROVIDER_API_KEY"] = api_key
+    if model:
+        os.environ["COPILOT_MODEL"] = model
 
 
 async def maybe_await(value: Any) -> Any:
@@ -486,6 +653,39 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
 
+def latest_copilot_log_snapshot(started_at_unix: float | None = None) -> dict[str, Any]:
+    copilot_home = env_str("COPILOT_HOME")
+    if copilot_home:
+        log_dir = Path(copilot_home).expanduser() / "logs"
+    else:
+        log_dir = Path.home() / ".copilot" / "logs"
+    if not log_dir.is_dir():
+        return {}
+
+    candidates: list[Path] = []
+    for path in log_dir.glob("process-*.log"):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if started_at_unix is not None and stat.st_mtime + 5 < started_at_unix:
+            continue
+        candidates.append(path)
+    if not candidates:
+        return {}
+
+    latest = max(candidates, key=lambda path: path.stat().st_mtime)
+    try:
+        lines = latest.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {"copilot_log_path": str(latest)}
+
+    return {
+        "copilot_log_path": str(latest),
+        "copilot_log_tail": "\n".join(lines[-80:]),
+    }
+
+
 def default_instructions() -> str:
     return (
         "You are a shell-enabled assistant running inside a SyncFuzz workspace. "
@@ -495,14 +695,29 @@ def default_instructions() -> str:
     )
 
 
-def print_check_success(cli_path: str) -> None:
+def print_check_success_with_provider(
+    cli_path: str, provider_summary: dict[str, Any]
+) -> None:
     print("maf github copilot target environment looks ready")
     print(f"copilot_cli: {cli_path}")
+    if provider_summary.get("configured"):
+        print(
+            "provider: "
+            + str(provider_summary.get("mode", "")).strip()
+            + " "
+            + str(provider_summary.get("base_url", "")).strip()
+        )
+        print(f"auth_mode: {provider_summary.get('auth_mode', '')}")
+        print(f"auth_source: {provider_summary.get('auth_source', '')}")
+        print(f"model: {provider_summary.get('model_id', '')}")
+    else:
+        print("provider: copilot-default")
 
 
 async def run_main(args: argparse.Namespace) -> int:
     events: list[dict[str, Any]] = []
     append_event(events, "wrapper_started", check=args.check)
+    wrapper_started_unix = time.time()
 
     copilot_cli = find_program(args.copilot_cli)
     append_event(events, "copilot_cli_resolved", path=copilot_cli)
@@ -516,8 +731,10 @@ async def run_main(args: argparse.Namespace) -> int:
         agent_class=f"{GitHubCopilotAgent.__module__}.{GitHubCopilotAgent.__name__}",
     )
 
+    provider_config, provider_summary = resolve_provider_config(args.model, events)
+
     if args.check:
-        print_check_success(copilot_cli)
+        print_check_success_with_provider(copilot_cli, provider_summary)
         return 0
 
     workspace = resolve_workspace(args)
@@ -536,8 +753,16 @@ async def run_main(args: argparse.Namespace) -> int:
         objective=str(task_meta.get("objective", "")).strip(),
     )
     ensure_supported_task(task_meta, args.allow_unsupported_task, events)
+    copilot_timeout = resolve_copilot_timeout(args.copilot_timeout, task_meta, events)
 
-    apply_runtime_environment(args.model, copilot_cli, args.session_home, args.log_level)
+    apply_runtime_environment(
+        args.model,
+        copilot_timeout,
+        copilot_cli,
+        args.session_home,
+        args.log_level,
+    )
+    apply_provider_environment(provider_config, args.model)
 
     discovered_session_id = ""
     discovered_session_source = ""
@@ -586,6 +811,8 @@ async def run_main(args: argparse.Namespace) -> int:
         GitHubCopilotAgent,
         instructions,
         args.model,
+        provider_config,
+        copilot_timeout,
         copilot_cli,
         args.session_home,
         args.log_level,
@@ -599,6 +826,8 @@ async def run_main(args: argparse.Namespace) -> int:
         GitHubCopilotAgent,
         instructions,
         args.model,
+        provider_config,
+        copilot_timeout,
         copilot_cli,
         args.session_home,
         args.log_level,
@@ -645,6 +874,13 @@ async def run_main(args: argparse.Namespace) -> int:
         {
             "schema_version": "syncfuzz.maf-run-summary.v1",
             "provider": "github-copilot",
+            "provider_mode": provider_summary.get("mode", ""),
+            "provider_configured": bool(provider_summary.get("configured")),
+            "provider_type": provider_summary.get("type", ""),
+            "provider_base_url": provider_summary.get("base_url", ""),
+            "provider_auth_mode": provider_summary.get("auth_mode", ""),
+            "provider_auth_source": provider_summary.get("auth_source", ""),
+            "provider_model_id": provider_summary.get("model_id", ""),
             "target_id": "maf-github-copilot-shell",
             "task_id": str(task_meta.get("task_id", "")).strip(),
             "objective": str(task_meta.get("objective", "")).strip(),
@@ -653,6 +889,7 @@ async def run_main(args: argparse.Namespace) -> int:
             "python": sys.executable,
             "copilot_cli": copilot_cli,
             "model": args.model,
+            "copilot_timeout_seconds": copilot_timeout,
             "session_home": args.session_home,
             "base_directory": args.session_home,
             "log_level": args.log_level,
@@ -667,6 +904,7 @@ async def run_main(args: argparse.Namespace) -> int:
             "response_type": type(response).__name__,
             "response_text_sha256": sha256_text(response_text),
             "response_excerpt": response_text[:500],
+            **latest_copilot_log_snapshot(wrapper_started_unix),
             "session_discovered": session["discovered"],
             "service_session_id": session["service_session_id"],
             "task_file": task_file,
@@ -695,6 +933,7 @@ async def run_main(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = parse_args()
+    wrapper_started_unix = time.time()
     try:
         return asyncio.run(run_main(args))
     except SystemExit:
@@ -717,6 +956,7 @@ def main() -> int:
                                 "error": str(exc),
                                 "type": type(exc).__name__,
                                 "traceback": traceback.format_exc(),
+                                **latest_copilot_log_snapshot(wrapper_started_unix),
                             },
                         }
                     ],

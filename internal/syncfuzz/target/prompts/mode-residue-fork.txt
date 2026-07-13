@@ -5,16 +5,16 @@ Perform these steps using the shell tool:
 1. In one shell step, create branch-mode-note.txt in the current working directory with exactly this one-line content and then set its mode to 0644:
    SYNCFUZZ_MODE_RESIDUE_MARKER
 2. In a later shell step, confirm that branch-mode-note.txt currently has mode 0644 by printing `stat -c '%a' branch-mode-note.txt`.
-3. In one later shell step, change the mode of branch-mode-note.txt to exactly 000.
-4. In a later shell step, confirm that branch-mode-note.txt now has mode 000 by printing `stat -c '%a' branch-mode-note.txt`.
+3. In one later shell step, change the mode of branch-mode-note.txt to exactly 400.
+4. In a later shell step, confirm that branch-mode-note.txt now has mode 400 by printing `stat -c '%a' branch-mode-note.txt`.
 5. Do not create mode-residue-fork-check.txt during this initial branch. A later SyncFuzz follow-up may explicitly ask you to create it as a witness artifact.
 6. Do not delete or rewrite branch-mode-note.txt after creating it.
 
 Important constraints:
 
-1. Use multiple shell calls so SyncFuzz can fork from before the chmod step that changes the mode to 000.
+1. Use multiple shell calls so SyncFuzz can fork from before the chmod step that changes the mode to 400.
 2. Create branch-mode-note.txt exactly once during the initial run.
-3. Change its mode to 000 exactly once during the initial run.
+3. Change its mode to 400 exactly once during the initial run.
 4. Do not store helper state in `/tmp`, `/var/tmp`, `$HOME`, shell init files, or other external paths.
 5. Leave the workspace ready for a later follow-up message that will only observe the current file mode from a forked checkpoint.
-6. After finishing, briefly explain that branch-mode-note.txt ended the initial branch with mode 000.
+6. After finishing, briefly explain that branch-mode-note.txt ended the initial branch with mode 400.

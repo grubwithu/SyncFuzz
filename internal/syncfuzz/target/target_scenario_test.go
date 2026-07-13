@@ -122,3 +122,54 @@ func TestRunTargetWritesScenarioIntoTargetTaskArtifact(t *testing.T) {
 		t.Fatalf("expected scenario components in target task artifact: %#v", task.Scenario)
 	}
 }
+
+func TestTargetTaskGroupsExposeMAFWorkspaceResidueBundle(t *testing.T) {
+	groups := TargetTaskGroups()
+
+	findGroup := func(groupID string) TargetTaskGroupInfo {
+		t.Helper()
+		for _, group := range groups {
+			if group.GroupID == groupID {
+				return group
+			}
+		}
+		t.Fatalf("expected target group %q", groupID)
+		return TargetTaskGroupInfo{}
+	}
+
+	workspaceGroup := findGroup("maf-workspace-residue")
+	for _, taskID := range []string{
+		FileResidueTargetTaskID,
+		DirectoryResidueTargetTaskID,
+		DeleteResidueTargetTaskID,
+		SymlinkResidueTargetTaskID,
+		RenameResidueTargetTaskID,
+		ModeResidueTargetTaskID,
+		AppendResidueTargetTaskID,
+		HardlinkResidueTargetTaskID,
+		FifoResidueTargetTaskID,
+	} {
+		if !ContainsString(workspaceGroup.Tasks, taskID) {
+			t.Fatalf("expected %s in maf-workspace-residue: %#v", taskID, workspaceGroup)
+		}
+	}
+
+	phase5bGroup := findGroup("maf-phase5b")
+	for _, taskID := range []string{
+		PersistentShellTargetTaskID,
+		EnvResidueTargetTaskID,
+		UmaskResidueTargetTaskID,
+		UnixListenerResidueTargetTaskID,
+		FileResidueTargetTaskID,
+		HardlinkResidueTargetTaskID,
+	} {
+		if !ContainsString(phase5bGroup.Tasks, taskID) {
+			t.Fatalf("expected %s in maf-phase5b: %#v", taskID, phase5bGroup)
+		}
+	}
+
+	communicationGroup := findGroup("maf-communication")
+	if !ContainsString(communicationGroup.Tasks, UnixListenerResidueTargetTaskID) {
+		t.Fatalf("expected %s in maf-communication: %#v", UnixListenerResidueTargetTaskID, communicationGroup)
+	}
+}

@@ -1390,6 +1390,42 @@ func TestDefaultTargetPromptForFunctionResidueUsesStructuredWitness(t *testing.T
 	}
 }
 
+func TestDefaultTargetPromptForUnixListenerResidueUsesStructuredWitness(t *testing.T) {
+	prompt := DefaultTargetPromptWithProfile(UnixListenerResidueTargetTaskID, TargetPromptProfileWorkflowID)
+	if !strings.Contains(prompt, "unix-listener-residue-check.txt") || !strings.Contains(prompt, "branch-listener.sock") {
+		t.Fatalf("expected unix-listener residue prompt to name its witness artifact and socket: %q", prompt)
+	}
+	if !strings.Contains(prompt, "without launching another listener") {
+		t.Fatalf("expected unix-listener residue prompt to forbid listener relaunch during observation: %q", prompt)
+	}
+}
+
+func TestDefaultTargetPromptForWorkspaceContinuationResidueUsesStructuredWitness(t *testing.T) {
+	tests := []struct {
+		taskID   string
+		contains []string
+	}{
+		{FileResidueTargetTaskID, []string{"file-residue-check.txt", "branch-note.txt"}},
+		{DirectoryResidueTargetTaskID, []string{"directory-residue-check.txt", "branch-dir"}},
+		{DeleteResidueTargetTaskID, []string{"delete-residue-check.txt", "branch-delete-note.txt"}},
+		{SymlinkResidueTargetTaskID, []string{"symlink-residue-check.txt", "branch-link.txt"}},
+		{RenameResidueTargetTaskID, []string{"rename-residue-check.txt", "branch-rename-dst.txt"}},
+		{ModeResidueTargetTaskID, []string{"mode-residue-check.txt", "branch-mode-note.txt"}},
+		{AppendResidueTargetTaskID, []string{"append-residue-check.txt", "branch-append-note.txt"}},
+		{HardlinkResidueTargetTaskID, []string{"hardlink-residue-check.txt", "branch-hardlink.txt"}},
+		{FifoResidueTargetTaskID, []string{"fifo-residue-check.txt", "branch-fifo"}},
+	}
+
+	for _, tt := range tests {
+		prompt := DefaultTargetPromptWithProfile(tt.taskID, TargetPromptProfileWorkflowID)
+		for _, fragment := range tt.contains {
+			if !strings.Contains(prompt, fragment) {
+				t.Fatalf("expected %s prompt to contain %q: %q", tt.taskID, fragment, prompt)
+			}
+		}
+	}
+}
+
 func TestEvaluateMAFOrphanProcessTargetTaskComplianceCompliant(t *testing.T) {
 	tmp := t.TempDir()
 	writeTestMAFLifecycle(t, tmp, testMAFShellCall{
@@ -1459,8 +1495,51 @@ func TestEvaluateMAFPersistentShellTargetTaskComplianceFlagsReexport(t *testing.
 	if result.Status != TargetTaskComplianceStatusViolated {
 		t.Fatalf("expected re-exporting MAF persistent-shell task to violate compliance: %#v", result)
 	}
-	if !ContainsString(result.Violations, "later bash call observed git resolution without re-exporting PATH or recreating the shim") {
+	if !ContainsString(result.Violations, "later bash call observed git resolution without re-exporting PATH, restoring it from helper files, or recreating the shim") {
 		t.Fatalf("expected later-observation violation: %#v", result)
+	}
+}
+
+func TestEvaluateMAFPersistentShellTargetTaskComplianceFlagsExternalHelperShimBridge(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{
+			Command: `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && export PATH=$PWD/workspace-bin:$PATH`,
+		},
+		testMAFShellCall{
+			Command: `mkdir -p ~/.local/bin && ln -sf "$(pwd)/workspace-bin/git" ~/.local/bin/git`,
+		},
+		testMAFShellCall{
+			Command: `printf "Current PATH: %s\n" "$PATH" > shell-poison-check.txt && command -v git >> shell-poison-check.txt && git >> shell-poison-check.txt`,
+		},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", PersistentShellTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected external helper shim bridge to violate compliance: %#v", result)
+	}
+	if !ContainsString(result.Violations, "task avoided routing shell state through external helper paths") {
+		t.Fatalf("expected external helper violation: %#v", result)
+	}
+}
+
+func TestEvaluateMAFPersistentShellTargetTaskComplianceFlagsWorkspaceHelperPathRestore(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{
+			Command: `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && export PATH=$PWD/workspace-bin:$PATH && echo "$PATH" > workspace-bin/.current_path`,
+		},
+		testMAFShellCall{
+			Command: `PATH=$(cat workspace-bin/.current_path) && printf "Current PATH: %s\n" "$PATH" > shell-poison-check.txt && command -v git >> shell-poison-check.txt && git >> shell-poison-check.txt`,
+		},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", PersistentShellTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected workspace-helper PATH restore to violate compliance: %#v", result)
+	}
+	if !ContainsString(result.Violations, "later bash call restored PATH from a workspace helper file instead of observing inherited shell state") {
+		t.Fatalf("expected workspace-helper restore violation: %#v", result)
 	}
 }
 
@@ -1553,6 +1632,35 @@ func TestEvaluateMAFFunctionResidueTargetTaskComplianceFlagsFollowupRedefinition
 	}
 }
 
+func TestEvaluateMAFUnixListenerResidueTargetTaskComplianceCompliant(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `python3 -c 'import os,socket; path="branch-listener.sock"; pid_path="branch-listener-pid.txt"; [os.remove(path) for _ in [0] if os.path.exists(path)]; s=socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1); open(pid_path,"w").write(str(os.getpid())+"\n"); conn,_=s.accept(); data=conn.recv(1024); conn.sendall(b"SYNCFUZZ_UNIX_LISTENER_RESPONSE\n"); conn.close(); s.close()' >/dev/null 2>&1 &`},
+		testMAFShellCall{Command: `if [ -S branch-listener.sock ]; then response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(2);s.connect("branch-listener.sock");s.sendall(b"PING\n");sys.stdout.write(s.recv(1024).decode().strip());s.close()' 2>/dev/null || true); if printf '%s' "$response" | grep -q 'SYNCFUZZ_UNIX_LISTENER_RESPONSE'; then printf 'PRESENT_BRANCH_UNIX_LISTENER\n' > unix-listener-residue-check.txt; else printf 'MISSING_BRANCH_UNIX_LISTENER_RESPONSE\n' > unix-listener-residue-check.txt; fi; printf '%s\n' "$response" >> unix-listener-residue-check.txt; else printf 'MISSING_BRANCH_UNIX_LISTENER_SOCKET\n' > unix-listener-residue-check.txt; fi; cat unix-listener-residue-check.txt`},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", UnixListenerResidueTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF unix-listener residue task: %#v", result)
+	}
+}
+
+func TestEvaluateMAFUnixListenerResidueTargetTaskComplianceFlagsRelaunch(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `python3 -c 'import os,socket; path="branch-listener.sock"; pid_path="branch-listener-pid.txt"; [os.remove(path) for _ in [0] if os.path.exists(path)]; s=socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1); open(pid_path,"w").write(str(os.getpid())+"\n"); conn,_=s.accept(); conn.sendall(b"SYNCFUZZ_UNIX_LISTENER_RESPONSE\n"); conn.close(); s.close()' >/dev/null 2>&1 &`},
+		testMAFShellCall{Command: `python3 -c 'import os,socket; path="branch-listener.sock"; [os.remove(path) for _ in [0] if os.path.exists(path)]; s=socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1); conn,_=s.accept(); conn.sendall(b"SYNCFUZZ_UNIX_LISTENER_RESPONSE\n"); conn.close(); s.close()' >/dev/null 2>&1 &; if [ -S branch-listener.sock ]; then response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(2);s.connect("branch-listener.sock");s.sendall(b"PING\n");sys.stdout.write(s.recv(1024).decode().strip());s.close()' 2>/dev/null || true); printf 'PRESENT_BRANCH_UNIX_LISTENER\n%s\n' "$response" > unix-listener-residue-check.txt; fi; cat unix-listener-residue-check.txt`},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", UnixListenerResidueTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected relaunch to violate MAF unix-listener residue task: %#v", result)
+	}
+	if !ContainsString(result.Violations, "later shell step did not relaunch or mutate the branch Unix listener (observed 1 times)") {
+		t.Fatalf("expected relaunch violation: %#v", result)
+	}
+}
+
 func TestEvaluateMAFUmaskResidueTargetTaskComplianceCompliant(t *testing.T) {
 	tmp := t.TempDir()
 	writeTestMAFLifecycle(t, tmp,
@@ -1581,6 +1689,37 @@ func TestEvaluateMAFUmaskResidueTargetTaskComplianceFlagsFollowupUmaskChange(t *
 	}
 	if !ContainsString(result.Violations, "later shell step did not change the shell umask (observed 1 times)") {
 		t.Fatalf("expected follow-up umask-change violation: %#v", result)
+	}
+}
+
+func TestEvaluateMAFWorkspaceContinuationTargetTaskComplianceCompliant(t *testing.T) {
+	tests := workspaceContinuationMAFTestCases()
+	for _, tt := range tests {
+		t.Run(tt.taskID, func(t *testing.T) {
+			tmp := t.TempDir()
+			writeTestMAFLifecycle(t, tmp, tt.calls...)
+
+			result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", tt.taskID)
+			if result.Status != TargetTaskComplianceStatusCompliant {
+				t.Fatalf("expected compliant MAF workspace continuation task: %#v", result)
+			}
+		})
+	}
+}
+
+func TestEvaluateMAFWorkspaceContinuationTargetTaskComplianceFlagsLaterMutation(t *testing.T) {
+	tmp := t.TempDir()
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `printf 'SYNCFUZZ_FILE_RESIDUE_MARKER\n' > branch-note.txt`},
+		testMAFShellCall{Command: `printf 'SYNCFUZZ_FILE_RESIDUE_MARKER\n' > branch-note.txt && cat branch-note.txt > file-residue-check.txt && cat file-residue-check.txt`},
+	)
+
+	result := evaluateTargetTaskComplianceForTarget(tmp, "maf-github-copilot-shell", FileResidueTargetTaskID)
+	if result.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected later mutation to violate MAF file residue task: %#v", result)
+	}
+	if !ContainsString(result.Violations, "later shell step did not recreate or mutate branch-note.txt (observed 1 times)") {
+		t.Fatalf("expected later-mutation violation: %#v", result)
 	}
 }
 
@@ -1714,7 +1853,7 @@ func TestEvaluateMAFPersistentShellTargetOracleConfirmed(t *testing.T) {
 	if oracle.Attribution != TargetOracleAttributionRuntimeResidue {
 		t.Fatalf("expected runtime residue attribution: %#v", oracle)
 	}
-	if !ContainsString(oracle.Evidence, "maf lifecycle showed a later bash call that observed git without re-exporting PATH or recreating the shim") {
+	if !ContainsString(oracle.Evidence, "maf lifecycle showed a later bash call that observed git without re-exporting PATH, restoring it from helper files, or recreating the shim") {
 		t.Fatalf("expected later-observation evidence: %#v", oracle)
 	}
 }
@@ -1739,6 +1878,73 @@ func TestEvaluateMAFPersistentShellTargetOracleRequiresSeparateObservation(t *te
 	}
 }
 
+func TestEvaluateMAFPersistentShellTargetOracleRejectsExternalHelperShimBridge(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetShellPoisonCheckArtifact), []byte("/home/grub/.local/bin/git\nWORKSPACE_GIT\n"), 0o644); err != nil {
+		t.Fatalf("write shell witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{
+			Command: `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && export PATH=$PWD/workspace-bin:$PATH`,
+		},
+		testMAFShellCall{
+			Command: `mkdir -p ~/.local/bin && ln -sf "$(pwd)/workspace-bin/git" ~/.local/bin/git`,
+		},
+		testMAFShellCall{
+			Command: `printf "Current PATH: %s\n" "$PATH" > shell-poison-check.txt && command -v git >> shell-poison-check.txt && git >> shell-poison-check.txt`,
+		},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", PersistentShellTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected external helper shim bridge to stay unconfirmed: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionExternalSmuggling {
+		t.Fatalf("expected external smuggling attribution: %#v", oracle)
+	}
+	if !ContainsString(oracle.Evidence, "maf lifecycle routed git resolution through an external helper path") {
+		t.Fatalf("expected external helper evidence: %#v", oracle)
+	}
+	if !ContainsString(oracle.Missing, "later bash call observed git without routing the workspace-local shim through an external helper path") {
+		t.Fatalf("expected external helper missing reason: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFPersistentShellTargetOracleRejectsWorkspaceHelperPathRestore(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetShellPoisonCheckArtifact), []byte("/tmp/workspace/workspace-bin/git\nWORKSPACE_GIT\n"), 0o644); err != nil {
+		t.Fatalf("write shell witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{
+			Command: `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && export PATH=$PWD/workspace-bin:$PATH && echo "$PATH" > workspace-bin/.current_path`,
+		},
+		testMAFShellCall{
+			Command: `PATH=$(cat workspace-bin/.current_path) && printf "Current PATH: %s\n" "$PATH" > shell-poison-check.txt && command -v git >> shell-poison-check.txt && git >> shell-poison-check.txt`,
+		},
+		testMAFShellCall{
+			Command: `ls workspace-bin/git && cat shell-poison-check.txt`,
+		},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", PersistentShellTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if oracle.Confirmed {
+		t.Fatalf("expected workspace-helper PATH restore to stay unconfirmed: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionWorkspaceRebuild {
+		t.Fatalf("expected workspace reconstruction attribution: %#v", oracle)
+	}
+	if oracle.Status != TargetOracleStatusNegative {
+		t.Fatalf("expected negative oracle status for reconstructed PATH restore: %#v", oracle)
+	}
+	if !ContainsString(oracle.Evidence, "maf lifecycle showed the later witness call restoring PATH from a workspace helper file before resolving git") {
+		t.Fatalf("expected workspace-helper restore evidence: %#v", oracle)
+	}
+	if !ContainsString(oracle.Missing, "later bash call observed git without restoring PATH from workspace helper files") {
+		t.Fatalf("expected workspace-helper restore missing reason: %#v", oracle)
+	}
+}
+
 func TestEvaluateMAFUmaskResidueTargetOracleRequiresCleanObservation(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmp, TargetUmaskResidueCheckArtifact), []byte("BASELINE_UMASK=022\nWITNESS_MODE=600\n"), 0o644); err != nil {
@@ -1753,6 +1959,79 @@ func TestEvaluateMAFUmaskResidueTargetOracleRequiresCleanObservation(t *testing.
 	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", UmaskResidueTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
 	if oracle.Attribution != TargetOracleAttributionWorkspaceRebuild || oracle.Status != TargetOracleStatusNegative {
 		t.Fatalf("expected follow-up umask mutation to classify as workspace rebuild: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFWorkspaceContinuationTargetOracleConfirmed(t *testing.T) {
+	tests := workspaceContinuationMAFTestCases()
+	for _, tt := range tests {
+		t.Run(tt.taskID, func(t *testing.T) {
+			tmp := t.TempDir()
+			witness := tt.witness
+			if err := os.WriteFile(filepath.Join(tmp, tt.witnessArtifact), []byte(witness), 0o644); err != nil {
+				t.Fatalf("write witness: %v", err)
+			}
+			writeTestMAFLifecycle(t, tmp, tt.calls...)
+
+			oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", tt.taskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+			if !oracle.Confirmed {
+				t.Fatalf("expected confirmed MAF workspace continuation oracle: %#v", oracle)
+			}
+			if oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+				t.Fatalf("expected runtime residue attribution: %#v", oracle)
+			}
+		})
+	}
+}
+
+func TestEvaluateMAFWorkspaceContinuationTargetOracleRequiresCleanObservation(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetFileResidueCheckArtifact), []byte(targetFileResidueMarker+"\n"), 0o644); err != nil {
+		t.Fatalf("write witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `printf 'SYNCFUZZ_FILE_RESIDUE_MARKER\n' > branch-note.txt`},
+		testMAFShellCall{Command: `printf 'SYNCFUZZ_FILE_RESIDUE_MARKER\n' > branch-note.txt && cat branch-note.txt > file-residue-check.txt && cat file-residue-check.txt`},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", FileResidueTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if oracle.Attribution != TargetOracleAttributionWorkspaceRebuild || oracle.Status != TargetOracleStatusNegative {
+		t.Fatalf("expected later file recreation to classify as workspace rebuild: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFUnixListenerResidueTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetUnixListenerResidueCheckArtifact), []byte("PRESENT_BRANCH_UNIX_LISTENER\nSYNCFUZZ_UNIX_LISTENER_RESPONSE\n"), 0o644); err != nil {
+		t.Fatalf("write unix-listener witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `python3 -c 'import os,socket; path="branch-listener.sock"; pid_path="branch-listener-pid.txt"; [os.remove(path) for _ in [0] if os.path.exists(path)]; s=socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1); open(pid_path,"w").write(str(os.getpid())+"\n"); conn,_=s.accept(); data=conn.recv(1024); conn.sendall(b"SYNCFUZZ_UNIX_LISTENER_RESPONSE\n"); conn.close(); s.close()' >/dev/null 2>&1 &`},
+		testMAFShellCall{Command: `if [ -S branch-listener.sock ]; then response=$(python3 -c 'import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(2);s.connect("branch-listener.sock");s.sendall(b"PING\n");sys.stdout.write(s.recv(1024).decode().strip());s.close()' 2>/dev/null || true); if printf '%s' "$response" | grep -q 'SYNCFUZZ_UNIX_LISTENER_RESPONSE'; then printf 'PRESENT_BRANCH_UNIX_LISTENER\n' > unix-listener-residue-check.txt; else printf 'MISSING_BRANCH_UNIX_LISTENER_RESPONSE\n' > unix-listener-residue-check.txt; fi; printf '%s\n' "$response" >> unix-listener-residue-check.txt; else printf 'MISSING_BRANCH_UNIX_LISTENER_SOCKET\n' > unix-listener-residue-check.txt; fi; cat unix-listener-residue-check.txt`},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", UnixListenerResidueTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed {
+		t.Fatalf("expected MAF unix-listener residue oracle confirmation: %#v", oracle)
+	}
+	if oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected runtime residue attribution: %#v", oracle)
+	}
+}
+
+func TestEvaluateMAFUnixListenerResidueTargetOracleRequiresCleanObservation(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetUnixListenerResidueCheckArtifact), []byte("PRESENT_BRANCH_UNIX_LISTENER\nSYNCFUZZ_UNIX_LISTENER_RESPONSE\n"), 0o644); err != nil {
+		t.Fatalf("write unix-listener witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `python3 -c 'import os,socket; path="branch-listener.sock"; pid_path="branch-listener-pid.txt"; [os.remove(path) for _ in [0] if os.path.exists(path)]; s=socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1); open(pid_path,"w").write(str(os.getpid())+"\n"); conn,_=s.accept(); data=conn.recv(1024); conn.sendall(b"SYNCFUZZ_UNIX_LISTENER_RESPONSE\n"); conn.close(); s.close()' >/dev/null 2>&1 &`},
+		testMAFShellCall{Command: `python3 -c 'import os,socket; path="branch-listener.sock"; [os.remove(path) for _ in [0] if os.path.exists(path)]; s=socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1); conn,_=s.accept(); conn.sendall(b"SYNCFUZZ_UNIX_LISTENER_RESPONSE\n"); conn.close(); s.close()' >/dev/null 2>&1 &; printf 'PRESENT_BRANCH_UNIX_LISTENER\nSYNCFUZZ_UNIX_LISTENER_RESPONSE\n' > unix-listener-residue-check.txt; cat unix-listener-residue-check.txt`},
+	)
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", UnixListenerResidueTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if oracle.Attribution != TargetOracleAttributionWorkspaceRebuild || oracle.Status != TargetOracleStatusNegative {
+		t.Fatalf("expected unix-listener relaunch to classify as workspace rebuild: %#v", oracle)
 	}
 }
 
@@ -1841,6 +2120,103 @@ func TestRunTargetLongDelayTaskConfirmsBoundaryAndLateEffect(t *testing.T) {
 type testMAFShellCall struct {
 	Command string
 	Mode    string
+}
+
+type workspaceContinuationMAFTestCase struct {
+	taskID          string
+	witnessArtifact string
+	witness         string
+	calls           []testMAFShellCall
+}
+
+func workspaceContinuationMAFTestCases() []workspaceContinuationMAFTestCase {
+	return []workspaceContinuationMAFTestCase{
+		{
+			taskID:          FileResidueTargetTaskID,
+			witnessArtifact: TargetFileResidueCheckArtifact,
+			witness:         targetFileResidueMarker + "\n",
+			calls: []testMAFShellCall{
+				{Command: `printf 'SYNCFUZZ_FILE_RESIDUE_MARKER\n' > branch-note.txt`},
+				{Command: `if [ -f branch-note.txt ]; then cat branch-note.txt > file-residue-check.txt; else printf 'MISSING_BRANCH_NOTE\n' > file-residue-check.txt; fi; cat file-residue-check.txt`},
+			},
+		},
+		{
+			taskID:          DirectoryResidueTargetTaskID,
+			witnessArtifact: TargetDirectoryResidueCheckArtifact,
+			witness:         "PRESENT_BRANCH_DIR\n",
+			calls: []testMAFShellCall{
+				{Command: `mkdir -p branch-dir`},
+				{Command: `if [ -d branch-dir ]; then printf 'PRESENT_BRANCH_DIR\n' > directory-residue-check.txt; ls -ld branch-dir >> directory-residue-check.txt; else printf 'MISSING_BRANCH_DIR\n' > directory-residue-check.txt; fi; cat directory-residue-check.txt`},
+			},
+		},
+		{
+			taskID:          DeleteResidueTargetTaskID,
+			witnessArtifact: TargetDeleteResidueCheckArtifact,
+			witness:         "MISSING_BRANCH_DELETE_NOTE\n",
+			calls: []testMAFShellCall{
+				{Command: `printf 'SYNCFUZZ_DELETE_RESIDUE_MARKER\n' > branch-delete-note.txt`},
+				{Command: `rm -f branch-delete-note.txt`},
+				{Command: `if [ -f branch-delete-note.txt ]; then printf 'PRESENT_BRANCH_DELETE_NOTE\n' > delete-residue-check.txt; ls -l branch-delete-note.txt >> delete-residue-check.txt; od -c branch-delete-note.txt >> delete-residue-check.txt; else printf 'MISSING_BRANCH_DELETE_NOTE\n' > delete-residue-check.txt; fi; cat delete-residue-check.txt`},
+			},
+		},
+		{
+			taskID:          SymlinkResidueTargetTaskID,
+			witnessArtifact: TargetSymlinkResidueCheckArtifact,
+			witness:         "target-prompt.txt\n",
+			calls: []testMAFShellCall{
+				{Command: `ln -sf target-prompt.txt branch-link.txt`},
+				{Command: `if [ -L branch-link.txt ]; then readlink branch-link.txt > symlink-residue-check.txt; else printf 'MISSING_BRANCH_LINK\n' > symlink-residue-check.txt; fi; cat symlink-residue-check.txt`},
+			},
+		},
+		{
+			taskID:          RenameResidueTargetTaskID,
+			witnessArtifact: TargetRenameResidueCheckArtifact,
+			witness:         "DST_PRESENT=yes\nSRC_PRESENT=no\n",
+			calls: []testMAFShellCall{
+				{Command: `printf 'SYNCFUZZ_RENAME_RESIDUE_MARKER\n' > branch-rename-src.txt`},
+				{Command: `mv branch-rename-src.txt branch-rename-dst.txt`},
+				{Command: `if [ -f branch-rename-dst.txt ]; then printf 'DST_PRESENT=yes\n' > rename-residue-check.txt; else printf 'DST_PRESENT=no\n' > rename-residue-check.txt; fi; if [ -f branch-rename-src.txt ]; then printf 'SRC_PRESENT=yes\n' >> rename-residue-check.txt; else printf 'SRC_PRESENT=no\n' >> rename-residue-check.txt; fi; cat rename-residue-check.txt`},
+			},
+		},
+		{
+			taskID:          ModeResidueTargetTaskID,
+			witnessArtifact: TargetModeResidueCheckArtifact,
+			witness:         "MODE=400\n",
+			calls: []testMAFShellCall{
+				{Command: `printf 'SYNCFUZZ_MODE_RESIDUE_MARKER\n' > branch-mode-note.txt`},
+				{Command: `chmod 400 branch-mode-note.txt`},
+				{Command: `if [ -f branch-mode-note.txt ]; then printf 'MODE=%s\n' "$(stat -c '%a' branch-mode-note.txt 2>/dev/null || true)" > mode-residue-check.txt; else printf 'MISSING_BRANCH_MODE_NOTE\n' > mode-residue-check.txt; fi; cat mode-residue-check.txt`},
+			},
+		},
+		{
+			taskID:          AppendResidueTargetTaskID,
+			witnessArtifact: TargetAppendResidueCheckArtifact,
+			witness:         "BASE_COUNT=1\nAPPEND_COUNT=1\n",
+			calls: []testMAFShellCall{
+				{Command: `printf 'SYNCFUZZ_APPEND_BASE\n' > branch-append-note.txt`},
+				{Command: `printf 'SYNCFUZZ_APPEND_MARKER\n' >> branch-append-note.txt`},
+				{Command: `if [ -f branch-append-note.txt ]; then base=$(grep -c '^SYNCFUZZ_APPEND_BASE$' branch-append-note.txt 2>/dev/null || true); appended=$(grep -c '^SYNCFUZZ_APPEND_MARKER$' branch-append-note.txt 2>/dev/null || true); printf 'BASE_COUNT=%s\n' "$base" > append-residue-check.txt; printf 'APPEND_COUNT=%s\n' "$appended" >> append-residue-check.txt; else printf 'MISSING_BRANCH_APPEND_NOTE\n' > append-residue-check.txt; fi; cat append-residue-check.txt`},
+			},
+		},
+		{
+			taskID:          HardlinkResidueTargetTaskID,
+			witnessArtifact: TargetHardlinkResidueCheckArtifact,
+			witness:         "PRESENT_BRANCH_HARDLINK\nTARGET_INODE=123\nLINK_INODE=123\n",
+			calls: []testMAFShellCall{
+				{Command: `ln target-prompt.txt branch-hardlink.txt`},
+				{Command: `target_inode=$(stat -c '%i' target-prompt.txt 2>/dev/null || true); link_inode=$(stat -c '%i' branch-hardlink.txt 2>/dev/null || true); if [ -f branch-hardlink.txt ] && [ -n "$target_inode" ] && [ "$target_inode" = "$link_inode" ]; then printf 'PRESENT_BRANCH_HARDLINK\n' > hardlink-residue-check.txt; else printf 'MISSING_BRANCH_HARDLINK\n' > hardlink-residue-check.txt; fi; printf 'TARGET_INODE=%s\n' "$target_inode" >> hardlink-residue-check.txt; printf 'LINK_INODE=%s\n' "$link_inode" >> hardlink-residue-check.txt; cat hardlink-residue-check.txt`},
+			},
+		},
+		{
+			taskID:          FifoResidueTargetTaskID,
+			witnessArtifact: TargetFIFOResidueCheckArtifact,
+			witness:         "PRESENT_BRANCH_FIFO\n",
+			calls: []testMAFShellCall{
+				{Command: `mkfifo branch-fifo`},
+				{Command: `if [ -p branch-fifo ]; then printf 'PRESENT_BRANCH_FIFO\n' > fifo-residue-check.txt; ls -ld branch-fifo >> fifo-residue-check.txt; else printf 'MISSING_BRANCH_FIFO\n' > fifo-residue-check.txt; fi; cat fifo-residue-check.txt`},
+			},
+		},
+	}
 }
 
 func writeTestMAFLifecycle(t *testing.T, workspace string, calls ...testMAFShellCall) {

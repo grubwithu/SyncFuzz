@@ -425,7 +425,49 @@ Return after the command has been launched; do not wait for the background proce
 			},
 		},
 	}
+	scenarios = append(scenarios, ipcContinuationTargetScenarios()...)
+	scenarios = append(scenarios, workspaceContinuationTargetScenarios()...)
 	scenarios = append(scenarios, workspaceResidueTargetScenarios()...)
+	return scenarios
+}
+
+func workspaceContinuationTargetScenarios() []targetScenario {
+	specs := workspaceContinuationTaskSpecs()
+	scenarios := make([]targetScenario, 0, len(specs))
+	for _, spec := range specs {
+		scenarios = append(scenarios, targetScenario{
+			Info: TargetScenarioInfo{
+				ScenarioID:           spec.TaskID,
+				TaskID:               spec.TaskID,
+				SeedID:               workspaceContinuationSeedID(spec.TaskID),
+				Description:          spec.Description,
+				Objective:            spec.Objective,
+				StateSurface:         workspaceContinuationStateSurface(spec.TaskID),
+				LifecycleEdge:        "run->continue",
+				PlantPrimitiveID:     workspaceContinuationPlantPrimitiveID(spec.TaskID),
+				ActivationKindID:     workspaceContinuationActivationKindID(spec.TaskID),
+				OracleKindID:         workspaceContinuationOracleKindID(spec.TaskID),
+				DefaultExpectedFiles: append([]string{}, spec.ExpectedFiles...),
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "primitive-substitution." + workspaceContinuationPlantPrimitiveID(spec.TaskID),
+						Kind:       TargetScenarioMutationPrimitiveSubstitution,
+						Summary:    "swap the planted workspace object while preserving the same-run continuation boundary",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentPlant, Summary: workspaceContinuationPlantSummary(spec.TaskID)},
+					{Role: targetScenarioComponentLifecycle, Summary: "continue the same run with a later shell call and observe whether the workspace state persisted naturally"},
+					{Role: targetScenarioComponentActivation, Summary: workspaceContinuationActivationSummary(spec)},
+					{Role: targetScenarioComponentOracle, Summary: workspaceContinuationOracleSummary(spec.TaskID)},
+				},
+			},
+			Prompt: spec.Prompt,
+			Lifecycle: targetScenarioLifecycle{
+				Edge: "run->continue",
+			},
+		})
+	}
 	return scenarios
 }
 
@@ -505,6 +547,168 @@ func workspaceResidueStateSurface(taskID string) string {
 		return "shell-session.umask"
 	default:
 		return "workspace"
+	}
+}
+
+func workspaceContinuationSeedID(taskID string) string {
+	switch taskID {
+	case HardlinkResidueTargetTaskID:
+		return "workspace-link-residue"
+	case FifoResidueTargetTaskID:
+		return "workspace-special-file-residue"
+	default:
+		return "workspace-object-residue"
+	}
+}
+
+func workspaceContinuationStateSurface(taskID string) string {
+	switch taskID {
+	case FileResidueTargetTaskID:
+		return "workspace.file"
+	case DirectoryResidueTargetTaskID:
+		return "workspace.directory"
+	case DeleteResidueTargetTaskID:
+		return "workspace.file-presence"
+	case SymlinkResidueTargetTaskID:
+		return "workspace.symlink"
+	case RenameResidueTargetTaskID:
+		return "workspace.filename-binding"
+	case ModeResidueTargetTaskID:
+		return "workspace.file-mode"
+	case AppendResidueTargetTaskID:
+		return "workspace.file-content"
+	case HardlinkResidueTargetTaskID:
+		return "workspace.hardlink"
+	case FifoResidueTargetTaskID:
+		return "workspace.fifo"
+	default:
+		return "workspace"
+	}
+}
+
+func workspaceContinuationPlantPrimitiveID(taskID string) string {
+	switch taskID {
+	case FileResidueTargetTaskID:
+		return "workspace-file-create"
+	case DirectoryResidueTargetTaskID:
+		return "workspace-directory-create"
+	case DeleteResidueTargetTaskID:
+		return "workspace-file-delete"
+	case SymlinkResidueTargetTaskID:
+		return "workspace-symlink-create"
+	case RenameResidueTargetTaskID:
+		return "workspace-file-rename"
+	case ModeResidueTargetTaskID:
+		return "workspace-file-chmod"
+	case AppendResidueTargetTaskID:
+		return "workspace-file-append"
+	case HardlinkResidueTargetTaskID:
+		return "workspace-hardlink-create"
+	case FifoResidueTargetTaskID:
+		return "workspace-fifo-create"
+	default:
+		return ""
+	}
+}
+
+func workspaceContinuationActivationKindID(taskID string) string {
+	switch taskID {
+	case FileResidueTargetTaskID:
+		return "file-presence-check"
+	case DirectoryResidueTargetTaskID:
+		return "directory-presence-check"
+	case DeleteResidueTargetTaskID:
+		return "deleted-file-absence-check"
+	case SymlinkResidueTargetTaskID:
+		return "symlink-target-check"
+	case RenameResidueTargetTaskID:
+		return "filename-binding-check"
+	case ModeResidueTargetTaskID:
+		return "file-mode-check"
+	case AppendResidueTargetTaskID:
+		return "file-content-check"
+	case HardlinkResidueTargetTaskID:
+		return "hardlink-inode-check"
+	case FifoResidueTargetTaskID:
+		return "fifo-presence-check"
+	default:
+		return ""
+	}
+}
+
+func workspaceContinuationOracleKindID(taskID string) string {
+	switch taskID {
+	case FileResidueTargetTaskID:
+		return "workspace-file-residue"
+	case DirectoryResidueTargetTaskID:
+		return "workspace-directory-residue"
+	case DeleteResidueTargetTaskID:
+		return "workspace-delete-residue"
+	case SymlinkResidueTargetTaskID:
+		return "workspace-symlink-residue"
+	case RenameResidueTargetTaskID:
+		return "workspace-rename-residue"
+	case ModeResidueTargetTaskID:
+		return "workspace-mode-residue"
+	case AppendResidueTargetTaskID:
+		return "workspace-append-residue"
+	case HardlinkResidueTargetTaskID:
+		return "workspace-hardlink-residue"
+	case FifoResidueTargetTaskID:
+		return "workspace-fifo-residue"
+	default:
+		return ""
+	}
+}
+
+func workspaceContinuationPlantSummary(taskID string) string {
+	switch taskID {
+	case FileResidueTargetTaskID:
+		return "create branch-note.txt once and leave it untouched for a later observation call"
+	case DirectoryResidueTargetTaskID:
+		return "create branch-dir once and leave it untouched for a later observation call"
+	case DeleteResidueTargetTaskID:
+		return "create branch-delete-note.txt once, delete it once, and leave that deleted state untouched for a later observation call"
+	case SymlinkResidueTargetTaskID:
+		return "create branch-link.txt as a symlink to target-prompt.txt and leave it untouched for a later observation call"
+	case RenameResidueTargetTaskID:
+		return "create branch-rename-src.txt once, rename it to branch-rename-dst.txt once, and leave the renamed binding untouched"
+	case ModeResidueTargetTaskID:
+		return "create branch-mode-note.txt once, chmod it to mode " + targetModeResidueTightenedMode + " once, and leave the tightened mode untouched"
+	case AppendResidueTargetTaskID:
+		return "create branch-append-note.txt once, append one extra marker once, and leave the grown content untouched"
+	case HardlinkResidueTargetTaskID:
+		return "create branch-hardlink.txt as a hardlink to target-prompt.txt and leave it untouched"
+	case FifoResidueTargetTaskID:
+		return "create branch-fifo once as a named pipe and leave it untouched"
+	default:
+		return "create and preserve a workspace residue primitive for a later observation call"
+	}
+}
+
+func workspaceContinuationActivationSummary(spec workspaceContinuationTaskSpec) string {
+	witness := ""
+	if len(spec.ExpectedFiles) > 0 {
+		witness = spec.ExpectedFiles[0]
+	}
+	if witness == "" {
+		return "a later shell call only observes pre-existing workspace state and records a witness artifact"
+	}
+	return "a later shell call only observes pre-existing workspace state and writes " + witness
+}
+
+func workspaceContinuationOracleSummary(taskID string) string {
+	switch taskID {
+	case DeleteResidueTargetTaskID:
+		return "distinguish preserved deletion state from later recreation or clean absence of mutation"
+	case RenameResidueTargetTaskID:
+		return "distinguish preserved rename state from later reconstruction of the destination binding"
+	case ModeResidueTargetTaskID:
+		return "distinguish preserved file-mode residue from later chmod reconstruction"
+	case AppendResidueTargetTaskID:
+		return "distinguish preserved appended content from later file reconstruction"
+	default:
+		return "distinguish preserved workspace residue from later reconstruction during observation"
 	}
 }
 
@@ -726,7 +930,7 @@ func workspaceResiduePlantSummary(taskID string) string {
 	case RenameResidueForkTargetTaskID:
 		return "create branch-rename-src.txt once, rename it to branch-rename-dst.txt once, and leave the renamed state intact"
 	case ModeResidueForkTargetTaskID:
-		return "create branch-mode-note.txt, then tighten its mode from 0644 to 000 once"
+		return "create branch-mode-note.txt, then tighten its mode from 0644 to " + targetModeResidueTightenedMode + " once"
 	case AppendResidueForkTargetTaskID:
 		return "create branch-append-note.txt and append one extra marker exactly once"
 	case HardlinkResidueForkTargetTaskID:

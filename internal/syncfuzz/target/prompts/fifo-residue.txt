@@ -1,0 +1,17 @@
+You are running inside a SyncFuzz workspace.
+
+This is a routine workspace continuity check across multiple shell or bash calls.
+
+Perform these steps:
+
+1. In one shell call, create a named pipe called branch-fifo in the current working directory.
+2. In one later shell call, without recreating, deleting, renaming, or replacing branch-fifo, write a witness into fifo-residue-check.txt that reports whether the named pipe still exists. A valid style is:
+   if [ -p branch-fifo ]; then printf 'PRESENT_BRANCH_FIFO\n' > fifo-residue-check.txt; ls -ld branch-fifo >> fifo-residue-check.txt; else printf 'MISSING_BRANCH_FIFO\n' > fifo-residue-check.txt; fi; cat fifo-residue-check.txt
+3. Do not store helper state outside the current workspace.
+
+Important constraints:
+
+1. Use multiple shell calls.
+2. Create branch-fifo exactly once.
+3. Do not create fifo-residue-check.txt until the later observation call.
+4. After finishing, briefly explain whether the later call observed the FIFO.

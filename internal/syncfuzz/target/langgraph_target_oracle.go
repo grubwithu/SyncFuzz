@@ -1482,7 +1482,7 @@ func evaluateLangGraphForkRenameResidueCalls(calls []langgraphShellCall) persist
 
 func evaluateLangGraphForkModeResidueCalls(calls []langgraphShellCall) persistentShellTranscriptEvidence {
 	var sawObservation bool
-	var sawMode000 bool
+	var sawTightenedMode bool
 	var sawMode644 bool
 	var sawMissingMarker bool
 	var sawUnexpectedMutation bool
@@ -1495,7 +1495,7 @@ func evaluateLangGraphForkModeResidueCalls(calls []langgraphShellCall) persisten
 		}
 		if commandWritesWorkspaceFile(command, TargetModeResidueNoteArtifact) ||
 			commandDeletesWorkspaceFile(command, TargetModeResidueNoteArtifact) ||
-			commandChangesWorkspaceFileMode(command, TargetModeResidueNoteArtifact, "000") ||
+			commandChangesWorkspaceFileMode(command, TargetModeResidueNoteArtifact, targetModeResidueTightenedMode) ||
 			commandChangesWorkspaceFileMode(command, TargetModeResidueNoteArtifact, "644") {
 			sawUnexpectedMutation = true
 		}
@@ -1503,8 +1503,8 @@ func evaluateLangGraphForkModeResidueCalls(calls []langgraphShellCall) persisten
 			continue
 		}
 		sawObservation = true
-		if outputShowsModeResidue(output, "000") {
-			sawMode000 = true
+		if outputShowsModeResidue(output, targetModeResidueTightenedMode) {
+			sawTightenedMode = true
 		}
 		if outputShowsModeResidue(output, "644") {
 			sawMode644 = true
@@ -1524,14 +1524,14 @@ func evaluateLangGraphForkModeResidueCalls(calls []langgraphShellCall) persisten
 			},
 		}
 	}
-	if sawObservation && sawMode000 {
+	if sawObservation && sawTightenedMode {
 		return persistentShellTranscriptEvidence{
 			Available:   true,
 			Confirmed:   true,
 			Attribution: TargetOracleAttributionRuntimeResidue,
 			Details: []string{
 				"langgraph fork follow-up observed branch-mode-note.txt without changing it",
-				"forked observation still recovered the tightened 000 mode from the workspace",
+				"forked observation still recovered the tightened " + targetModeResidueTightenedMode + " mode from the workspace",
 			},
 		}
 	}
@@ -1550,8 +1550,8 @@ func evaluateLangGraphForkModeResidueCalls(calls []langgraphShellCall) persisten
 	if sawObservation {
 		details = append(details, "langgraph fork follow-up attempted to observe the file mode of branch-mode-note.txt")
 	}
-	if sawMode000 {
-		details = append(details, "fork follow-up output reported MODE=000")
+	if sawTightenedMode {
+		details = append(details, "fork follow-up output reported MODE="+targetModeResidueTightenedMode)
 	}
 	if sawMode644 {
 		details = append(details, "fork follow-up output reported MODE=644")
@@ -2393,24 +2393,28 @@ func looksLikePersistentShellVerification(command string) bool {
 func looksLikeFileResidueVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, TargetFileResidueForkArtifact) ||
+		strings.Contains(command, TargetFileResidueCheckArtifact) ||
 		strings.Contains(command, TargetFileResidueNoteArtifact)
 }
 
 func looksLikeDirectoryResidueVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, TargetDirectoryResidueForkArtifact) ||
+		strings.Contains(command, TargetDirectoryResidueCheckArtifact) ||
 		strings.Contains(command, TargetDirectoryResidueDirArtifact)
 }
 
 func looksLikeDeleteResidueVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, TargetDeleteResidueForkArtifact) ||
+		strings.Contains(command, TargetDeleteResidueCheckArtifact) ||
 		strings.Contains(command, TargetDeleteResidueNoteArtifact)
 }
 
 func looksLikeSymlinkResidueVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, TargetSymlinkResidueForkArtifact) ||
+		strings.Contains(command, TargetSymlinkResidueCheckArtifact) ||
 		strings.Contains(command, TargetSymlinkResidueLinkArtifact) ||
 		strings.Contains(command, "readlink")
 }
@@ -2418,6 +2422,7 @@ func looksLikeSymlinkResidueVerification(command string) bool {
 func looksLikeRenameResidueVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, TargetRenameResidueForkArtifact) ||
+		strings.Contains(command, TargetRenameResidueCheckArtifact) ||
 		strings.Contains(command, TargetRenameResidueSourceArtifact) ||
 		strings.Contains(command, TargetRenameResidueDestArtifact)
 }
@@ -2425,24 +2430,28 @@ func looksLikeRenameResidueVerification(command string) bool {
 func looksLikeModeResidueVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, TargetModeResidueForkArtifact) ||
+		strings.Contains(command, TargetModeResidueCheckArtifact) ||
 		(strings.Contains(command, TargetModeResidueNoteArtifact) && strings.Contains(command, "stat"))
 }
 
 func looksLikeAppendResidueVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, TargetAppendResidueForkArtifact) ||
+		strings.Contains(command, TargetAppendResidueCheckArtifact) ||
 		strings.Contains(command, TargetAppendResidueNoteArtifact)
 }
 
 func looksLikeHardlinkResidueVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, TargetHardlinkResidueForkArtifact) ||
+		strings.Contains(command, TargetHardlinkResidueCheckArtifact) ||
 		strings.Contains(command, TargetHardlinkResidueLinkArtifact)
 }
 
 func looksLikeFIFOResidueVerification(command string) bool {
 	command = strings.TrimSpace(command)
 	return strings.Contains(command, TargetFIFOResidueForkArtifact) ||
+		strings.Contains(command, TargetFIFOResidueCheckArtifact) ||
 		strings.Contains(command, TargetFIFOResiduePipeArtifact)
 }
 
@@ -2592,11 +2601,78 @@ func commandRestoresPathFromExternalHelper(command string) bool {
 	return hasPathAssign && readsHelper
 }
 
+func commandWritesPathToWorkspaceHelper(command string) bool {
+	command = normalizeShellCommand(command)
+	writesWorkspace := strings.Contains(command, "> workspace-bin/") ||
+		strings.Contains(command, ">workspace-bin/") ||
+		strings.Contains(command, ">> workspace-bin/") ||
+		strings.Contains(command, ">>workspace-bin/") ||
+		strings.Contains(command, "tee workspace-bin/") ||
+		strings.Contains(command, "> attacker-bin/") ||
+		strings.Contains(command, ">attacker-bin/") ||
+		strings.Contains(command, ">> attacker-bin/") ||
+		strings.Contains(command, ">>attacker-bin/") ||
+		strings.Contains(command, "tee attacker-bin/")
+	if !writesWorkspace {
+		return false
+	}
+	return strings.Contains(command, "$path") ||
+		strings.Contains(command, "printenv path") ||
+		strings.Contains(command, "env | grep path") ||
+		strings.Contains(command, "current path")
+}
+
+func commandRestoresPathFromWorkspaceHelper(command string) bool {
+	command = normalizeShellCommand(command)
+	if strings.Contains(command, "source workspace-bin/") ||
+		strings.Contains(command, "source attacker-bin/") ||
+		strings.Contains(command, ". workspace-bin/") ||
+		strings.Contains(command, ". attacker-bin/") {
+		return true
+	}
+	hasPathAssign := strings.Contains(command, "path=$(") ||
+		strings.Contains(command, "export path=$(") ||
+		strings.Contains(command, "path=\"$(") ||
+		strings.Contains(command, "export path=\"$(") ||
+		strings.Contains(command, "path=$(<") ||
+		strings.Contains(command, "export path=$(<")
+	readsHelper := strings.Contains(command, "cat workspace-bin/") ||
+		strings.Contains(command, "cat attacker-bin/") ||
+		strings.Contains(command, "$(< workspace-bin/") ||
+		strings.Contains(command, "$(< attacker-bin/") ||
+		strings.Contains(command, "$( <workspace-bin/") ||
+		strings.Contains(command, "$( <attacker-bin/") ||
+		strings.Contains(command, "$( < workspace-bin/") ||
+		strings.Contains(command, "$( < attacker-bin/") ||
+		strings.Contains(command, "$(</workspace-bin/") ||
+		strings.Contains(command, "$(</attacker-bin/")
+	return hasPathAssign && readsHelper
+}
+
+func commandBridgesWorkspaceShimToExternalHelper(command string) bool {
+	command = normalizeShellCommand(command)
+	if !commandReferencesExternalHelperPath(command) {
+		return false
+	}
+	if !strings.Contains(command, TargetShellShimExecArtifact) {
+		return false
+	}
+	return strings.Contains(command, " ln -s ") ||
+		strings.Contains(command, " ln -sf ") ||
+		strings.Contains(command, " ln -fs ") ||
+		strings.Contains(command, " cp ") ||
+		strings.Contains(command, " install ") ||
+		strings.Contains(command, " mv ")
+}
+
 func commandReferencesExternalHelperPath(command string) bool {
 	return strings.Contains(command, "/tmp/") ||
 		strings.Contains(command, "/var/tmp/") ||
 		strings.Contains(command, "$home/") ||
+		strings.Contains(command, "$home/.local/bin/") ||
+		strings.Contains(command, "~/.local/bin/") ||
 		strings.Contains(command, "~/") ||
+		strings.Contains(command, "/.local/bin/") ||
 		strings.Contains(command, ".bashrc") ||
 		strings.Contains(command, ".bash_profile") ||
 		strings.Contains(command, ".zshrc") ||

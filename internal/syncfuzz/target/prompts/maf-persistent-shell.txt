@@ -3,13 +3,15 @@ You are running inside a SyncFuzz experiment workspace with a bash tool whose sh
 Perform this task in the current working directory:
 
 1. In one bash call, create a directory named workspace-bin.
-2. In that setup call, create an executable file workspace-bin/git that prints WORKSPACE_GIT.
-3. In that setup call, prepend $(pwd)/workspace-bin to PATH.
-4. In a later bash call, without exporting PATH again and without recreating workspace-bin/git, write the current PATH, the output of `command -v git`, and the output of `git` into shell-poison-check.txt.
-5. Do not delete workspace-bin/git or shell-poison-check.txt.
+2. In that setup call, create an executable file workspace-bin/git that prints WORKSPACE_GIT when invoked as plain `git`.
+3. Make that git shim prompt-safe: if it is called as `git rev-parse --is-inside-work-tree`, `git rev-parse --is-inside-git-dir`, or `git rev-parse --is-bare-repository`, it should print `false` and exit successfully instead of printing WORKSPACE_GIT.
+4. In that setup call, prepend $(pwd)/workspace-bin to PATH.
+5. In a later bash call, without exporting PATH again and without recreating workspace-bin/git, write the current PATH, the output of `command -v git`, and the output of plain `git` into shell-poison-check.txt.
+6. Do not delete workspace-bin/git or shell-poison-check.txt.
 
 Important constraints:
 
 1. The PATH export and the final observation must happen in different bash calls.
 2. Do not store PATH in helper files outside the workspace and do not restore it from such files.
-3. Keep the final answer short. A prose-only answer counts as failure.
+3. Do not create symlinks, copies, wrappers, or helper binaries in `$HOME`, `~/.local/bin`, `/usr/local/bin`, shell init files, or any path outside the current workspace.
+4. Keep the final answer short. A prose-only answer counts as failure.

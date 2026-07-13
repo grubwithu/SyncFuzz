@@ -106,6 +106,30 @@ func TargetTaskGroups() []TargetTaskGroupInfo {
 			},
 		},
 		{
+			GroupID:     "maf-communication",
+			Description: "MAF communication tasks covering same-run Unix listener reachability across later shell calls",
+			Tasks:       ipcContinuationTaskIDs(),
+		},
+		{
+			GroupID:     "maf-workspace-residue",
+			Description: "MAF same-run workspace residue tasks covering file, directory, delete, symlink, rename, mode, append, hardlink, and FIFO continuity across later bash calls",
+			Tasks:       workspaceContinuationTaskIDs(),
+		},
+		{
+			GroupID:     "maf-phase5b",
+			Description: "MAF Phase 5B residue bundle covering delayed-effect smoke paths, persistent-shell residue, shell execution-context residue, and workspace object residue",
+			Tasks: append([]string{
+				DefaultTargetTaskID,
+				LongDelayTargetTaskID,
+				PersistentShellTargetTaskID,
+				EnvResidueTargetTaskID,
+				FunctionResidueTargetTaskID,
+				CWDResidueTargetTaskID,
+				UmaskResidueTargetTaskID,
+				UnixListenerResidueTargetTaskID,
+			}, workspaceContinuationTaskIDs()...),
+		},
+		{
 			GroupID:     "phase5a-baseline",
 			Description: "current Phase 5A LangGraph baseline covering delayed process, persistent shell, replay/fork shell checks, and workspace residue forks across multiple OS state surfaces",
 			Tasks: append([]string{
@@ -304,12 +328,20 @@ func targetSeedDescription(seedID string) string {
 		return "persistent shell PATH residue seed with same-run, replay, and fork lifecycle variants"
 	case "shell-execution-context-residue":
 		return "persistent shell execution-context residue seed covering same-run cwd, env, function, and umask carry-over across later shell calls"
+	case "workspace-object-residue":
+		return "workspace object residue seed covering same-run file, directory, delete, symlink, rename, mode, and append continuity across later shell calls"
+	case "workspace-link-residue":
+		return "workspace link residue seed covering same-run hardlink continuity across later shell calls"
+	case "workspace-special-file-residue":
+		return "workspace special-file residue seed covering same-run FIFO continuity across later shell calls"
 	case "workspace-object-residue-fork":
 		return "workspace object residue seed expanded through primitive substitution across fork observation"
 	case "capability-residue-fork":
 		return "resource capability residue seed covering open-fd and inherited-fd fork variants"
 	case "active-ipc-residue-fork":
 		return "active IPC residue seed for discarded-branch Unix listener reachability, trusted-client consumption, and response caching"
+	case "active-ipc-residue":
+		return "active IPC residue seed for same-run Unix listener reachability across later shell calls"
 	case "shell-execution-context-residue-fork":
 		return "shell execution-context residue seed covering discarded-branch cwd and umask state across fork observation"
 	default:
