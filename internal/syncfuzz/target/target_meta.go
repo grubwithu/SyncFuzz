@@ -125,6 +125,14 @@ func TargetTaskGroups() []TargetTaskGroupInfo {
 			},
 		},
 		{
+			GroupID:     "maf-workflow",
+			Description: "MAF Workflow checkpoint tasks that restore official file checkpoints across recreated workflow objects",
+			Tasks: []string{
+				MAFWorkflowCheckpointTargetTaskID,
+				MAFWorkflowExternalReplayTargetTaskID,
+			},
+		},
+		{
 			GroupID:     "maf-workspace-residue",
 			Description: "MAF same-run workspace residue tasks covering file, directory, delete, symlink, rename, mode, append, hardlink, and FIFO continuity across later bash calls",
 			Tasks:       workspaceContinuationTaskIDs(),

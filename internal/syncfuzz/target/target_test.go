@@ -2525,6 +2525,80 @@ func TestEvaluateMAFSessionContinuityTargetOracleConfirmed(t *testing.T) {
 	}
 }
 
+func TestEvaluateMAFWorkflowCheckpointTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetMAFWorkflowContinuityArtifact), []byte("PRESENT_MAF_WORKFLOW_MARKER\nVALUE=SYNCFUZZ_MAF_WORKFLOW_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write MAF workflow witness: %v", err)
+	}
+	summary := mafWorkflowCheckpointArtifactData{
+		SchemaVersion:               "syncfuzz.maf-workflow-checkpoint.v1",
+		WorkflowName:                "syncfuzz-maf-workflow-checkpoint",
+		CheckpointBackend:           "file",
+		CheckpointDir:               filepath.Join(tmp, "maf-workflow-checkpoints"),
+		CheckpointIDs:               []string{"checkpoint-a"},
+		SelectedCheckpointID:        "checkpoint-a",
+		SelectedCheckpointIteration: 0,
+		Restored:                    true,
+		RuntimeObjectRecreated:      true,
+		PreRestoreTimedOut:          true,
+		PostRestoreTimedOut:         true,
+		EffectWritten:               true,
+		ContinuityObserved:          true,
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("marshal MAF workflow artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, mafWorkflowArtifact), raw, 0o644); err != nil {
+		t.Fatalf("write MAF workflow artifact: %v", err)
+	}
+
+	oracle := evaluateTargetOracle(tmp, "maf-workflow-checkpoint", MAFWorkflowCheckpointTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed MAF workflow checkpoint oracle: %#v", oracle)
+	}
+	compliance := evaluateTargetTaskComplianceForTarget(tmp, "maf-workflow-checkpoint", MAFWorkflowCheckpointTargetTaskID)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF workflow checkpoint task: %#v", compliance)
+	}
+}
+
+func TestEvaluateMAFWorkflowExternalReplayTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetMAFWorkflowExternalReplayArtifact), []byte("DUPLICATE_MAF_WORKFLOW_EXTERNAL_EFFECT\nOPERATION_ID=syncfuzz-maf-workflow-operation-1\nMARKER=SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT\nENTRIES=2\n"), 0o644); err != nil {
+		t.Fatalf("write MAF workflow external replay witness: %v", err)
+	}
+	summary := mafWorkflowCheckpointArtifactData{
+		SchemaVersion:           "syncfuzz.maf-workflow-checkpoint.v1",
+		WorkflowName:            "syncfuzz-maf-workflow-checkpoint-external-replay",
+		CheckpointBackend:       "file",
+		CheckpointDir:           filepath.Join(tmp, "maf-workflow-checkpoints"),
+		CheckpointIDs:           []string{"checkpoint-a"},
+		SelectedCheckpointID:    "checkpoint-a",
+		Restored:                true,
+		RuntimeObjectRecreated:  true,
+		DuplicateEffectObserved: true,
+		ExternalEffectEntries:   2,
+		OperationID:             "syncfuzz-maf-workflow-operation-1",
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("marshal MAF workflow artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, mafWorkflowArtifact), raw, 0o644); err != nil {
+		t.Fatalf("write MAF workflow artifact: %v", err)
+	}
+
+	oracle := evaluateTargetOracle(tmp, "maf-workflow-checkpoint", MAFWorkflowExternalReplayTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed MAF workflow external replay oracle: %#v", oracle)
+	}
+	compliance := evaluateTargetTaskComplianceForTarget(tmp, "maf-workflow-checkpoint", MAFWorkflowExternalReplayTargetTaskID)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF workflow external replay task: %#v", compliance)
+	}
+}
+
 func TestRunTargetExportsUsableWorkspacePathsForRelativeOutDir(t *testing.T) {
 	tmp := t.TempDir()
 	cwd, err := os.Getwd()

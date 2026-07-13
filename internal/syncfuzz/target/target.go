@@ -95,11 +95,17 @@ const (
 	TargetUmaskResidueForkArtifact             = "umask-residue-fork-check.txt"
 	TargetMAFSessionPlantArtifact              = "maf-session-plant.txt"
 	TargetMAFSessionContinuityArtifact         = "maf-session-continuity-check.txt"
+	TargetMAFWorkflowEffectArtifact            = "maf-workflow-effect.txt"
+	TargetMAFWorkflowContinuityArtifact        = "maf-workflow-continuity-check.txt"
+	TargetMAFWorkflowExternalLedgerArtifact    = "maf-workflow-external-ledger.jsonl"
+	TargetMAFWorkflowExternalReplayArtifact    = "maf-workflow-external-replay-check.txt"
 	targetFileResidueMarker                    = "SYNCFUZZ_FILE_RESIDUE_MARKER"
 	targetAppendResidueBaseMarker              = "SYNCFUZZ_APPEND_BASE"
 	targetAppendResidueMarker                  = "SYNCFUZZ_APPEND_MARKER"
 	targetModeResidueTightenedMode             = "400"
 	targetMAFSessionMarker                     = "SYNCFUZZ_MAF_SESSION_MARKER"
+	targetMAFWorkflowMarker                    = "SYNCFUZZ_MAF_WORKFLOW_MARKER"
+	targetMAFWorkflowExternalMarker            = "SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT"
 
 	DefaultTargetAdapterID                   = "command"
 	DefaultTargetTaskID                      = "orphan-process"
@@ -139,6 +145,8 @@ const (
 	CWDResidueForkTargetTaskID               = "cwd-residue-fork"
 	UmaskResidueForkTargetTaskID             = "umask-residue-fork"
 	MAFSessionContinuityTargetTaskID         = "maf-session-continuity"
+	MAFWorkflowCheckpointTargetTaskID        = "maf-workflow-checkpoint-continuity"
+	MAFWorkflowExternalReplayTargetTaskID    = "maf-workflow-external-effect-replay"
 
 	longDelayTargetLateEffectArtifact = "late-effect"
 	DefaultLongDelayLateObserveDelay  = 7 * time.Second
@@ -776,6 +784,10 @@ func evaluateTargetOracle(workspace string, targetID string, taskID string, comp
 		return evaluatePersistentShellTargetOracle(workspace, completed, immediateMissing)
 	case MAFSessionContinuityTargetTaskID:
 		return evaluateMAFSessionContinuityTargetOracle(workspace, completed, immediateMissing)
+	case MAFWorkflowCheckpointTargetTaskID:
+		return evaluateMAFWorkflowCheckpointTargetOracle(workspace, completed, immediateMissing)
+	case MAFWorkflowExternalReplayTargetTaskID:
+		return evaluateMAFWorkflowExternalReplayTargetOracle(workspace, completed, immediateMissing)
 	case FileResidueTargetTaskID, DirectoryResidueTargetTaskID, DeleteResidueTargetTaskID,
 		SymlinkResidueTargetTaskID, RenameResidueTargetTaskID, ModeResidueTargetTaskID,
 		AppendResidueTargetTaskID, HardlinkResidueTargetTaskID, FifoResidueTargetTaskID:

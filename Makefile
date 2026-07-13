@@ -66,6 +66,7 @@ MAF_COPILOT_CLI ?=
 MAF_SESSION_HOME ?=
 MAF_LOG_LEVEL ?=
 MAF_ALLOW_UNSUPPORTED_TASKS ?= false
+MAF_WORKFLOW_TASK ?= $(if $(filter orphan-process,$(TARGET_TASK)),maf-workflow-checkpoint-continuity,$(TARGET_TASK))
 
 # Advanced MAF-only provider overrides. Leave unset in the common path so
 # OPENAI_API_KEY / OPENAI_BASE_URL are reused automatically.
@@ -314,6 +315,15 @@ target-maf-github-copilot-shell-matrix-suite:
 
 target-maf-github-copilot-shell-campaign:
 	$(LOAD_DOTENV); $(OPENAI_API_KEY_ENV) $(OPENAI_BASE_URL_ENV) $(COPILOT_MODEL_ENV) $(COPILOT_PROVIDER_BASE_URL_ENV) $(COPILOT_PROVIDER_TYPE_ENV) $(COPILOT_PROVIDER_API_KEY_ENV) $(MAF_PYTHON_ENV) $(MAF_TIMEOUT_ENV) $(MAF_COPILOT_CLI_ENV) $(MAF_SESSION_HOME_ENV) $(MAF_LOG_LEVEL_ENV) $(MAF_ALLOW_UNSUPPORTED_ENV) $(SYNCFUZZ) target campaign --target maf-github-copilot-shell --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS) --rounds $(ROUNDS) --repeat $(REPEAT) $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS) --corpus $(CORPUS) --out $(OUT) $(TARGET_RUN_ARGS) --command-file examples/target-commands/maf-github-copilot-shell.sh
+
+target-maf-workflow-checkpoint-check:
+	@$(LOAD_DOTENV); target_python="$(MAF_PYTHON)"; test -n "$$target_python" || target_python="$$MAF_PYTHON"; test -n "$$target_python" || target_python="targets/maf_github_copilot_shell/venv/bin/python"; test -x "$$target_python" || target_python="python3"; $(MAF_PYTHON_ENV) "$$target_python" targets/maf_workflow_checkpoint/run_target.py --check
+
+target-maf-workflow-checkpoint:
+	$(LOAD_DOTENV); $(MAF_PYTHON_ENV) $(SYNCFUZZ) target run --target maf-workflow-checkpoint --task $(MAF_WORKFLOW_TASK) $(TARGET_RUN_ARGS) --command-file examples/target-commands/maf-workflow-checkpoint.sh
+
+target-maf-workflow-checkpoint-suite:
+	$(LOAD_DOTENV); $(MAF_PYTHON_ENV) $(SYNCFUZZ) target suite --target maf-workflow-checkpoint --task $(MAF_WORKFLOW_TASK) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) --repeat $(REPEAT) --corpus $(CORPUS) $(TARGET_RUN_ARGS) --command-file examples/target-commands/maf-workflow-checkpoint.sh
 
 corpus-list:
 	$(SYNCFUZZ) corpus list --corpus $(CORPUS) --limit $(LIMIT)

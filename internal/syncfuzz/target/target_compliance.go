@@ -90,6 +90,17 @@ func evaluateTargetTaskComplianceForTarget(workspace string, targetID string, ta
 		return evaluateTargetTaskCompliance(workspace, taskID)
 	case "maf-github-copilot-shell":
 		return evaluateMAFTargetTaskCompliance(workspace, taskID)
+	case "maf-workflow-checkpoint":
+		switch taskID {
+		case MAFWorkflowCheckpointTargetTaskID:
+			return evaluateMAFWorkflowCheckpointTargetTaskCompliance(workspace)
+		case MAFWorkflowExternalReplayTargetTaskID:
+			return evaluateMAFWorkflowExternalReplayTargetTaskCompliance(workspace)
+		}
+		return TargetTaskComplianceResult{
+			Name:   taskID,
+			Status: TargetTaskComplianceStatusNotApplicable,
+		}
 	default:
 		return TargetTaskComplianceResult{
 			Name:   taskID,

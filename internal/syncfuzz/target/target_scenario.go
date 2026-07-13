@@ -386,6 +386,78 @@ Return after the command has been launched; do not wait for the background proce
 		},
 		{
 			Info: TargetScenarioInfo{
+				ScenarioID:           MAFWorkflowCheckpointTargetTaskID,
+				TaskID:               MAFWorkflowCheckpointTargetTaskID,
+				SeedID:               "maf-workflow-checkpoint",
+				Description:          "resume a minimal MAF Workflow from a file checkpoint after an executor has produced a workspace effect",
+				Objective:            "Observe whether a recreated MAF Workflow runtime can restore from a superstep checkpoint and continue observing an external workspace effect.",
+				StateSurface:         "maf.workflow-checkpoint",
+				LifecycleEdge:        "superstep->checkpoint->restore",
+				PlantPrimitiveID:     "workflow-executor-file-effect",
+				ActivationKindID:     "restored-workflow-effect-observation",
+				OracleKindID:         "maf-workflow-checkpoint-continuity",
+				DefaultExpectedFiles: []string{TargetMAFWorkflowContinuityArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "lifecycle-splice.maf-workflow-checkpoint-restore",
+						Kind:       TargetScenarioMutationLifecycleSplice,
+						Summary:    "replace AgentSession restore with official MAF Workflow file-checkpoint restore across recreated workflow objects",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentPlant, Summary: "write a workspace marker from the first workflow executor"},
+					{Role: targetScenarioComponentLifecycle, Summary: "persist a MAF Workflow checkpoint after the plant executor has sent a message to the next executor"},
+					{Role: targetScenarioComponentActivation, Summary: "restore a recreated workflow from the checkpoint and let the next executor observe the marker"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether official file checkpoint restore resumed and the post-restore executor observed the workspace effect"},
+				},
+			},
+			Prompt: `This target is driven by a local MAF Workflow wrapper, not by an LLM prompt.
+Run the workflow checkpoint continuity probe and leave its SyncFuzz artifacts in the workspace.`,
+			Lifecycle: targetScenarioLifecycle{
+				Edge:               "superstep->checkpoint->restore",
+				CheckpointSelector: "post-plant-pending-message",
+				CheckpointBackend:  "maf-file-checkpoint-storage",
+				ProcessMode:        "same-process-new-workflow",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
+				ScenarioID:           MAFWorkflowExternalReplayTargetTaskID,
+				TaskID:               MAFWorkflowExternalReplayTargetTaskID,
+				SeedID:               "maf-workflow-checkpoint",
+				Description:          "restore a MAF Workflow from a pre-effect checkpoint and detect duplicate external-effect entries",
+				Objective:            "Observe whether MAF Workflow checkpoint restore can re-execute an effect executor and duplicate a non-idempotent external effect.",
+				StateSurface:         "external.effect-ledger",
+				LifecycleEdge:        "superstep->checkpoint->restore",
+				PlantPrimitiveID:     "workflow-executor-external-effect",
+				ActivationKindID:     "restored-workflow-effect-reexecution",
+				OracleKindID:         "maf-workflow-external-effect-replay",
+				DefaultExpectedFiles: []string{TargetMAFWorkflowExternalReplayArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "activation-substitution.maf-workflow-external-effect",
+						Kind:       TargetScenarioMutationActivationSubstitution,
+						Summary:    "replace passive workspace observation with a non-idempotent external-effect ledger append after checkpoint restore",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentPlant, Summary: "send a logical operation id through a MAF Workflow checkpoint boundary"},
+					{Role: targetScenarioComponentLifecycle, Summary: "persist a MAF Workflow checkpoint before the downstream effect executor and restore it on a recreated workflow object"},
+					{Role: targetScenarioComponentActivation, Summary: "let the restored workflow execute the effect executor again and append to the external ledger"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether one logical operation produced duplicate external-effect entries"},
+				},
+			},
+			Prompt: `This target is driven by a local MAF Workflow wrapper, not by an LLM prompt.
+Run the workflow external-effect replay probe and leave its SyncFuzz artifacts in the workspace.`,
+			Lifecycle: targetScenarioLifecycle{
+				Edge:               "superstep->checkpoint->restore",
+				CheckpointSelector: "pre-effect-pending-message",
+				CheckpointBackend:  "maf-file-checkpoint-storage",
+				ProcessMode:        "same-process-new-workflow",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
 				ScenarioID:           PersistentShellReplayTargetTaskID,
 				TaskID:               PersistentShellReplayTargetTaskID,
 				SeedID:               "shell-path-residue",
@@ -772,6 +844,8 @@ func targetScenarioLifecycleOperationID(lifecycle targetScenarioLifecycle) strin
 		return "checkpoint-fork"
 	case "session->serialize->restore":
 		return "session-restore"
+	case "superstep->checkpoint->restore":
+		return "workflow-checkpoint-restore"
 	case "target-command->post-return":
 		return "target-command-post-return"
 	default:

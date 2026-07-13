@@ -178,6 +178,14 @@ func TestTargetTaskGroupsExposeMAFWorkspaceResidueBundle(t *testing.T) {
 	if !ContainsString(sessionGroup.Tasks, MAFSessionContinuityTargetTaskID) {
 		t.Fatalf("expected %s in maf-session: %#v", MAFSessionContinuityTargetTaskID, sessionGroup)
 	}
+
+	workflowGroup := findGroup("maf-workflow")
+	if !ContainsString(workflowGroup.Tasks, MAFWorkflowCheckpointTargetTaskID) {
+		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowCheckpointTargetTaskID, workflowGroup)
+	}
+	if !ContainsString(workflowGroup.Tasks, MAFWorkflowExternalReplayTargetTaskID) {
+		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowExternalReplayTargetTaskID, workflowGroup)
+	}
 }
 
 func TestTargetScenariosExposeMAFSessionContinuity(t *testing.T) {
@@ -197,5 +205,45 @@ func TestTargetScenariosExposeMAFSessionContinuity(t *testing.T) {
 	}
 	if plan := targetScenarioExecutionPlanInfo(scenario.Lifecycle); plan == nil || plan.LifecycleOperationID != "session-restore" || plan.CheckpointBackend != "agent-session-json" {
 		t.Fatalf("expected executable MAF session restore plan: %#v", plan)
+	}
+}
+
+func TestTargetScenariosExposeMAFWorkflowExternalReplay(t *testing.T) {
+	scenario, ok := targetScenarioByID(MAFWorkflowExternalReplayTargetTaskID)
+	if !ok {
+		t.Fatalf("expected MAF workflow external replay scenario")
+	}
+	info := scenario.Info
+	if info.SeedID != "maf-workflow-checkpoint" || info.LifecycleEdge != "superstep->checkpoint->restore" {
+		t.Fatalf("unexpected MAF workflow external replay metadata: %#v", info)
+	}
+	if info.StateSurface != "external.effect-ledger" || info.OracleKindID != "maf-workflow-external-effect-replay" {
+		t.Fatalf("unexpected MAF workflow external replay state/oracle metadata: %#v", info)
+	}
+	if !ContainsString(info.DefaultExpectedFiles, TargetMAFWorkflowExternalReplayArtifact) {
+		t.Fatalf("expected MAF workflow external replay witness: %#v", info.DefaultExpectedFiles)
+	}
+	if focus, ok := TargetScenarioMutationFocus(info.Mutations); !ok || focus.Kind != TargetScenarioMutationActivationSubstitution {
+		t.Fatalf("expected activation-substitution focus for external replay: %#v", info.Mutations)
+	}
+}
+
+func TestTargetScenariosExposeMAFWorkflowCheckpoint(t *testing.T) {
+	scenario, ok := targetScenarioByID(MAFWorkflowCheckpointTargetTaskID)
+	if !ok {
+		t.Fatalf("expected MAF workflow checkpoint scenario")
+	}
+	info := scenario.Info
+	if info.SeedID != "maf-workflow-checkpoint" || info.LifecycleEdge != "superstep->checkpoint->restore" {
+		t.Fatalf("unexpected MAF workflow scenario metadata: %#v", info)
+	}
+	if info.StateSurface != "maf.workflow-checkpoint" || info.OracleKindID != "maf-workflow-checkpoint-continuity" {
+		t.Fatalf("unexpected MAF workflow state/oracle metadata: %#v", info)
+	}
+	if !ContainsString(info.DefaultExpectedFiles, TargetMAFWorkflowContinuityArtifact) {
+		t.Fatalf("expected MAF workflow continuity witness: %#v", info.DefaultExpectedFiles)
+	}
+	if plan := targetScenarioExecutionPlanInfo(scenario.Lifecycle); plan == nil || plan.LifecycleOperationID != "workflow-checkpoint-restore" || plan.CheckpointBackend != "maf-file-checkpoint-storage" {
+		t.Fatalf("expected executable MAF workflow restore plan: %#v", plan)
 	}
 }
