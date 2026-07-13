@@ -130,7 +130,10 @@ func TargetTaskGroups() []TargetTaskGroupInfo {
 			Tasks: []string{
 				MAFWorkflowCheckpointTargetTaskID,
 				MAFWorkflowExternalReplayTargetTaskID,
+				MAFWorkflowHTTPReplayTargetTaskID,
 				MAFWorkflowPartialCommitTargetTaskID,
+				MAFWorkflowApprovalPendingTargetTaskID,
+				MAFWorkflowRehydrateDivergenceTargetTaskID,
 			},
 		},
 		{

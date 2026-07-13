@@ -186,8 +186,17 @@ func TestTargetTaskGroupsExposeMAFWorkspaceResidueBundle(t *testing.T) {
 	if !ContainsString(workflowGroup.Tasks, MAFWorkflowExternalReplayTargetTaskID) {
 		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowExternalReplayTargetTaskID, workflowGroup)
 	}
+	if !ContainsString(workflowGroup.Tasks, MAFWorkflowHTTPReplayTargetTaskID) {
+		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowHTTPReplayTargetTaskID, workflowGroup)
+	}
 	if !ContainsString(workflowGroup.Tasks, MAFWorkflowPartialCommitTargetTaskID) {
 		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowPartialCommitTargetTaskID, workflowGroup)
+	}
+	if !ContainsString(workflowGroup.Tasks, MAFWorkflowApprovalPendingTargetTaskID) {
+		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowApprovalPendingTargetTaskID, workflowGroup)
+	}
+	if !ContainsString(workflowGroup.Tasks, MAFWorkflowRehydrateDivergenceTargetTaskID) {
+		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowRehydrateDivergenceTargetTaskID, workflowGroup)
 	}
 }
 
@@ -231,6 +240,49 @@ func TestTargetScenariosExposeMAFWorkflowPartialCommit(t *testing.T) {
 	}
 }
 
+func TestTargetScenariosExposeMAFWorkflowApprovalPending(t *testing.T) {
+	scenario, ok := targetScenarioByID(MAFWorkflowApprovalPendingTargetTaskID)
+	if !ok {
+		t.Fatalf("expected MAF workflow approval pending scenario")
+	}
+	info := scenario.Info
+	if info.SeedID != "maf-workflow-checkpoint" || info.LifecycleEdge != "superstep->checkpoint->restore" {
+		t.Fatalf("unexpected MAF workflow approval pending metadata: %#v", info)
+	}
+	if info.StateSurface != "authority.pending-approval" || info.OracleKindID != "maf-workflow-approval-pending-replay" {
+		t.Fatalf("unexpected MAF workflow approval pending state/oracle metadata: %#v", info)
+	}
+	if !ContainsString(info.DefaultExpectedFiles, TargetMAFWorkflowApprovalPendingArtifact) {
+		t.Fatalf("expected MAF workflow approval pending witness: %#v", info.DefaultExpectedFiles)
+	}
+	if focus, ok := TargetScenarioMutationFocus(info.Mutations); !ok || focus.Kind != TargetScenarioMutationPhaseShift {
+		t.Fatalf("expected phase-shift focus for approval pending replay: %#v", info.Mutations)
+	}
+	if plan := targetScenarioExecutionPlanInfo(scenario.Lifecycle); plan == nil || plan.CheckpointSelector != "pending-request-info" {
+		t.Fatalf("expected executable approval pending restore plan: %#v", plan)
+	}
+}
+
+func TestTargetScenariosExposeMAFWorkflowRehydrateDivergence(t *testing.T) {
+	scenario, ok := targetScenarioByID(MAFWorkflowRehydrateDivergenceTargetTaskID)
+	if !ok {
+		t.Fatalf("expected MAF workflow rehydrate divergence scenario")
+	}
+	info := scenario.Info
+	if info.SeedID != "maf-workflow-checkpoint" || info.LifecycleEdge != "superstep->checkpoint->restore" {
+		t.Fatalf("unexpected MAF workflow rehydrate divergence metadata: %#v", info)
+	}
+	if info.StateSurface != "maf.workflow-rehydrate" || info.OracleKindID != "maf-workflow-rehydrate-divergence" {
+		t.Fatalf("unexpected MAF workflow rehydrate divergence state/oracle metadata: %#v", info)
+	}
+	if !ContainsString(info.DefaultExpectedFiles, TargetMAFWorkflowRehydrateDivergenceArtifact) {
+		t.Fatalf("expected MAF workflow rehydrate divergence witness: %#v", info.DefaultExpectedFiles)
+	}
+	if focus, ok := TargetScenarioMutationFocus(info.Mutations); !ok || focus.Kind != TargetScenarioMutationLifecycleSplice {
+		t.Fatalf("expected lifecycle-splice focus for rehydrate divergence: %#v", info.Mutations)
+	}
+}
+
 func TestTargetScenariosExposeMAFWorkflowExternalReplay(t *testing.T) {
 	scenario, ok := targetScenarioByID(MAFWorkflowExternalReplayTargetTaskID)
 	if !ok {
@@ -248,6 +300,26 @@ func TestTargetScenariosExposeMAFWorkflowExternalReplay(t *testing.T) {
 	}
 	if focus, ok := TargetScenarioMutationFocus(info.Mutations); !ok || focus.Kind != TargetScenarioMutationActivationSubstitution {
 		t.Fatalf("expected activation-substitution focus for external replay: %#v", info.Mutations)
+	}
+}
+
+func TestTargetScenariosExposeMAFWorkflowHTTPReplay(t *testing.T) {
+	scenario, ok := targetScenarioByID(MAFWorkflowHTTPReplayTargetTaskID)
+	if !ok {
+		t.Fatalf("expected MAF workflow HTTP replay scenario")
+	}
+	info := scenario.Info
+	if info.SeedID != "maf-workflow-checkpoint" || info.LifecycleEdge != "superstep->checkpoint->restore" {
+		t.Fatalf("unexpected MAF workflow HTTP replay metadata: %#v", info)
+	}
+	if info.StateSurface != "external.http-service-ledger" || info.OracleKindID != "maf-workflow-http-effect-replay" {
+		t.Fatalf("unexpected MAF workflow HTTP replay state/oracle metadata: %#v", info)
+	}
+	if !ContainsString(info.DefaultExpectedFiles, TargetMAFWorkflowHTTPReplayArtifact) {
+		t.Fatalf("expected MAF workflow HTTP replay witness: %#v", info.DefaultExpectedFiles)
+	}
+	if focus, ok := TargetScenarioMutationFocus(info.Mutations); !ok || focus.Kind != TargetScenarioMutationActivationSubstitution {
+		t.Fatalf("expected activation-substitution focus for HTTP replay: %#v", info.Mutations)
 	}
 }
 

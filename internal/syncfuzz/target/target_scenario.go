@@ -458,6 +458,43 @@ Run the workflow external-effect replay probe and leave its SyncFuzz artifacts i
 		},
 		{
 			Info: TargetScenarioInfo{
+				ScenarioID:           MAFWorkflowHTTPReplayTargetTaskID,
+				TaskID:               MAFWorkflowHTTPReplayTargetTaskID,
+				SeedID:               "maf-workflow-checkpoint",
+				Description:          "restore a MAF Workflow from a pre-effect checkpoint and detect duplicate local HTTP service commits",
+				Objective:            "Observe whether MAF Workflow checkpoint restore can re-execute an effect executor and duplicate a non-idempotent HTTP external service effect.",
+				StateSurface:         "external.http-service-ledger",
+				LifecycleEdge:        "superstep->checkpoint->restore",
+				PlantPrimitiveID:     "workflow-executor-http-effect",
+				ActivationKindID:     "restored-workflow-http-effect-reexecution",
+				OracleKindID:         "maf-workflow-http-effect-replay",
+				DefaultExpectedFiles: []string{TargetMAFWorkflowHTTPReplayArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "activation-substitution.maf-workflow-http-effect",
+						Kind:       TargetScenarioMutationActivationSubstitution,
+						Summary:    "replace local ledger append with a local HTTP service commit across checkpoint restore",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentSetup, Summary: "start a local HTTP effect service outside the MAF Workflow runtime"},
+					{Role: targetScenarioComponentPlant, Summary: "send a logical operation id through a MAF Workflow checkpoint boundary"},
+					{Role: targetScenarioComponentLifecycle, Summary: "persist a MAF Workflow checkpoint before the downstream HTTP effect executor and restore it on a recreated workflow object"},
+					{Role: targetScenarioComponentActivation, Summary: "let the restored workflow call the HTTP service again and append to the service ledger"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether one logical operation produced duplicate HTTP service commits"},
+				},
+			},
+			Prompt: `This target is driven by a local MAF Workflow wrapper, not by an LLM prompt.
+Run the workflow HTTP external-effect replay probe and leave its SyncFuzz artifacts in the workspace.`,
+			Lifecycle: targetScenarioLifecycle{
+				Edge:               "superstep->checkpoint->restore",
+				CheckpointSelector: "pre-effect-pending-message",
+				CheckpointBackend:  "maf-file-checkpoint-storage",
+				ProcessMode:        "same-process-new-workflow",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
 				ScenarioID:           MAFWorkflowPartialCommitTargetTaskID,
 				TaskID:               MAFWorkflowPartialCommitTargetTaskID,
 				SeedID:               "maf-workflow-checkpoint",
@@ -488,6 +525,78 @@ Run the workflow partial commit replay probe and leave its SyncFuzz artifacts in
 			Lifecycle: targetScenarioLifecycle{
 				Edge:               "superstep->checkpoint->restore",
 				CheckpointSelector: "pre-effect-pending-message",
+				CheckpointBackend:  "maf-file-checkpoint-storage",
+				ProcessMode:        "same-process-new-workflow",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
+				ScenarioID:           MAFWorkflowApprovalPendingTargetTaskID,
+				TaskID:               MAFWorkflowApprovalPendingTargetTaskID,
+				SeedID:               "maf-workflow-checkpoint",
+				Description:          "restore a MAF Workflow while a request-info approval is pending and replay the approved effect",
+				Objective:            "Observe whether MAF Workflow checkpoint restore can replay one pending approval response into duplicate external effects.",
+				StateSurface:         "authority.pending-approval",
+				LifecycleEdge:        "superstep->checkpoint->restore",
+				PlantPrimitiveID:     "workflow-request-info-approval",
+				ActivationKindID:     "restored-approval-response-effect",
+				OracleKindID:         "maf-workflow-approval-pending-replay",
+				DefaultExpectedFiles: []string{TargetMAFWorkflowApprovalPendingArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "phase-shift.maf-workflow-approval-pending-replay",
+						Kind:       TargetScenarioMutationPhaseShift,
+						Summary:    "shift the restore boundary to a pending request-info approval and replay the same approval response on recreated workflow objects",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentPlant, Summary: "send one logical operation to an executor that emits a MAF request-info approval"},
+					{Role: targetScenarioComponentLifecycle, Summary: "persist a file checkpoint while the approval request is pending"},
+					{Role: targetScenarioComponentActivation, Summary: "restore the pending request on recreated workflow objects and provide the same approval response"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether one pending approval response produced duplicate external ledger entries"},
+				},
+			},
+			Prompt: `This target is driven by a local MAF Workflow wrapper, not by an LLM prompt.
+Run the workflow approval-pending replay probe and leave its SyncFuzz artifacts in the workspace.`,
+			Lifecycle: targetScenarioLifecycle{
+				Edge:               "superstep->checkpoint->restore",
+				CheckpointSelector: "pending-request-info",
+				CheckpointBackend:  "maf-file-checkpoint-storage",
+				ProcessMode:        "same-process-new-workflow",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
+				ScenarioID:           MAFWorkflowRehydrateDivergenceTargetTaskID,
+				TaskID:               MAFWorkflowRehydrateDivergenceTargetTaskID,
+				SeedID:               "maf-workflow-checkpoint",
+				Description:          "compare same-instance response resume with recreated workflow checkpoint rehydrate for one pending approval",
+				Objective:            "Observe whether a MAF Workflow pending approval is consumed once by same-instance resume but replayed after checkpoint rehydrate on a recreated workflow object.",
+				StateSurface:         "maf.workflow-rehydrate",
+				LifecycleEdge:        "superstep->checkpoint->restore",
+				PlantPrimitiveID:     "workflow-request-info-approval",
+				ActivationKindID:     "same-response-rehydrate-replay",
+				OracleKindID:         "maf-workflow-rehydrate-divergence",
+				DefaultExpectedFiles: []string{TargetMAFWorkflowRehydrateDivergenceArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "lifecycle-splice.maf-workflow-resume-vs-rehydrate",
+						Kind:       TargetScenarioMutationLifecycleSplice,
+						Summary:    "compare responses-only same-instance resume with checkpoint restore on a recreated workflow object using the same pending approval",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentPlant, Summary: "emit a MAF request-info approval and persist a pending checkpoint"},
+					{Role: targetScenarioComponentLifecycle, Summary: "first resume the same workflow instance, then rehydrate a recreated workflow object from the same checkpoint"},
+					{Role: targetScenarioComponentActivation, Summary: "provide the same approval response across both lifecycle paths"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether only the rehydrate path duplicates the external effect"},
+				},
+			},
+			Prompt: `This target is driven by a local MAF Workflow wrapper, not by an LLM prompt.
+Run the workflow resume-vs-rehydrate divergence probe and leave its SyncFuzz artifacts in the workspace.`,
+			Lifecycle: targetScenarioLifecycle{
+				Edge:               "superstep->checkpoint->restore",
+				CheckpointSelector: "pending-request-info",
 				CheckpointBackend:  "maf-file-checkpoint-storage",
 				ProcessMode:        "same-process-new-workflow",
 			},

@@ -2599,6 +2599,44 @@ func TestEvaluateMAFWorkflowExternalReplayTargetOracleConfirmed(t *testing.T) {
 	}
 }
 
+func TestEvaluateMAFWorkflowHTTPReplayTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetMAFWorkflowHTTPReplayArtifact), []byte("DUPLICATE_MAF_WORKFLOW_HTTP_EFFECT\nOPERATION_ID=syncfuzz-maf-workflow-http-operation-1\nMARKER=SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT\nENTRIES=2\nSERVICE_URL=http://127.0.0.1:1\n"), 0o644); err != nil {
+		t.Fatalf("write MAF workflow HTTP replay witness: %v", err)
+	}
+	summary := mafWorkflowCheckpointArtifactData{
+		SchemaVersion:           "syncfuzz.maf-workflow-checkpoint.v1",
+		WorkflowName:            "syncfuzz-maf-workflow-checkpoint-http-effect-replay",
+		CheckpointBackend:       "file",
+		CheckpointDir:           filepath.Join(tmp, "maf-workflow-checkpoints"),
+		CheckpointIDs:           []string{"checkpoint-a"},
+		SelectedCheckpointID:    "checkpoint-a",
+		Restored:                true,
+		RuntimeObjectRecreated:  true,
+		DuplicateEffectObserved: true,
+		ExternalEffectEntries:   2,
+		ExternalServiceObserved: true,
+		ExternalServiceURL:      "http://127.0.0.1:1",
+		OperationID:             "syncfuzz-maf-workflow-http-operation-1",
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("marshal MAF workflow artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, mafWorkflowArtifact), raw, 0o644); err != nil {
+		t.Fatalf("write MAF workflow artifact: %v", err)
+	}
+
+	oracle := evaluateTargetOracle(tmp, "maf-workflow-checkpoint", MAFWorkflowHTTPReplayTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed MAF workflow HTTP replay oracle: %#v", oracle)
+	}
+	compliance := evaluateTargetTaskComplianceForTarget(tmp, "maf-workflow-checkpoint", MAFWorkflowHTTPReplayTargetTaskID)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF workflow HTTP replay task: %#v", compliance)
+	}
+}
+
 func TestEvaluateMAFWorkflowPartialCommitTargetOracleConfirmed(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmp, TargetMAFWorkflowPartialCommitArtifact), []byte("DUPLICATE_PARTIAL_COMMIT_REPLAY\nOPERATION_ID=syncfuzz-maf-workflow-partial-operation-1\nMARKER=SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT\nENTRIES=2\n"), 0o644); err != nil {
@@ -2634,6 +2672,87 @@ func TestEvaluateMAFWorkflowPartialCommitTargetOracleConfirmed(t *testing.T) {
 	compliance := evaluateTargetTaskComplianceForTarget(tmp, "maf-workflow-checkpoint", MAFWorkflowPartialCommitTargetTaskID)
 	if compliance.Status != TargetTaskComplianceStatusCompliant {
 		t.Fatalf("expected compliant MAF workflow partial commit task: %#v", compliance)
+	}
+}
+
+func TestEvaluateMAFWorkflowApprovalPendingTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetMAFWorkflowApprovalPendingArtifact), []byte("DUPLICATE_APPROVAL_PENDING_REPLAY\nOPERATION_ID=syncfuzz-maf-workflow-approval-operation-1\nREQUEST_ID=syncfuzz-maf-workflow-approval-request-1\nMARKER=SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT\nENTRIES=2\n"), 0o644); err != nil {
+		t.Fatalf("write MAF workflow approval pending witness: %v", err)
+	}
+	summary := mafWorkflowCheckpointArtifactData{
+		SchemaVersion:            "syncfuzz.maf-workflow-checkpoint.v1",
+		WorkflowName:             "syncfuzz-maf-workflow-checkpoint-approval-pending",
+		CheckpointBackend:        "file",
+		CheckpointDir:            filepath.Join(tmp, "maf-workflow-checkpoints"),
+		CheckpointIDs:            []string{"checkpoint-a"},
+		SelectedCheckpointID:     "checkpoint-a",
+		Restored:                 true,
+		RuntimeObjectRecreated:   true,
+		DuplicateEffectObserved:  true,
+		ExternalEffectEntries:    2,
+		PendingRequestObserved:   true,
+		ApprovalResponseObserved: true,
+		ApprovalReplayObserved:   true,
+		OperationID:              "syncfuzz-maf-workflow-approval-operation-1",
+		ApprovalRequestID:        "syncfuzz-maf-workflow-approval-request-1",
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("marshal MAF workflow artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, mafWorkflowArtifact), raw, 0o644); err != nil {
+		t.Fatalf("write MAF workflow artifact: %v", err)
+	}
+
+	oracle := evaluateTargetOracle(tmp, "maf-workflow-checkpoint", MAFWorkflowApprovalPendingTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed MAF workflow approval pending oracle: %#v", oracle)
+	}
+	compliance := evaluateTargetTaskComplianceForTarget(tmp, "maf-workflow-checkpoint", MAFWorkflowApprovalPendingTargetTaskID)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF workflow approval pending task: %#v", compliance)
+	}
+}
+
+func TestEvaluateMAFWorkflowRehydrateDivergenceTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetMAFWorkflowRehydrateDivergenceArtifact), []byte("REHYDRATE_DIVERGENCE_REPLAY\nOPERATION_ID=syncfuzz-maf-workflow-rehydrate-operation-1\nREQUEST_ID=syncfuzz-maf-workflow-rehydrate-request-1\nMARKER=SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT\nENTRIES=2\n"), 0o644); err != nil {
+		t.Fatalf("write MAF workflow rehydrate divergence witness: %v", err)
+	}
+	summary := mafWorkflowCheckpointArtifactData{
+		SchemaVersion:              "syncfuzz.maf-workflow-checkpoint.v1",
+		WorkflowName:               "syncfuzz-maf-workflow-checkpoint-rehydrate-divergence",
+		CheckpointBackend:          "file",
+		CheckpointDir:              filepath.Join(tmp, "maf-workflow-checkpoints"),
+		CheckpointIDs:              []string{"checkpoint-a"},
+		SelectedCheckpointID:       "checkpoint-a",
+		Restored:                   true,
+		RuntimeObjectRecreated:     true,
+		DuplicateEffectObserved:    true,
+		ExternalEffectEntries:      2,
+		PendingRequestObserved:     true,
+		ApprovalResponseObserved:   true,
+		SameInstanceResumeObserved: true,
+		RehydrateReplayObserved:    true,
+		OperationID:                "syncfuzz-maf-workflow-rehydrate-operation-1",
+		ApprovalRequestID:          "syncfuzz-maf-workflow-rehydrate-request-1",
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("marshal MAF workflow artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, mafWorkflowArtifact), raw, 0o644); err != nil {
+		t.Fatalf("write MAF workflow artifact: %v", err)
+	}
+
+	oracle := evaluateTargetOracle(tmp, "maf-workflow-checkpoint", MAFWorkflowRehydrateDivergenceTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed MAF workflow rehydrate divergence oracle: %#v", oracle)
+	}
+	compliance := evaluateTargetTaskComplianceForTarget(tmp, "maf-workflow-checkpoint", MAFWorkflowRehydrateDivergenceTargetTaskID)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF workflow rehydrate divergence task: %#v", compliance)
 	}
 }
 

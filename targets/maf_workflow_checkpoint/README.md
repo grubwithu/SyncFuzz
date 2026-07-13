@@ -8,7 +8,10 @@ Current task:
 
 - `maf-workflow-checkpoint-continuity`
 - `maf-workflow-external-effect-replay`
+- `maf-workflow-http-effect-replay`
 - `maf-workflow-partial-commit-replay`
+- `maf-workflow-approval-pending-replay`
+- `maf-workflow-rehydrate-divergence`
 
 The wrapper writes:
 
@@ -18,7 +21,11 @@ The wrapper writes:
 - `maf-workflow-checkpoints/*.json`
 - `maf-workflow-external-ledger.jsonl` for the external-effect replay task
 - `maf-workflow-external-replay-check.txt` for the external-effect replay task
+- `maf-workflow-http-ledger.jsonl` for the HTTP external-service replay task
+- `maf-workflow-http-replay-check.txt` for the HTTP external-service replay task
 - `maf-workflow-partial-commit-check.txt` for the partial-commit replay task
+- `maf-workflow-approval-pending-check.txt` for the approval-pending replay task
+- `maf-workflow-rehydrate-divergence-check.txt` for the resume-vs-rehydrate divergence task
 
 Run the import check:
 
@@ -31,7 +38,10 @@ Run the target:
 ```bash
 make target-maf-workflow-checkpoint
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-external-effect-replay
+make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-http-effect-replay
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-partial-commit-replay
+make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-approval-pending-replay
+make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-rehydrate-divergence
 ```
 
 This target reuses `MAF_PYTHON` when set. Otherwise it falls back to the Python

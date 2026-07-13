@@ -3,10 +3,13 @@
 import argparse
 import asyncio
 import hashlib
+import http.server
 import json
 import os
 import sys
+import threading
 import traceback
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -18,13 +21,27 @@ EFFECT_ARTIFACT = "maf-workflow-effect.txt"
 WITNESS_ARTIFACT = "maf-workflow-continuity-check.txt"
 EXTERNAL_LEDGER_ARTIFACT = "maf-workflow-external-ledger.jsonl"
 EXTERNAL_REPLAY_ARTIFACT = "maf-workflow-external-replay-check.txt"
+HTTP_LEDGER_ARTIFACT = "maf-workflow-http-ledger.jsonl"
+HTTP_REPLAY_ARTIFACT = "maf-workflow-http-replay-check.txt"
 PARTIAL_COMMIT_ARTIFACT = "maf-workflow-partial-commit-check.txt"
+APPROVAL_PENDING_ARTIFACT = "maf-workflow-approval-pending-check.txt"
+REHYDRATE_DIVERGENCE_ARTIFACT = "maf-workflow-rehydrate-divergence-check.txt"
 SUMMARY_ARTIFACT = "maf-workflow-summary.json"
 CHECKPOINT_DIR = "maf-workflow-checkpoints"
 CHECKPOINT_CONTINUITY_TASK = "maf-workflow-checkpoint-continuity"
 EXTERNAL_EFFECT_REPLAY_TASK = "maf-workflow-external-effect-replay"
+HTTP_EFFECT_REPLAY_TASK = "maf-workflow-http-effect-replay"
 PARTIAL_COMMIT_REPLAY_TASK = "maf-workflow-partial-commit-replay"
-SUPPORTED_TASKS = {CHECKPOINT_CONTINUITY_TASK, EXTERNAL_EFFECT_REPLAY_TASK, PARTIAL_COMMIT_REPLAY_TASK}
+APPROVAL_PENDING_REPLAY_TASK = "maf-workflow-approval-pending-replay"
+REHYDRATE_DIVERGENCE_TASK = "maf-workflow-rehydrate-divergence"
+SUPPORTED_TASKS = {
+    CHECKPOINT_CONTINUITY_TASK,
+    EXTERNAL_EFFECT_REPLAY_TASK,
+    HTTP_EFFECT_REPLAY_TASK,
+    PARTIAL_COMMIT_REPLAY_TASK,
+    APPROVAL_PENDING_REPLAY_TASK,
+    REHYDRATE_DIVERGENCE_TASK,
+}
 EXTERNAL_MARKER = "SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT"
 
 
@@ -48,8 +65,14 @@ async def run_probe(workspace: Path, task_id: str, pre_timeout: float, restore_t
         raise ValueError(f"unsupported MAF workflow task: {task_id}")
     if task_id == EXTERNAL_EFFECT_REPLAY_TASK:
         return await run_external_effect_replay(workspace, pre_timeout, restore_timeout)
+    if task_id == HTTP_EFFECT_REPLAY_TASK:
+        return await run_http_effect_replay(workspace, pre_timeout, restore_timeout)
     if task_id == PARTIAL_COMMIT_REPLAY_TASK:
         return await run_partial_commit_replay(workspace, pre_timeout, restore_timeout)
+    if task_id == APPROVAL_PENDING_REPLAY_TASK:
+        return await run_approval_pending_replay(workspace, pre_timeout, restore_timeout)
+    if task_id == REHYDRATE_DIVERGENCE_TASK:
+        return await run_rehydrate_divergence(workspace, pre_timeout, restore_timeout)
     return await run_checkpoint_continuity(workspace, pre_timeout, restore_timeout)
 
 
@@ -148,7 +171,7 @@ async def run_checkpoint_continuity(workspace: Path, pre_timeout: float, restore
         witness_path.unlink()
 
     if ids:
-        selected = ids[-1]
+        selected = ids[0]
         summary["selected_checkpoint_id"] = selected
         summary["selected_checkpoint_iteration"] = 0
         try:
@@ -301,7 +324,7 @@ async def run_external_effect_replay(workspace: Path, pre_timeout: float, restor
         witness_path.unlink()
 
     if ids:
-        selected = ids[-1]
+        selected = ids[0]
         summary["selected_checkpoint_id"] = selected
         try:
             result = await asyncio.wait_for(
@@ -329,6 +352,215 @@ async def run_external_effect_replay(workspace: Path, pre_timeout: float, restor
     if summary["restored"] and summary["duplicate_effect_observed"]:
         return 0
     return 1
+
+
+async def run_http_effect_replay(workspace: Path, pre_timeout: float, restore_timeout: float) -> int:
+    from agent_framework import Executor, FileCheckpointStorage, WorkflowBuilder, WorkflowContext, handler
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir = workspace / CHECKPOINT_DIR
+    storage = FileCheckpointStorage(checkpoint_dir)
+    ledger_path = workspace / HTTP_LEDGER_ARTIFACT
+    witness_path = workspace / HTTP_REPLAY_ARTIFACT
+    operation_id = "syncfuzz-maf-workflow-http-operation-1"
+    events: list[dict[str, Any]] = []
+
+    def ledger_entries() -> list[dict[str, Any]]:
+        if not ledger_path.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        for line in ledger_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                entries.append(json.loads(line))
+        return entries
+
+    def append_service_entry(source: str, op_id: str) -> int:
+        entries = ledger_entries()
+        entry = {
+            "index": len(entries) + 1,
+            "operation_id": op_id,
+            "marker": EXTERNAL_MARKER,
+            "source": source,
+            "service": "local-http-effect-server",
+        }
+        with ledger_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, sort_keys=True) + "\n")
+        events.append({"phase": "http-service-commit", "source": source, "entry_index": entry["index"]})
+        return len([item for item in ledger_entries() if item.get("operation_id") == op_id])
+
+    class EffectHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path != "/commit":
+                self.send_response(404)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            try:
+                payload = json.loads(body.decode("utf-8"))
+                op_id = str(payload.get("operation_id") or operation_id)
+                source = str(payload.get("source") or "unknown")
+                count = append_service_entry(source, op_id)
+                response = json.dumps({"ok": True, "count": count}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+            except Exception as exc:
+                response = json.dumps({"ok": False, "error": str(exc)}).encode("utf-8")
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), EffectHandler)
+    server_thread = threading.Thread(target=server.serve_forever, name="syncfuzz-maf-http-effect-server", daemon=True)
+    server_thread.start()
+    service_url = f"http://127.0.0.1:{server.server_address[1]}"
+
+    def post_commit(source: str, op_id: str) -> int:
+        payload = json.dumps({"operation_id": op_id, "source": source}).encode("utf-8")
+        request = urllib.request.Request(
+            service_url + "/commit",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=3) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        return int(data.get("count") or 0)
+
+    class StartExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="http-start")
+
+        @handler
+        async def process(self, message: str, ctx: WorkflowContext[str]) -> None:
+            events.append({"phase": "http-start", "message": message})
+            await ctx.send_message(operation_id)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            return {"operation_id": operation_id}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "http-start-restore", "state": state})
+
+    class HTTPExecutor(Executor):
+        def __init__(self, *, source: str, write_witness: bool) -> None:
+            super().__init__(id="http-effect")
+            self.source = source
+            self.write_witness = write_witness
+
+        @handler
+        async def process(self, op_id: str, ctx: WorkflowContext[Never, str]) -> None:
+            count = post_commit(self.source, op_id)
+            duplicate = count >= 2
+            if self.write_witness:
+                label = "DUPLICATE_MAF_WORKFLOW_HTTP_EFFECT" if duplicate else "SINGLE_MAF_WORKFLOW_HTTP_EFFECT"
+                witness_path.write_text(
+                    f"{label}\nOPERATION_ID={op_id}\nMARKER={EXTERNAL_MARKER}\nENTRIES={count}\nSERVICE_URL={service_url}\n",
+                    encoding="utf-8",
+                )
+                await ctx.yield_output(label)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            return {"ledger_entries": len(ledger_entries()), "service_url": service_url}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "http-effect-restore", "state": state})
+
+    def build_workflow(max_iterations: int, *, source: str, write_witness: bool):
+        start = StartExecutor()
+        effect = HTTPExecutor(source=source, write_witness=write_witness)
+        return (
+            WorkflowBuilder(
+                start_executor=start,
+                name=WORKFLOW_NAME + "-http-effect-replay",
+                checkpoint_storage=storage,
+                max_iterations=max_iterations,
+                output_from=[effect],
+            )
+            .add_edge(start, effect)
+            .build()
+        )
+
+    summary: dict[str, Any] = {
+        "schema_version": "syncfuzz.maf-workflow-checkpoint.v1",
+        "task_id": HTTP_EFFECT_REPLAY_TASK,
+        "workflow_name": WORKFLOW_NAME + "-http-effect-replay",
+        "checkpoint_backend": "file",
+        "checkpoint_dir": str(checkpoint_dir),
+        "checkpoint_ids": [],
+        "selected_checkpoint_id": "",
+        "selected_checkpoint_iteration": 0,
+        "restored": False,
+        "runtime_object_recreated": False,
+        "pre_restore_timed_out": False,
+        "post_restore_timed_out": False,
+        "duplicate_effect_observed": False,
+        "external_effect_entries": 0,
+        "external_service_url": service_url,
+        "external_service_observed": False,
+        "operation_id": operation_id,
+        "post_restore_outputs": [],
+        "events": events,
+    }
+
+    try:
+        try:
+            await asyncio.wait_for(
+                build_workflow(100, source="initial-run", write_witness=False).run("syncfuzz-start"),
+                timeout=pre_timeout,
+            )
+        except asyncio.TimeoutError:
+            summary["pre_restore_timed_out"] = True
+        except Exception as exc:
+            summary["pre_restore_error"] = f"{type(exc).__name__}: {exc}"
+            summary["pre_restore_traceback"] = traceback.format_exc(limit=4)
+
+        ids = checkpoint_ids(checkpoint_dir)
+        summary["checkpoint_ids"] = ids
+        if witness_path.exists():
+            witness_path.unlink()
+
+        if ids:
+            selected = ids[0]
+            summary["selected_checkpoint_id"] = selected
+            try:
+                result = await asyncio.wait_for(
+                    build_workflow(100, source="restored-run", write_witness=True).run(
+                        checkpoint_id=selected,
+                        checkpoint_storage=storage,
+                    ),
+                    timeout=restore_timeout,
+                )
+                summary["post_restore_outputs"] = [str(value) for value in result.get_outputs()]
+                summary["restored"] = True
+            except asyncio.TimeoutError:
+                summary["post_restore_timed_out"] = True
+                summary["restored"] = witness_path.exists()
+            except Exception as exc:
+                summary["post_restore_error"] = f"{type(exc).__name__}: {exc}"
+                summary["post_restore_traceback"] = traceback.format_exc(limit=4)
+                summary["restored"] = witness_path.exists()
+            summary["runtime_object_recreated"] = True
+
+        operation_entries = [entry for entry in ledger_entries() if entry.get("operation_id") == operation_id]
+        summary["external_effect_entries"] = len(operation_entries)
+        summary["external_service_observed"] = len(operation_entries) > 0
+        summary["duplicate_effect_observed"] = len(operation_entries) >= 2
+        write_json(workspace / SUMMARY_ARTIFACT, summary)
+        if summary["restored"] and summary["external_service_observed"] and summary["duplicate_effect_observed"]:
+            return 0
+        return 1
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 async def run_partial_commit_replay(workspace: Path, pre_timeout: float, restore_timeout: float) -> int:
@@ -410,7 +642,7 @@ async def run_partial_commit_replay(workspace: Path, pre_timeout: float, restore
             entries = [entry for entry in ledger_entries() if entry.get("operation_id") == op_id]
             duplicate = len(entries) >= 2
             if self.write_witness:
-                label = "DUPLICATE_PARTIAL_COMMIT_COMMIT" if duplicate else "SINGLE_PARTIAL_COMMIT_COMMIT"
+                label = "DUPLICATE_PARTIAL_COMMIT_REPLAY" if duplicate else "SINGLE_PARTIAL_COMMIT_REPLAY"
                 witness_path.write_text(
                     f"{label}\nOPERATION_ID={op_id}\nMARKER={EXTERNAL_MARKER}\nENTRIES={len(entries)}\n",
                     encoding="utf-8",
@@ -483,7 +715,7 @@ async def run_partial_commit_replay(workspace: Path, pre_timeout: float, restore
         witness_path.unlink()
 
     if ids:
-        selected = ids[-1]
+        selected = ids[0]
         summary["selected_checkpoint_id"] = selected
         try:
             result = await asyncio.wait_for(
@@ -516,6 +748,352 @@ async def run_partial_commit_replay(workspace: Path, pre_timeout: float, restore
         summary["restored"] = True
     write_json(workspace / SUMMARY_ARTIFACT, summary)
     if summary["restored"] and summary["initial_failure_observed"] and summary["partial_commit_observed"] and summary["duplicate_effect_observed"]:
+        return 0
+    return 1
+
+
+async def run_approval_pending_replay(workspace: Path, pre_timeout: float, restore_timeout: float) -> int:
+    from agent_framework import FileCheckpointStorage, RunContext, workflow
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir = workspace / CHECKPOINT_DIR
+    storage = FileCheckpointStorage(checkpoint_dir)
+    ledger_path = workspace / EXTERNAL_LEDGER_ARTIFACT
+    witness_path = workspace / APPROVAL_PENDING_ARTIFACT
+    operation_id = "syncfuzz-maf-workflow-approval-operation-1"
+    request_id = "syncfuzz-maf-workflow-approval-request-1"
+    events: list[dict[str, Any]] = []
+
+    def ledger_entries() -> list[dict[str, Any]]:
+        if not ledger_path.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        for line in ledger_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                entries.append(json.loads(line))
+        return entries
+
+    def append_approved_commit(source: str, approval: str) -> None:
+        entries = ledger_entries()
+        entry = {
+            "index": len(entries) + 1,
+            "operation_id": operation_id,
+            "marker": EXTERNAL_MARKER,
+            "source": source,
+            "approval": approval,
+            "branch": "approval-pending",
+        }
+        with ledger_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, sort_keys=True) + "\n")
+        events.append({"phase": "approval-commit", "source": source, "entry_index": entry["index"]})
+
+    def build_workflow(*, source: str, write_witness: bool):
+        @workflow(name=WORKFLOW_NAME + "-approval-pending", checkpoint_storage=storage)
+        async def approval_flow(message: str, ctx: RunContext) -> str:
+            events.append({"phase": "approval-start", "message": message})
+            approval = await ctx.request_info(
+                {"operation_id": operation_id, "question": "approve external commit?"},
+                str,
+                request_id=request_id,
+            )
+            append_approved_commit(source, approval)
+            entries = [entry for entry in ledger_entries() if entry.get("operation_id") == operation_id]
+            duplicate = len(entries) >= 2
+            label = "DUPLICATE_APPROVAL_PENDING_REPLAY" if duplicate else "SINGLE_APPROVAL_PENDING_REPLAY"
+            if write_witness:
+                witness_path.write_text(
+                    f"{label}\nOPERATION_ID={operation_id}\nREQUEST_ID={request_id}\nMARKER={EXTERNAL_MARKER}\nENTRIES={len(entries)}\n",
+                    encoding="utf-8",
+                )
+            return label
+
+        return approval_flow
+
+    summary: dict[str, Any] = {
+        "schema_version": "syncfuzz.maf-workflow-checkpoint.v1",
+        "task_id": APPROVAL_PENDING_REPLAY_TASK,
+        "workflow_name": WORKFLOW_NAME + "-approval-pending",
+        "checkpoint_backend": "file",
+        "checkpoint_dir": str(checkpoint_dir),
+        "checkpoint_ids": [],
+        "selected_checkpoint_id": "",
+        "selected_checkpoint_iteration": 0,
+        "restored": False,
+        "runtime_object_recreated": False,
+        "pre_restore_timed_out": False,
+        "post_restore_timed_out": False,
+        "pending_request_observed": False,
+        "approval_response_observed": False,
+        "approval_replay_observed": False,
+        "duplicate_effect_observed": False,
+        "external_effect_entries": 0,
+        "operation_id": operation_id,
+        "approval_request_id": "",
+        "post_restore_outputs": [],
+        "events": events,
+    }
+
+    try:
+        result = await asyncio.wait_for(
+            build_workflow(source="initial-run", write_witness=False).run("syncfuzz-start"),
+            timeout=pre_timeout,
+        )
+        request_events = result.get_request_info_events()
+        if request_events:
+            summary["pending_request_observed"] = True
+            summary["approval_request_id"] = request_events[0].request_id
+            events.append({"phase": "pending-request-observed", "request_id": request_events[0].request_id})
+    except asyncio.TimeoutError:
+        summary["pre_restore_timed_out"] = True
+    except Exception as exc:
+        summary["pre_restore_error"] = f"{type(exc).__name__}: {exc}"
+        summary["pre_restore_traceback"] = traceback.format_exc(limit=4)
+
+    ids = checkpoint_ids(checkpoint_dir)
+    summary["checkpoint_ids"] = ids
+    if ids and not summary["pending_request_observed"] and summary["pre_restore_timed_out"]:
+        summary["pending_request_observed"] = True
+        summary["approval_request_id"] = request_id
+        events.append({"phase": "pending-request-inferred-from-checkpoint", "request_id": request_id})
+    effective_request_id = str(summary.get("approval_request_id") or request_id)
+    if witness_path.exists():
+        witness_path.unlink()
+
+    if ids and summary["pending_request_observed"]:
+        selected = ids[-1]
+        summary["selected_checkpoint_id"] = selected
+        try:
+            first_result = await asyncio.wait_for(
+                build_workflow(source="first-approval", write_witness=False).run(
+                    checkpoint_id=selected,
+                    checkpoint_storage=storage,
+                    responses={effective_request_id: "approve"},
+                ),
+                timeout=restore_timeout,
+            )
+            summary["post_restore_outputs"] = [str(value) for value in first_result.get_outputs()]
+            summary["approval_response_observed"] = True
+        except asyncio.TimeoutError:
+            summary["post_restore_timed_out"] = True
+            summary["approval_response_observed"] = len(ledger_entries()) >= 1
+        except Exception as exc:
+            summary["post_restore_error"] = f"{type(exc).__name__}: {exc}"
+            summary["post_restore_traceback"] = traceback.format_exc(limit=4)
+            summary["approval_response_observed"] = len(ledger_entries()) >= 1
+
+        try:
+            replay_result = await asyncio.wait_for(
+                build_workflow(source="replayed-approval", write_witness=True).run(
+                    checkpoint_id=selected,
+                    checkpoint_storage=storage,
+                    responses={effective_request_id: "approve"},
+                ),
+                timeout=restore_timeout,
+            )
+            summary["post_restore_outputs"].extend(str(value) for value in replay_result.get_outputs())
+            summary["approval_replay_observed"] = True
+        except asyncio.TimeoutError:
+            summary["post_restore_timed_out"] = True
+            summary["approval_replay_observed"] = witness_path.exists()
+        except Exception as exc:
+            summary["approval_replay_error"] = f"{type(exc).__name__}: {exc}"
+            summary["approval_replay_traceback"] = traceback.format_exc(limit=4)
+            summary["approval_replay_observed"] = witness_path.exists()
+
+        summary["runtime_object_recreated"] = True
+
+    operation_entries = [entry for entry in ledger_entries() if entry.get("operation_id") == operation_id]
+    summary["external_effect_entries"] = len(operation_entries)
+    summary["duplicate_effect_observed"] = len(operation_entries) >= 2
+    if summary["duplicate_effect_observed"] and not witness_path.exists():
+        witness_path.write_text(
+            f"DUPLICATE_APPROVAL_PENDING_REPLAY\nOPERATION_ID={operation_id}\nREQUEST_ID={effective_request_id}\nMARKER={EXTERNAL_MARKER}\nENTRIES={len(operation_entries)}\n",
+            encoding="utf-8",
+        )
+    if summary["duplicate_effect_observed"]:
+        summary["restored"] = True
+    write_json(workspace / SUMMARY_ARTIFACT, summary)
+    if (
+        summary["restored"]
+        and summary["pending_request_observed"]
+        and summary["approval_response_observed"]
+        and summary["duplicate_effect_observed"]
+    ):
+        return 0
+    return 1
+
+
+async def run_rehydrate_divergence(workspace: Path, pre_timeout: float, restore_timeout: float) -> int:
+    from agent_framework import FileCheckpointStorage, RunContext, workflow
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir = workspace / CHECKPOINT_DIR
+    storage = FileCheckpointStorage(checkpoint_dir)
+    ledger_path = workspace / EXTERNAL_LEDGER_ARTIFACT
+    witness_path = workspace / REHYDRATE_DIVERGENCE_ARTIFACT
+    operation_id = "syncfuzz-maf-workflow-rehydrate-operation-1"
+    request_id = "syncfuzz-maf-workflow-rehydrate-request-1"
+    events: list[dict[str, Any]] = []
+
+    def ledger_entries() -> list[dict[str, Any]]:
+        if not ledger_path.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        for line in ledger_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                entries.append(json.loads(line))
+        return entries
+
+    def append_approved_commit(source: str, approval: str) -> int:
+        entries = ledger_entries()
+        entry = {
+            "index": len(entries) + 1,
+            "operation_id": operation_id,
+            "marker": EXTERNAL_MARKER,
+            "source": source,
+            "approval": approval,
+            "branch": "resume-vs-rehydrate",
+        }
+        with ledger_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, sort_keys=True) + "\n")
+        events.append({"phase": "rehydrate-divergence-commit", "source": source, "entry_index": entry["index"]})
+        return len([item for item in ledger_entries() if item.get("operation_id") == operation_id])
+
+    def build_workflow(*, source: str, write_witness: bool):
+        @workflow(name=WORKFLOW_NAME + "-rehydrate-divergence", checkpoint_storage=storage)
+        async def divergence_flow(message: str, ctx: RunContext) -> str:
+            events.append({"phase": "rehydrate-divergence-start", "message": message, "source": source})
+            approval = await ctx.request_info(
+                {"operation_id": operation_id, "question": "approve external commit?"},
+                str,
+                request_id=request_id,
+            )
+            count = append_approved_commit(source, approval)
+            duplicate = count >= 2
+            label = "REHYDRATE_DIVERGENCE_REPLAY" if duplicate else "SAME_INSTANCE_SINGLE_RESUME"
+            if write_witness:
+                witness_path.write_text(
+                    f"{label}\nOPERATION_ID={operation_id}\nREQUEST_ID={request_id}\nMARKER={EXTERNAL_MARKER}\nENTRIES={count}\n",
+                    encoding="utf-8",
+                )
+            return label
+
+        return divergence_flow
+
+    summary: dict[str, Any] = {
+        "schema_version": "syncfuzz.maf-workflow-checkpoint.v1",
+        "task_id": REHYDRATE_DIVERGENCE_TASK,
+        "workflow_name": WORKFLOW_NAME + "-rehydrate-divergence",
+        "checkpoint_backend": "file",
+        "checkpoint_dir": str(checkpoint_dir),
+        "checkpoint_ids": [],
+        "selected_checkpoint_id": "",
+        "selected_checkpoint_iteration": 0,
+        "restored": False,
+        "runtime_object_recreated": False,
+        "pre_restore_timed_out": False,
+        "post_restore_timed_out": False,
+        "pending_request_observed": False,
+        "approval_response_observed": False,
+        "same_instance_resume_observed": False,
+        "rehydrate_replay_observed": False,
+        "duplicate_effect_observed": False,
+        "external_effect_entries": 0,
+        "operation_id": operation_id,
+        "approval_request_id": "",
+        "post_restore_outputs": [],
+        "events": events,
+    }
+
+    initial_workflow = build_workflow(source="initial-run", write_witness=False)
+    try:
+        result = await asyncio.wait_for(initial_workflow.run("syncfuzz-start"), timeout=pre_timeout)
+        request_events = result.get_request_info_events()
+        if request_events:
+            summary["pending_request_observed"] = True
+            summary["approval_request_id"] = request_events[0].request_id
+            events.append({"phase": "rehydrate-divergence-pending-request", "request_id": request_events[0].request_id})
+    except asyncio.TimeoutError:
+        summary["pre_restore_timed_out"] = True
+    except Exception as exc:
+        summary["pre_restore_error"] = f"{type(exc).__name__}: {exc}"
+        summary["pre_restore_traceback"] = traceback.format_exc(limit=4)
+
+    ids = checkpoint_ids(checkpoint_dir)
+    summary["checkpoint_ids"] = ids
+    if ids and not summary["pending_request_observed"] and summary["pre_restore_timed_out"]:
+        summary["pending_request_observed"] = True
+        summary["approval_request_id"] = request_id
+        events.append({"phase": "rehydrate-divergence-pending-inferred-from-checkpoint", "request_id": request_id})
+    effective_request_id = str(summary.get("approval_request_id") or request_id)
+    if witness_path.exists():
+        witness_path.unlink()
+
+    if summary["pending_request_observed"]:
+        try:
+            same_result = await asyncio.wait_for(
+                initial_workflow.run(responses={effective_request_id: "approve"}),
+                timeout=restore_timeout,
+            )
+            summary["post_restore_outputs"] = [str(value) for value in same_result.get_outputs()]
+            same_entries = [entry for entry in ledger_entries() if entry.get("operation_id") == operation_id]
+            summary["approval_response_observed"] = len(same_entries) >= 1
+            summary["same_instance_resume_observed"] = len(same_entries) == 1
+        except asyncio.TimeoutError:
+            summary["post_restore_timed_out"] = True
+            same_entries = [entry for entry in ledger_entries() if entry.get("operation_id") == operation_id]
+            summary["approval_response_observed"] = len(same_entries) >= 1
+            summary["same_instance_resume_observed"] = len(same_entries) == 1
+        except Exception as exc:
+            summary["same_instance_resume_error"] = f"{type(exc).__name__}: {exc}"
+            summary["same_instance_resume_traceback"] = traceback.format_exc(limit=4)
+
+    if ids and summary["same_instance_resume_observed"]:
+        selected = ids[-1]
+        summary["selected_checkpoint_id"] = selected
+        try:
+            rehydrate_result = await asyncio.wait_for(
+                build_workflow(source="rehydrated-run", write_witness=True).run(
+                    checkpoint_id=selected,
+                    checkpoint_storage=storage,
+                    responses={effective_request_id: "approve"},
+                ),
+                timeout=restore_timeout,
+            )
+            summary["post_restore_outputs"].extend(str(value) for value in rehydrate_result.get_outputs())
+            summary["rehydrate_replay_observed"] = witness_path.exists()
+            summary["restored"] = True
+        except asyncio.TimeoutError:
+            summary["post_restore_timed_out"] = True
+            summary["rehydrate_replay_observed"] = witness_path.exists()
+            summary["restored"] = witness_path.exists()
+        except Exception as exc:
+            summary["rehydrate_replay_error"] = f"{type(exc).__name__}: {exc}"
+            summary["rehydrate_replay_traceback"] = traceback.format_exc(limit=4)
+            summary["rehydrate_replay_observed"] = witness_path.exists()
+            summary["restored"] = witness_path.exists()
+        summary["runtime_object_recreated"] = True
+
+    operation_entries = [entry for entry in ledger_entries() if entry.get("operation_id") == operation_id]
+    summary["external_effect_entries"] = len(operation_entries)
+    summary["duplicate_effect_observed"] = len(operation_entries) >= 2
+    if summary["duplicate_effect_observed"] and not witness_path.exists():
+        witness_path.write_text(
+            f"REHYDRATE_DIVERGENCE_REPLAY\nOPERATION_ID={operation_id}\nREQUEST_ID={effective_request_id}\nMARKER={EXTERNAL_MARKER}\nENTRIES={len(operation_entries)}\n",
+            encoding="utf-8",
+        )
+    if summary["duplicate_effect_observed"]:
+        summary["restored"] = True
+    write_json(workspace / SUMMARY_ARTIFACT, summary)
+    if (
+        summary["pending_request_observed"]
+        and summary["approval_response_observed"]
+        and summary["same_instance_resume_observed"]
+        and summary["restored"]
+        and summary["runtime_object_recreated"]
+        and summary["rehydrate_replay_observed"]
+        and summary["duplicate_effect_observed"]
+    ):
         return 0
     return 1
 
