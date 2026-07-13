@@ -118,13 +118,20 @@ func TargetTaskGroups() []TargetTaskGroupInfo {
 			Tasks:       ipcContinuationTaskIDs(),
 		},
 		{
+			GroupID:     "maf-session",
+			Description: "MAF session restore tasks that serialize AgentSession state and continue on a newly constructed runtime object",
+			Tasks: []string{
+				MAFSessionContinuityTargetTaskID,
+			},
+		},
+		{
 			GroupID:     "maf-workspace-residue",
 			Description: "MAF same-run workspace residue tasks covering file, directory, delete, symlink, rename, mode, append, hardlink, and FIFO continuity across later bash calls",
 			Tasks:       workspaceContinuationTaskIDs(),
 		},
 		{
 			GroupID:     "maf-phase5b",
-			Description: "MAF Phase 5B residue bundle covering delayed-effect smoke paths, persistent-shell residue, shell execution-context residue, and workspace object residue",
+			Description: "MAF Phase 5B residue bundle covering delayed-effect smoke paths, persistent-shell residue, shell execution-context residue, session restore, and workspace object residue",
 			Tasks: append([]string{
 				DefaultTargetTaskID,
 				LongDelayTargetTaskID,
@@ -134,6 +141,7 @@ func TargetTaskGroups() []TargetTaskGroupInfo {
 				CWDResidueTargetTaskID,
 				UmaskResidueTargetTaskID,
 				UnixListenerResidueTargetTaskID,
+				MAFSessionContinuityTargetTaskID,
 			}, workspaceContinuationTaskIDs()...),
 		},
 		{

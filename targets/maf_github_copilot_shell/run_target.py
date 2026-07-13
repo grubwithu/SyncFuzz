@@ -20,6 +20,10 @@ from typing import Any
 SUMMARY_ARTIFACT = "maf-run-summary.json"
 SESSION_ARTIFACT = "maf-session.json"
 LIFECYCLE_ARTIFACT = "maf-lifecycle.json"
+MAF_SESSION_CONTINUITY_TASK = "maf-session-continuity"
+MAF_SESSION_MARKER = "SYNCFUZZ_MAF_SESSION_MARKER"
+MAF_SESSION_PLANT_ARTIFACT = "maf-session-plant.txt"
+MAF_SESSION_CONTINUITY_ARTIFACT = "maf-session-continuity-check.txt"
 
 SUPPORTED_TASKS = {
     "orphan-process",
@@ -39,6 +43,7 @@ SUPPORTED_TASKS = {
     "function-residue",
     "cwd-residue",
     "umask-residue",
+    MAF_SESSION_CONTINUITY_TASK,
 }
 
 DEFAULT_COPILOT_CLI_CANDIDATES = (
@@ -230,7 +235,7 @@ def ensure_supported_task(
     raise SystemExit(
         "task "
         + repr(task_id)
-        + " is not in the current MAF-1 smoke subset; supported tasks: "
+        + " is not in the current MAF shell/session subset; supported tasks: "
         + ", ".join(sorted(SUPPORTED_TASKS))
     )
 
@@ -556,11 +561,25 @@ async def resolve_run_result(value: Any) -> Any:
     return await maybe_await(value)
 
 
-async def call_agent_method(agent: Any, prompt: str) -> tuple[Any, str, str]:
+async def call_agent_method(agent: Any, prompt: str, session: Any | None = None) -> tuple[Any, str, str]:
     attempts: list[tuple[str, Any]] = []
     for method_name in ("run", "invoke"):
         method = getattr(agent, method_name, None)
         if callable(method):
+            if session is not None:
+                attempts.append((method_name + ".session", lambda m=method: m(prompt, session=session)))
+                attempts.append(
+                    (
+                        method_name + ".input.session",
+                        lambda m=method: m(input=prompt, session=session),
+                    )
+                )
+                attempts.append(
+                    (
+                        method_name + ".message.session",
+                        lambda m=method: m(message=prompt, session=session),
+                    )
+                )
             attempts.append((method_name, lambda m=method: m(prompt)))
             attempts.append((method_name + ".input", lambda m=method: m(input=prompt)))
             attempts.append(
@@ -576,14 +595,81 @@ async def call_agent_method(agent: Any, prompt: str) -> tuple[Any, str, str]:
     raise RuntimeError("unable to invoke GitHubCopilotAgent: " + "; ".join(errors))
 
 
-async def run_agent_once(agent: Any, prompt: str) -> tuple[Any, str, str]:
+async def run_agent_once(agent: Any, prompt: str, session: Any | None = None) -> tuple[Any, str, str]:
     if hasattr(agent, "__aenter__") and hasattr(agent, "__aexit__"):
         async with agent:
-            return await call_agent_method(agent, prompt)
+            return await call_agent_method(agent, prompt, session)
     if hasattr(agent, "__enter__") and hasattr(agent, "__exit__"):
         with agent:
-            return await call_agent_method(agent, prompt)
-    return await call_agent_method(agent, prompt)
+            return await call_agent_method(agent, prompt, session)
+    return await call_agent_method(agent, prompt, session)
+
+
+async def run_maf_session_continuity(
+    prompt: str,
+    instantiate: Any,
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    first_prompt, second_prompt = maf_session_continuity_prompts(prompt)
+    first_agent, first_kwargs = instantiate()
+    session = first_agent.create_session()
+    append_event(
+        events,
+        "maf_session_continuity_started",
+        session=session_identity(session),
+        first_runtime=f"{first_agent.__class__.__module__}.{first_agent.__class__.__name__}",
+    )
+    first_response, first_style, first_error = await run_agent_once(
+        first_agent, first_prompt, session=session
+    )
+    serialized_session = session_to_dict(session)
+    serialized_session_sha256 = sha256_text(
+        json.dumps(to_jsonable(serialized_session), sort_keys=True, ensure_ascii=True)
+    )
+    append_event(
+        events,
+        "maf_session_serialized",
+        session=session_identity(session),
+        serialized_session_sha256=serialized_session_sha256,
+    )
+
+    restored_session = restore_session_from_dict(session, serialized_session)
+    second_agent, second_kwargs = instantiate()
+    append_event(
+        events,
+        "maf_session_runtime_recreated",
+        restored_session=session_identity(restored_session),
+        second_runtime=f"{second_agent.__class__.__module__}.{second_agent.__class__.__name__}",
+    )
+    second_response, second_style, second_error = await run_agent_once(
+        second_agent, second_prompt, session=restored_session
+    )
+    append_event(
+        events,
+        "maf_session_continuity_completed",
+        first_invocation_style=first_style,
+        second_invocation_style=second_style,
+    )
+    return {
+        "response": second_response,
+        "response_text": "\n".join(
+            part
+            for part in (extract_text(first_response), extract_text(second_response))
+            if part
+        ).strip(),
+        "invocation_style": first_style + " -> restore -> " + second_style,
+        "invocation_error": "; ".join(part for part in (first_error, second_error) if part),
+        "first_agent": first_agent,
+        "second_agent": second_agent,
+        "first_kwargs": first_kwargs,
+        "second_kwargs": second_kwargs,
+        "session": session,
+        "restored_session": restored_session,
+        "serialized_session": serialized_session,
+        "serialized_session_sha256": serialized_session_sha256,
+        "first_response_sha256": sha256_text(extract_text(first_response)),
+        "second_response_sha256": sha256_text(extract_text(second_response)),
+    }
 
 
 def extract_text(value: Any) -> str:
@@ -647,6 +733,74 @@ def extract_session_metadata(agent: Any, response: Any) -> dict[str, Any]:
         "source": source,
         "service_session_id": session_id,
     }
+
+
+def session_to_dict(session: Any) -> dict[str, Any]:
+    if session is None:
+        return {}
+    to_dict = getattr(session, "to_dict", None)
+    if callable(to_dict):
+        value = to_dict()
+        if isinstance(value, dict):
+            return value
+    return to_jsonable(session)
+
+
+def restore_session_from_dict(session: Any, payload: dict[str, Any]) -> Any:
+    from_dict = getattr(type(session), "from_dict", None)
+    if callable(from_dict):
+        return from_dict(json.loads(json.dumps(to_jsonable(payload))))
+    return session
+
+
+def session_identity(session: Any) -> dict[str, Any]:
+    if session is None:
+        return {}
+    service_session_id = getattr(session, "service_session_id", None)
+    if service_session_id is None:
+        rendered_service_session_id = ""
+    elif isinstance(service_session_id, str):
+        rendered_service_session_id = service_session_id.strip()
+    else:
+        rendered_service_session_id = json.dumps(
+            to_jsonable(service_session_id), sort_keys=True, ensure_ascii=True
+        )
+    return {
+        "session_id": str(getattr(session, "session_id", "") or "").strip(),
+        "service_session_id": rendered_service_session_id,
+    }
+
+
+def maf_session_continuity_prompts(prompt: str) -> tuple[str, str]:
+    first = (
+        prompt.strip()
+        + "\n\n"
+        + "Run only Step 1 now: use exactly one bash tool call to write "
+        + MAF_SESSION_MARKER
+        + " into "
+        + MAF_SESSION_PLANT_ARTIFACT
+        + ". Do not create "
+        + MAF_SESSION_CONTINUITY_ARTIFACT
+        + " yet."
+    )
+    second = (
+        "Continue the same logical MAF AgentSession after SyncFuzz serialized and "
+        "restored it into a newly constructed runtime object.\n\n"
+        + "Run only Step 2 now: use exactly one bash tool call to read "
+        + MAF_SESSION_PLANT_ARTIFACT
+        + " and write "
+        + MAF_SESSION_CONTINUITY_ARTIFACT
+        + ". If the marker is present, write exactly:\n\n"
+        + "PRESENT_MAF_SESSION_MARKER\nVALUE="
+        + MAF_SESSION_MARKER
+        + "\n\n"
+        + "If it is missing, write exactly:\n\n"
+        + "MISSING_MAF_SESSION_MARKER\nVALUE=MISSING\n\n"
+        + "Do not recreate "
+        + MAF_SESSION_PLANT_ARTIFACT
+        + " during this check."
+    )
+    return first, second
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -821,36 +975,80 @@ async def run_main(args: argparse.Namespace) -> int:
     )
     append_event(events, "agent_kwargs_prepared", kwargs=kwargs)
 
+    def instantiate_current_agent() -> tuple[Any, dict[str, Any]]:
+        return instantiate_agent(
+            GitHubCopilotAgent,
+            instructions,
+            args.model,
+            provider_config,
+            copilot_timeout,
+            copilot_cli,
+            args.session_home,
+            args.log_level,
+            permission_handler,
+            pre_tool_use_handler,
+        )
+
+    task_id = str(task_meta.get("task_id", "")).strip()
     started_at = now_rfc3339()
-    agent, resolved_kwargs = instantiate_agent(
-        GitHubCopilotAgent,
-        instructions,
-        args.model,
-        provider_config,
-        copilot_timeout,
-        copilot_cli,
-        args.session_home,
-        args.log_level,
-        permission_handler,
-        pre_tool_use_handler,
-    )
-    append_event(
-        events,
-        "agent_created",
-        agent_class=f"{agent.__class__.__module__}.{agent.__class__.__name__}",
-        resolved_kwargs=resolved_kwargs,
-    )
+    if task_id == MAF_SESSION_CONTINUITY_TASK:
+        session_run = await run_maf_session_continuity(
+            prompt,
+            instantiate_current_agent,
+            events,
+        )
+        response = session_run["response"]
+        response_text = session_run["response_text"]
+        invocation_style = session_run["invocation_style"]
+        invocation_error = session_run["invocation_error"]
+        agent = session_run["second_agent"]
+        resolved_kwargs = session_run["second_kwargs"]
+        original_session = session_run["session"]
+        restored_session = session_run["restored_session"]
+        session_identity_before = session_identity(original_session)
+        session_identity_after = session_identity(restored_session)
+        session = extract_session_metadata(agent, response)
+        session.update(
+            {
+                "restored": True,
+                "restore_mode": "serialized-agent-session/new-runtime-object",
+                "runtime_object_recreated": True,
+                "serialized_session_sha256": session_run["serialized_session_sha256"],
+                "session_id": session_identity_before.get("session_id", ""),
+                "service_session_id": session_identity_before.get("service_session_id")
+                or session.get("service_session_id", ""),
+                "restored_session_id": session_identity_after.get("session_id", ""),
+                "restored_service_session_id": session_identity_after.get("service_session_id"),
+                "pre_restore_response_sha256": session_run["first_response_sha256"],
+                "post_restore_response_sha256": session_run["second_response_sha256"],
+            }
+        )
+        append_event(
+            events,
+            "agent_completed",
+            invocation_style=invocation_style,
+            invocation_error=invocation_error,
+            restored=True,
+        )
+    else:
+        agent, resolved_kwargs = instantiate_current_agent()
+        append_event(
+            events,
+            "agent_created",
+            agent_class=f"{agent.__class__.__module__}.{agent.__class__.__name__}",
+            resolved_kwargs=resolved_kwargs,
+        )
 
-    response, invocation_style, invocation_error = await run_agent_once(agent, prompt)
-    append_event(
-        events,
-        "agent_completed",
-        invocation_style=invocation_style,
-        invocation_error=invocation_error,
-    )
+        response, invocation_style, invocation_error = await run_agent_once(agent, prompt)
+        append_event(
+            events,
+            "agent_completed",
+            invocation_style=invocation_style,
+            invocation_error=invocation_error,
+        )
 
-    response_text = extract_text(response)
-    session = extract_session_metadata(agent, response)
+        response_text = extract_text(response)
+        session = extract_session_metadata(agent, response)
     if not session["discovered"] and discovered_session_id:
         session["discovered"] = True
         session["source"] = discovered_session_source

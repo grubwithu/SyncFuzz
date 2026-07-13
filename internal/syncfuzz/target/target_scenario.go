@@ -352,6 +352,40 @@ Return after the command has been launched; do not wait for the background proce
 		},
 		{
 			Info: TargetScenarioInfo{
+				ScenarioID:           MAFSessionContinuityTargetTaskID,
+				TaskID:               MAFSessionContinuityTargetTaskID,
+				SeedID:               "maf-session-restore",
+				Description:          "serialize and restore a MAF AgentSession between two shell-capable turns, then compare the workspace continuity artifact",
+				Objective:            "Observe whether a MAF shell target can preserve logical session continuity while the wrapper recreates the runtime object from serialized AgentSession state.",
+				StateSurface:         "maf.agent-session",
+				LifecycleEdge:        "session->serialize->restore",
+				PlantPrimitiveID:     "maf-agent-session-marker",
+				ActivationKindID:     "restored-session-workspace-observation",
+				OracleKindID:         "maf-session-continuity",
+				DefaultExpectedFiles: []string{TargetMAFSessionContinuityArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "lifecycle-splice.maf-session-restore",
+						Kind:       TargetScenarioMutationLifecycleSplice,
+						Summary:    "replace same-runtime continuation with serialized AgentSession restore on a newly constructed MAF runtime object",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentPlant, Summary: "write a workspace marker during the pre-restore MAF turn"},
+					{Role: targetScenarioComponentLifecycle, Summary: "serialize AgentSession state and restore it into a newly constructed MAF runtime object"},
+					{Role: targetScenarioComponentActivation, Summary: "use the restored runtime to observe the marker and write maf-session-continuity-check.txt"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether the wrapper exercised a restored logical session and the later turn observed the planted marker"},
+				},
+			},
+			Prompt: MAFSessionContinuityPrompt,
+			Lifecycle: targetScenarioLifecycle{
+				Edge:              "session->serialize->restore",
+				CheckpointBackend: "agent-session-json",
+				ProcessMode:       "same-process-new-runtime",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
 				ScenarioID:           PersistentShellReplayTargetTaskID,
 				TaskID:               PersistentShellReplayTargetTaskID,
 				SeedID:               "shell-path-residue",
@@ -736,6 +770,8 @@ func targetScenarioLifecycleOperationID(lifecycle targetScenarioLifecycle) strin
 		return "checkpoint-replay"
 	case "checkpoint->fork":
 		return "checkpoint-fork"
+	case "session->serialize->restore":
+		return "session-restore"
 	case "target-command->post-return":
 		return "target-command-post-return"
 	default:

@@ -2487,6 +2487,44 @@ func TestRunTargetMAFUmaskResidueUsesLifecycleAwareOracle(t *testing.T) {
 	}
 }
 
+func TestEvaluateMAFSessionContinuityTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetMAFSessionContinuityArtifact), []byte("PRESENT_MAF_SESSION_MARKER\nVALUE=SYNCFUZZ_MAF_SESSION_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write MAF session witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, tmp,
+		testMAFShellCall{Command: `printf 'SYNCFUZZ_MAF_SESSION_MARKER\n' > maf-session-plant.txt`},
+		testMAFShellCall{Command: `if grep -q 'SYNCFUZZ_MAF_SESSION_MARKER' maf-session-plant.txt; then printf 'PRESENT_MAF_SESSION_MARKER\nVALUE=SYNCFUZZ_MAF_SESSION_MARKER\n' > maf-session-continuity-check.txt; else printf 'MISSING_MAF_SESSION_MARKER\nVALUE=MISSING\n' > maf-session-continuity-check.txt; fi; cat maf-session-continuity-check.txt`},
+	)
+	session := mafSessionArtifactData{
+		SchemaVersion:            "syncfuzz.maf-session.v1",
+		Restored:                 true,
+		RestoreMode:              "serialized-agent-session/new-runtime-object",
+		RuntimeObjectRecreated:   true,
+		SerializedSessionSHA256:  strings.Repeat("a", 64),
+		SessionID:                "session-a",
+		RestoredSessionID:        "session-a",
+		ServiceSessionID:         "service-a",
+		RestoredServiceSessionID: "service-a",
+	}
+	raw, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("marshal MAF session artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, mafSessionArtifact), raw, 0o644); err != nil {
+		t.Fatalf("write MAF session artifact: %v", err)
+	}
+
+	oracle := evaluateTargetOracle(tmp, "maf-github-copilot-shell", MAFSessionContinuityTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed MAF session continuity oracle: %#v", oracle)
+	}
+	compliance := evaluateMAFTargetTaskCompliance(tmp, MAFSessionContinuityTargetTaskID)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF session continuity task: %#v", compliance)
+	}
+}
+
 func TestRunTargetExportsUsableWorkspacePathsForRelativeOutDir(t *testing.T) {
 	tmp := t.TempDir()
 	cwd, err := os.Getwd()

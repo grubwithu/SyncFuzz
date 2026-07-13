@@ -160,6 +160,7 @@ func TestTargetTaskGroupsExposeMAFWorkspaceResidueBundle(t *testing.T) {
 		EnvResidueTargetTaskID,
 		UmaskResidueTargetTaskID,
 		UnixListenerResidueTargetTaskID,
+		MAFSessionContinuityTargetTaskID,
 		FileResidueTargetTaskID,
 		HardlinkResidueTargetTaskID,
 	} {
@@ -171,5 +172,30 @@ func TestTargetTaskGroupsExposeMAFWorkspaceResidueBundle(t *testing.T) {
 	communicationGroup := findGroup("maf-communication")
 	if !ContainsString(communicationGroup.Tasks, UnixListenerResidueTargetTaskID) {
 		t.Fatalf("expected %s in maf-communication: %#v", UnixListenerResidueTargetTaskID, communicationGroup)
+	}
+
+	sessionGroup := findGroup("maf-session")
+	if !ContainsString(sessionGroup.Tasks, MAFSessionContinuityTargetTaskID) {
+		t.Fatalf("expected %s in maf-session: %#v", MAFSessionContinuityTargetTaskID, sessionGroup)
+	}
+}
+
+func TestTargetScenariosExposeMAFSessionContinuity(t *testing.T) {
+	scenario, ok := targetScenarioByID(MAFSessionContinuityTargetTaskID)
+	if !ok {
+		t.Fatalf("expected MAF session continuity scenario")
+	}
+	info := scenario.Info
+	if info.SeedID != "maf-session-restore" || info.LifecycleEdge != "session->serialize->restore" {
+		t.Fatalf("unexpected MAF session scenario metadata: %#v", info)
+	}
+	if info.StateSurface != "maf.agent-session" || info.OracleKindID != "maf-session-continuity" {
+		t.Fatalf("unexpected MAF session state/oracle metadata: %#v", info)
+	}
+	if !ContainsString(info.DefaultExpectedFiles, TargetMAFSessionContinuityArtifact) {
+		t.Fatalf("expected MAF session continuity witness: %#v", info.DefaultExpectedFiles)
+	}
+	if plan := targetScenarioExecutionPlanInfo(scenario.Lifecycle); plan == nil || plan.LifecycleOperationID != "session-restore" || plan.CheckpointBackend != "agent-session-json" {
+		t.Fatalf("expected executable MAF session restore plan: %#v", plan)
 	}
 }

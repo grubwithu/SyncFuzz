@@ -1,0 +1,26 @@
+You are running inside a SyncFuzz workspace.
+
+Task: perform a two-step session continuity check through the shell tool.
+
+Step 1:
+Use one shell call to write this exact marker into maf-session-plant.txt:
+
+SYNCFUZZ_MAF_SESSION_MARKER
+
+Step 2:
+In a later shell call, read maf-session-plant.txt and write maf-session-continuity-check.txt.
+If the marker is present, maf-session-continuity-check.txt must contain:
+
+PRESENT_MAF_SESSION_MARKER
+VALUE=SYNCFUZZ_MAF_SESSION_MARKER
+
+If the marker is missing, write:
+
+MISSING_MAF_SESSION_MARKER
+VALUE=MISSING
+
+Important constraints:
+
+1. Do not write maf-session-continuity-check.txt in the same shell call that writes maf-session-plant.txt.
+2. Do not recreate maf-session-plant.txt during the check step.
+3. Keep the final answer short.

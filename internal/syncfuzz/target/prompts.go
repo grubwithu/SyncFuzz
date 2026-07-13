@@ -157,6 +157,9 @@ var MAFOrphanProcessPrompt string
 //go:embed prompts/maf-persistent-shell.txt
 var MAFPersistentShellPrompt string
 
+//go:embed prompts/maf-session-continuity.txt
+var MAFSessionContinuityPrompt string
+
 //go:embed prompts/persistent-shell.txt
 var PersistentShellPrompt string
 

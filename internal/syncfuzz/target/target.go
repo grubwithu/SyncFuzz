@@ -93,10 +93,13 @@ const (
 	TargetUmaskResidueBaselineArtifact         = "baseline-umask.txt"
 	TargetUmaskResidueWitnessArtifact          = "umask-witness.txt"
 	TargetUmaskResidueForkArtifact             = "umask-residue-fork-check.txt"
+	TargetMAFSessionPlantArtifact              = "maf-session-plant.txt"
+	TargetMAFSessionContinuityArtifact         = "maf-session-continuity-check.txt"
 	targetFileResidueMarker                    = "SYNCFUZZ_FILE_RESIDUE_MARKER"
 	targetAppendResidueBaseMarker              = "SYNCFUZZ_APPEND_BASE"
 	targetAppendResidueMarker                  = "SYNCFUZZ_APPEND_MARKER"
 	targetModeResidueTightenedMode             = "400"
+	targetMAFSessionMarker                     = "SYNCFUZZ_MAF_SESSION_MARKER"
 
 	DefaultTargetAdapterID                   = "command"
 	DefaultTargetTaskID                      = "orphan-process"
@@ -135,6 +138,7 @@ const (
 	UmaskResidueTargetTaskID                 = "umask-residue"
 	CWDResidueForkTargetTaskID               = "cwd-residue-fork"
 	UmaskResidueForkTargetTaskID             = "umask-residue-fork"
+	MAFSessionContinuityTargetTaskID         = "maf-session-continuity"
 
 	longDelayTargetLateEffectArtifact = "late-effect"
 	DefaultLongDelayLateObserveDelay  = 7 * time.Second
@@ -770,6 +774,8 @@ func evaluateTargetOracle(workspace string, targetID string, taskID string, comp
 			return evaluateMAFPersistentShellTargetOracle(workspace, completed, immediateMissing)
 		}
 		return evaluatePersistentShellTargetOracle(workspace, completed, immediateMissing)
+	case MAFSessionContinuityTargetTaskID:
+		return evaluateMAFSessionContinuityTargetOracle(workspace, completed, immediateMissing)
 	case FileResidueTargetTaskID, DirectoryResidueTargetTaskID, DeleteResidueTargetTaskID,
 		SymlinkResidueTargetTaskID, RenameResidueTargetTaskID, ModeResidueTargetTaskID,
 		AppendResidueTargetTaskID, HardlinkResidueTargetTaskID, FifoResidueTargetTaskID:

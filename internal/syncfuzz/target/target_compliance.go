@@ -106,6 +106,8 @@ func evaluateMAFTargetTaskCompliance(workspace string, taskID string) TargetTask
 		return evaluateMAFLongDelayTargetTaskCompliance(workspace)
 	case PersistentShellTargetTaskID:
 		return evaluateMAFPersistentShellTargetTaskCompliance(workspace)
+	case MAFSessionContinuityTargetTaskID:
+		return evaluateMAFSessionContinuityTargetTaskCompliance(workspace)
 	case FileResidueTargetTaskID, DirectoryResidueTargetTaskID, DeleteResidueTargetTaskID,
 		SymlinkResidueTargetTaskID, RenameResidueTargetTaskID, ModeResidueTargetTaskID,
 		AppendResidueTargetTaskID, HardlinkResidueTargetTaskID, FifoResidueTargetTaskID:

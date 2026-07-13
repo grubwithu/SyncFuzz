@@ -11,13 +11,14 @@ It is intentionally narrow:
 
 Current scope:
 
-- `MAF-1` only
+- `MAF-1` plus the first lightweight `MAF-2` session-restore probe
 - best for shell-task smoke paths with explicit workspace artifacts
 - built-in task-compliance checks now cover `orphan-process`, `orphan-process-long-delay`, `persistent-shell-poisoning`, `env-residue`, `function-residue`, `cwd-residue`, and `umask-residue`
 - the `orphan-process-long-delay` oracle uses MAF lifecycle evidence plus late observation, rather than assuming LangGraph-style boundary process visibility
 - the `persistent-shell-poisoning` oracle now requires lifecycle-backed proof that a later bash call observed the workspace-local git shim without another PATH export
 - the `env-residue`, `function-residue`, `cwd-residue`, and `umask-residue` oracles use MAF lifecycle evidence to distinguish true cross-call shell-context carry-over from later bash calls that reconstruct the state before writing the witness
-- replay / fork / workflow lifecycle tasks are still out of scope here
+- `maf-session-continuity` serializes a MAF `AgentSession`, restores it into a newly constructed runtime object, and checks whether the restored turn can observe the pre-restore workspace marker
+- workflow checkpoint lifecycle tasks are still out of scope here
 
 ## Setup
 
@@ -90,6 +91,7 @@ make target-maf-github-copilot-shell TARGET_TASK=function-residue
 make target-maf-github-copilot-shell TARGET_TASK=cwd-residue
 make target-maf-github-copilot-shell TARGET_TASK=umask-residue
 make target-maf-github-copilot-shell TARGET_TASK=unix-listener-residue
+make target-maf-github-copilot-shell TARGET_TASK=maf-session-continuity
 ```
 
 For repeatability checks and small baseline batches:
@@ -97,6 +99,7 @@ For repeatability checks and small baseline batches:
 ```bash
 make target-maf-github-copilot-shell-suite TARGET_GROUP=maf-baseline REPEAT=3
 make target-maf-github-copilot-shell-suite TARGET_GROUP=maf-shell-context REPEAT=1
+make target-maf-github-copilot-shell-suite TARGET_GROUP=maf-session REPEAT=1
 make target-maf-github-copilot-shell-matrix-suite TARGET_GROUP=maf-baseline TARGET_PROMPT_PROFILES=all REPEAT=1 CANDIDATE_LIMIT=3
 make target-maf-github-copilot-shell-campaign TARGET_GROUP=maf-baseline TARGET_PROMPT_PROFILES=all ROUNDS=2 CANDIDATE_LIMIT=3
 ```
@@ -131,6 +134,13 @@ These are not yet workflow/checkpoint artifacts. They are the MAF-1 bridge that 
 - any discovered provider session identity
 - pre-tool / permission callback events and run lifecycle
 
+For `maf-session-continuity`, `maf-session.json` additionally records:
+
+- serialized `AgentSession` hash
+- original and restored logical session ids
+- whether the runtime object was recreated
+- pre-restore and post-restore response hashes
+
 The built-in `maf-baseline` target group currently expands to:
 
 - `orphan-process`
@@ -146,9 +156,13 @@ The broader `maf-shell-context` group currently expands to:
 - `cwd-residue`
 - `umask-residue`
 
+The `maf-session` group currently expands to:
+
+- `maf-session-continuity`
+
 ## Current Limits
 
-- no `MAF-2` session-restore flow yet
+- `MAF-2` currently covers AgentSession serialization/restore inside one wrapper process; cross-process restore is still pending
 - no `MAF-3` workflow/checkpoint flow yet
 - unsupported LangGraph-specific lifecycle tasks are rejected by default
 - the Copilot CLI is still part of the runtime path even when SyncFuzz routes inference through `COPILOT_PROVIDER_BASE_URL`
