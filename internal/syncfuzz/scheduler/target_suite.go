@@ -68,6 +68,7 @@ type TargetSuiteRunResult struct {
 	OutcomeCategory        corpus.TargetObservationCategory     `json:"outcome_category,omitempty"`
 	OutcomeReason          string                               `json:"outcome_reason,omitempty"`
 	ActivationStage        TargetActivationStage                `json:"activation_stage,omitempty"`
+	MinimizationPlan       *TargetMinimizationPlan              `json:"minimization_plan,omitempty"`
 	Signature              core.MismatchSignature               `json:"signature"`
 	ArtifactDir            string                               `json:"artifact_dir,omitempty"`
 	DurationMillis         int64                                `json:"duration_ms,omitempty"`
@@ -493,6 +494,7 @@ func runTargetSuiteTask(
 	item.OutcomeCategory = observation.Category
 	item.OutcomeReason = observation.Reason
 	item.ActivationStage = targetActivationStageForObservation(observation)
+	item.MinimizationPlan = buildTargetMinimizationPlan(candidate, item, observation)
 	item.Signature = runResult.Signature
 	item.ArtifactDir = runResult.ArtifactDir
 	finalizeTargetSuiteItemMetrics(&item, startedRun)

@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
@@ -213,6 +215,20 @@ esac`
 		if item.CandidateID == "" || item.TargetID != "matrix-smoke" {
 			t.Fatalf("expected candidate-aware target run result: %#v", item)
 		}
+		if item.TaskID == target.PersistentShellTargetTaskID {
+			if item.MinimizationPlan == nil || !item.MinimizationPlan.Applicable {
+				t.Fatalf("expected applicable minimization plan for confirmed matrix item: %#v", item.MinimizationPlan)
+			}
+			if len(item.MinimizationPlan.Steps) == 0 {
+				t.Fatalf("expected minimization steps: %#v", item.MinimizationPlan)
+			}
+			if !containsStringPrefix(item.MinimizationPlan.Preserve, "artifact="+target.TargetShellPoisonCheckArtifact) {
+				t.Fatalf("expected minimization plan to preserve witness artifact: %#v", item.MinimizationPlan.Preserve)
+			}
+			if !targetMinimizationPlanHasStepKind(item.MinimizationPlan, "artifact-replay-check") {
+				t.Fatalf("expected replay minimization step: %#v", item.MinimizationPlan)
+			}
+		}
 	}
 	if _, err := os.Stat(result.ScheduleMatrix); err != nil {
 		t.Fatalf("expected target schedule matrix artifact: %v", err)
@@ -220,6 +236,59 @@ esac`
 	if _, err := os.Stat(result.MatrixResult); err != nil {
 		t.Fatalf("expected target matrix result artifact: %v", err)
 	}
+}
+
+func TestBuildTargetMinimizationPlanIncludesMutationAxes(t *testing.T) {
+	plan := buildTargetMinimizationPlan(TargetScheduleCandidate{
+		TargetID:             "langgraph-shell-react",
+		TaskID:               target.PersistentShellReplayTargetTaskID,
+		OracleKindID:         "replay-path-residue",
+		DefaultExpectedFiles: []string{target.TargetShellPoisonReplayArtifact},
+		Mutations: []target.TargetScenarioMutation{{
+			MutationID: "lifecycle-splice.checkpoint-replay",
+			Kind:       target.TargetScenarioMutationLifecycleSplice,
+			Summary:    "resume from an earlier checkpoint",
+		}},
+	}, TargetSuiteRunResult{
+		TargetID:     "langgraph-shell-react",
+		TaskID:       target.PersistentShellReplayTargetTaskID,
+		OracleKindID: "replay-path-residue",
+		Confirmed:    true,
+		TargetOracle: target.TargetOracleResult{Attribution: "runtime-preserved-residue"},
+	}, corpus.TargetObservationDetails{
+		Category:          corpus.TargetObservationResidueObserved,
+		ActivationReached: true,
+	})
+	if plan == nil || !plan.Applicable {
+		t.Fatalf("expected applicable minimization plan: %#v", plan)
+	}
+	if !targetMinimizationPlanHasStepKind(plan, "mutation-axis-check") {
+		t.Fatalf("expected mutation-axis minimization step: %#v", plan)
+	}
+	if !containsStringPrefix(plan.Preserve, "artifact="+target.TargetShellPoisonReplayArtifact) {
+		t.Fatalf("expected replay witness artifact in preserve list: %#v", plan.Preserve)
+	}
+}
+
+func containsStringPrefix(values []string, prefix string) bool {
+	for _, value := range values {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func targetMinimizationPlanHasStepKind(plan *TargetMinimizationPlan, kind string) bool {
+	if plan == nil {
+		return false
+	}
+	for _, step := range plan.Steps {
+		if step.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunTargetSuiteFeedbackMatrixPreservesUniverseCoverageGaps(t *testing.T) {

@@ -86,6 +86,7 @@ Usage:
   syncfuzz target prompt-profiles
   syncfuzz target prompt-variants
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
+  syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--out runs]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz target run [--target maf-github-copilot-shell] [--task orphan-process] [--command-file examples/target-commands/maf-github-copilot-shell.sh] [--observe-delay 500ms] [--out runs]
   syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles baseline,workflow,audit] [--matrix] [--feedback-from target-matrix-result.json] [--candidate-limit 3] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
@@ -468,7 +469,7 @@ func campaign(args []string) {
 
 func runTarget(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, scenarios, groups, prompt-profiles, prompt-variants, matrix, run, suite, or campaign")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, matrix, minimize, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -488,6 +489,8 @@ func runTarget(args []string) {
 		targetPromptVariants()
 	case "matrix":
 		targetMatrix(args[1:])
+	case "minimize":
+		targetMinimize(args[1:])
 	case "run":
 		targetRun(args[1:])
 	case "suite":
@@ -644,6 +647,40 @@ func targetMatrix(args []string) {
 			candidate.Description,
 		)
 	}
+}
+
+func targetMinimize(args []string) {
+	fs := flag.NewFlagSet("target minimize", flag.ExitOnError)
+	sourcePath := fs.String("from", "", "target-suite-result.json or target-matrix-result.json to turn into a minimization batch")
+	outDir := fs.String("out", "runs", "directory for target minimization artifacts")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+
+	result, err := scheduler.BuildTargetMinimizationBatch(scheduler.TargetMinimizationBatchOptions{
+		SourcePath: *sourcePath,
+		OutDir:     *outDir,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target minimize failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("batch_id: %s\n", result.BatchID)
+	fmt.Printf("source_schema: %s\n", result.SourceSchemaVersion)
+	fmt.Printf("total_results: %d\n", result.TotalResults)
+	fmt.Printf("applicable_plans: %d\n", result.ApplicablePlans)
+	fmt.Printf("skipped_plans: %d\n", result.SkippedPlans)
+	if len(result.Plans) > 0 {
+		first := result.Plans[0]
+		fmt.Printf("first_plan: task=%s run=%s applicable=%t steps=%d\n",
+			first.TaskID,
+			first.RunID,
+			first.MinimizationPlan.Applicable,
+			len(first.MinimizationPlan.Steps),
+		)
+	}
+	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
 }
 
 func targetRun(args []string) {
