@@ -4,6 +4,8 @@ syncfuzz_maf_workflow_pre_timeout="${MAF_WORKFLOW_PRE_TIMEOUT-}"
 syncfuzz_maf_workflow_pre_timeout_set="${MAF_WORKFLOW_PRE_TIMEOUT+x}"
 syncfuzz_maf_workflow_restore_timeout="${MAF_WORKFLOW_RESTORE_TIMEOUT-}"
 syncfuzz_maf_workflow_restore_timeout_set="${MAF_WORKFLOW_RESTORE_TIMEOUT+x}"
+syncfuzz_maf_workflow_effect_service_url="${MAF_WORKFLOW_EFFECT_SERVICE_URL-}"
+syncfuzz_maf_workflow_effect_service_url_set="${MAF_WORKFLOW_EFFECT_SERVICE_URL+x}"
 
 if [ -n "${SYNCFUZZ_REPO_ROOT:-}" ] && [ -f "$SYNCFUZZ_REPO_ROOT/.env" ]; then
   set -a
@@ -22,6 +24,10 @@ fi
 if [ "$syncfuzz_maf_workflow_restore_timeout_set" = "x" ]; then
   MAF_WORKFLOW_RESTORE_TIMEOUT="$syncfuzz_maf_workflow_restore_timeout"
   export MAF_WORKFLOW_RESTORE_TIMEOUT
+fi
+if [ "$syncfuzz_maf_workflow_effect_service_url_set" = "x" ]; then
+  MAF_WORKFLOW_EFFECT_SERVICE_URL="$syncfuzz_maf_workflow_effect_service_url"
+  export MAF_WORKFLOW_EFFECT_SERVICE_URL
 fi
 
 target_python="${MAF_PYTHON:-}"

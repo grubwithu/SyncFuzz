@@ -98,6 +98,8 @@ func evaluateTargetTaskComplianceForTarget(workspace string, targetID string, ta
 			return evaluateMAFWorkflowExternalReplayTargetTaskCompliance(workspace)
 		case MAFWorkflowHTTPReplayTargetTaskID:
 			return evaluateMAFWorkflowHTTPReplayTargetTaskCompliance(workspace)
+		case MAFWorkflowResourceReplayTargetTaskID:
+			return evaluateMAFWorkflowResourceReplayTargetTaskCompliance(workspace)
 		case MAFWorkflowPartialCommitTargetTaskID:
 			return evaluateMAFWorkflowPartialCommitTargetTaskCompliance(workspace)
 		case MAFWorkflowApprovalPendingTargetTaskID:

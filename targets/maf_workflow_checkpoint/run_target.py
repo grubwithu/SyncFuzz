@@ -23,6 +23,8 @@ EXTERNAL_LEDGER_ARTIFACT = "maf-workflow-external-ledger.jsonl"
 EXTERNAL_REPLAY_ARTIFACT = "maf-workflow-external-replay-check.txt"
 HTTP_LEDGER_ARTIFACT = "maf-workflow-http-ledger.jsonl"
 HTTP_REPLAY_ARTIFACT = "maf-workflow-http-replay-check.txt"
+RESOURCE_LEDGER_ARTIFACT = "maf-workflow-resource-ledger.jsonl"
+RESOURCE_REPLAY_ARTIFACT = "maf-workflow-resource-replay-check.txt"
 PARTIAL_COMMIT_ARTIFACT = "maf-workflow-partial-commit-check.txt"
 APPROVAL_PENDING_ARTIFACT = "maf-workflow-approval-pending-check.txt"
 REHYDRATE_DIVERGENCE_ARTIFACT = "maf-workflow-rehydrate-divergence-check.txt"
@@ -31,6 +33,7 @@ CHECKPOINT_DIR = "maf-workflow-checkpoints"
 CHECKPOINT_CONTINUITY_TASK = "maf-workflow-checkpoint-continuity"
 EXTERNAL_EFFECT_REPLAY_TASK = "maf-workflow-external-effect-replay"
 HTTP_EFFECT_REPLAY_TASK = "maf-workflow-http-effect-replay"
+RESOURCE_REPLAY_TASK = "maf-workflow-resource-replay"
 PARTIAL_COMMIT_REPLAY_TASK = "maf-workflow-partial-commit-replay"
 APPROVAL_PENDING_REPLAY_TASK = "maf-workflow-approval-pending-replay"
 REHYDRATE_DIVERGENCE_TASK = "maf-workflow-rehydrate-divergence"
@@ -38,6 +41,7 @@ SUPPORTED_TASKS = {
     CHECKPOINT_CONTINUITY_TASK,
     EXTERNAL_EFFECT_REPLAY_TASK,
     HTTP_EFFECT_REPLAY_TASK,
+    RESOURCE_REPLAY_TASK,
     PARTIAL_COMMIT_REPLAY_TASK,
     APPROVAL_PENDING_REPLAY_TASK,
     REHYDRATE_DIVERGENCE_TASK,
@@ -67,6 +71,8 @@ async def run_probe(workspace: Path, task_id: str, pre_timeout: float, restore_t
         return await run_external_effect_replay(workspace, pre_timeout, restore_timeout)
     if task_id == HTTP_EFFECT_REPLAY_TASK:
         return await run_http_effect_replay(workspace, pre_timeout, restore_timeout)
+    if task_id == RESOURCE_REPLAY_TASK:
+        return await run_resource_replay(workspace, pre_timeout, restore_timeout)
     if task_id == PARTIAL_COMMIT_REPLAY_TASK:
         return await run_partial_commit_replay(workspace, pre_timeout, restore_timeout)
     if task_id == APPROVAL_PENDING_REPLAY_TASK:
@@ -364,6 +370,8 @@ async def run_http_effect_replay(workspace: Path, pre_timeout: float, restore_ti
     witness_path = workspace / HTTP_REPLAY_ARTIFACT
     operation_id = "syncfuzz-maf-workflow-http-operation-1"
     events: list[dict[str, Any]] = []
+    owned_server: http.server.ThreadingHTTPServer | None = None
+    service_mode = "external-process"
 
     def ledger_entries() -> list[dict[str, Any]]:
         if not ledger_path.exists():
@@ -374,23 +382,33 @@ async def run_http_effect_replay(workspace: Path, pre_timeout: float, restore_ti
                 entries.append(json.loads(line))
         return entries
 
-    def append_service_entry(source: str, op_id: str) -> int:
+    def append_service_entry(source: str, op_id: str, *, service: str = "local-http-effect-server") -> int:
         entries = ledger_entries()
         entry = {
             "index": len(entries) + 1,
             "operation_id": op_id,
             "marker": EXTERNAL_MARKER,
             "source": source,
-            "service": "local-http-effect-server",
+            "service": service,
         }
         with ledger_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, sort_keys=True) + "\n")
-        events.append({"phase": "http-service-commit", "source": source, "entry_index": entry["index"]})
+        events.append({"phase": "http-service-commit", "source": source, "service": service, "entry_index": entry["index"]})
         return len([item for item in ledger_entries() if item.get("operation_id") == op_id])
 
     class EffectHandler(http.server.BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
-            if self.path != "/commit":
+            if self.path == "/reset":
+                if ledger_path.exists():
+                    ledger_path.unlink()
+                response = json.dumps({"ok": True}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+                return
+            if self.path != "/effect/commits":
                 self.send_response(404)
                 self.end_headers()
                 return
@@ -398,7 +416,7 @@ async def run_http_effect_replay(workspace: Path, pre_timeout: float, restore_ti
             body = self.rfile.read(length)
             try:
                 payload = json.loads(body.decode("utf-8"))
-                op_id = str(payload.get("operation_id") or operation_id)
+                op_id = str(payload.get("operation_id") or payload.get("operationId") or operation_id)
                 source = str(payload.get("source") or "unknown")
                 count = append_service_entry(source, op_id)
                 response = json.dumps({"ok": True, "count": count}).encode("utf-8")
@@ -418,22 +436,55 @@ async def run_http_effect_replay(workspace: Path, pre_timeout: float, restore_ti
         def log_message(self, format: str, *args: Any) -> None:
             return
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), EffectHandler)
-    server_thread = threading.Thread(target=server.serve_forever, name="syncfuzz-maf-http-effect-server", daemon=True)
-    server_thread.start()
-    service_url = f"http://127.0.0.1:{server.server_address[1]}"
+    configured_service_url = os.environ.get("MAF_WORKFLOW_EFFECT_SERVICE_URL", "").strip().rstrip("/")
+    if configured_service_url:
+        service_url = configured_service_url
+    else:
+        service_mode = "in-process-fallback"
+        owned_server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), EffectHandler)
+        server_thread = threading.Thread(
+            target=owned_server.serve_forever,
+            name="syncfuzz-maf-http-effect-server",
+            daemon=True,
+        )
+        server_thread.start()
+        service_url = f"http://127.0.0.1:{owned_server.server_address[1]}"
 
-    def post_commit(source: str, op_id: str) -> int:
-        payload = json.dumps({"operation_id": op_id, "source": source}).encode("utf-8")
+    def post_json(path: str, value: dict[str, Any]) -> dict[str, Any]:
+        payload = json.dumps(value).encode("utf-8")
         request = urllib.request.Request(
-            service_url + "/commit",
+            service_url + path,
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=3) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        return int(data.get("count") or 0)
+            return json.loads(response.read().decode("utf-8"))
+
+    def reset_service() -> None:
+        try:
+            if service_mode != "in-process-fallback" and ledger_path.exists():
+                ledger_path.unlink()
+            post_json("/reset", {})
+            events.append({"phase": "http-service-reset", "service_url": service_url, "service_mode": service_mode})
+        except Exception as exc:
+            events.append({"phase": "http-service-reset-failed", "service_url": service_url, "error": str(exc)})
+
+    def post_commit(source: str, op_id: str) -> int:
+        data = post_json(
+            "/effect/commits",
+            {
+                "operation_id": op_id,
+                "operationId": op_id,
+                "source": source,
+                "marker": EXTERNAL_MARKER,
+                "payload": {"task_id": HTTP_EFFECT_REPLAY_TASK},
+            },
+        )
+        count = int(data.get("count") or 0)
+        if service_mode != "in-process-fallback":
+            count = append_service_entry(source, op_id, service="external-http-effect-server")
+        return count
 
     class StartExecutor(Executor):
         def __init__(self) -> None:
@@ -463,7 +514,7 @@ async def run_http_effect_replay(workspace: Path, pre_timeout: float, restore_ti
             if self.write_witness:
                 label = "DUPLICATE_MAF_WORKFLOW_HTTP_EFFECT" if duplicate else "SINGLE_MAF_WORKFLOW_HTTP_EFFECT"
                 witness_path.write_text(
-                    f"{label}\nOPERATION_ID={op_id}\nMARKER={EXTERNAL_MARKER}\nENTRIES={count}\nSERVICE_URL={service_url}\n",
+                    f"{label}\nOPERATION_ID={op_id}\nMARKER={EXTERNAL_MARKER}\nENTRIES={count}\nSERVICE_URL={service_url}\nSERVICE_MODE={service_mode}\n",
                     encoding="utf-8",
                 )
                 await ctx.yield_output(label)
@@ -505,6 +556,7 @@ async def run_http_effect_replay(workspace: Path, pre_timeout: float, restore_ti
         "duplicate_effect_observed": False,
         "external_effect_entries": 0,
         "external_service_url": service_url,
+        "external_service_mode": service_mode,
         "external_service_observed": False,
         "operation_id": operation_id,
         "post_restore_outputs": [],
@@ -512,6 +564,7 @@ async def run_http_effect_replay(workspace: Path, pre_timeout: float, restore_ti
     }
 
     try:
+        reset_service()
         try:
             await asyncio.wait_for(
                 build_workflow(100, source="initial-run", write_witness=False).run("syncfuzz-start"),
@@ -559,8 +612,295 @@ async def run_http_effect_replay(workspace: Path, pre_timeout: float, restore_ti
             return 0
         return 1
     finally:
-        server.shutdown()
-        server.server_close()
+        if owned_server is not None:
+            owned_server.shutdown()
+            owned_server.server_close()
+
+
+async def run_resource_replay(workspace: Path, pre_timeout: float, restore_timeout: float) -> int:
+    from agent_framework import Executor, FileCheckpointStorage, WorkflowBuilder, WorkflowContext, handler
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir = workspace / CHECKPOINT_DIR
+    storage = FileCheckpointStorage(checkpoint_dir)
+    ledger_path = workspace / RESOURCE_LEDGER_ARTIFACT
+    witness_path = workspace / RESOURCE_REPLAY_ARTIFACT
+    operation_id = "syncfuzz-maf-workflow-resource-operation-1"
+    events: list[dict[str, Any]] = []
+    owned_server: http.server.ThreadingHTTPServer | None = None
+    service_mode = "external-process"
+
+    def ledger_entries() -> list[dict[str, Any]]:
+        if not ledger_path.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        for line in ledger_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                entries.append(json.loads(line))
+        return entries
+
+    def append_resource_entry(source: str, op_id: str, *, service: str, resource_id: str = "") -> int:
+        entries = ledger_entries()
+        entry = {
+            "index": len(entries) + 1,
+            "operation_id": op_id,
+            "marker": EXTERNAL_MARKER,
+            "source": source,
+            "service": service,
+            "resource_id": resource_id,
+        }
+        with ledger_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, sort_keys=True) + "\n")
+        events.append(
+            {
+                "phase": "resource-service-create",
+                "source": source,
+                "service": service,
+                "resource_id": resource_id,
+                "entry_index": entry["index"],
+            }
+        )
+        return len([item for item in ledger_entries() if item.get("operation_id") == op_id])
+
+    class ResourceHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path == "/reset":
+                if ledger_path.exists():
+                    ledger_path.unlink()
+                response = json.dumps({"ok": True}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+                return
+            if self.path != "/effect/resources":
+                self.send_response(404)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            try:
+                payload = json.loads(body.decode("utf-8"))
+                body_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+                op_id = str(body_payload.get("operation_id") or payload.get("operation_id") or operation_id)
+                source = str(body_payload.get("source") or payload.get("source") or "unknown")
+                resource_id = f"resource_{len(ledger_entries()) + 1}"
+                count = append_resource_entry(source, op_id, service="local-http-resource-service", resource_id=resource_id)
+                response = json.dumps(
+                    {
+                        "resource": {
+                            "id": resource_id,
+                            "kind": payload.get("kind") or "syncfuzz-maf-workflow-resource",
+                            "payload": payload.get("payload"),
+                        },
+                        "idempotentReplay": False,
+                        "count": count,
+                    }
+                ).encode("utf-8")
+                self.send_response(201)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+            except Exception as exc:
+                response = json.dumps({"ok": False, "error": str(exc)}).encode("utf-8")
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+    configured_service_url = os.environ.get("MAF_WORKFLOW_EFFECT_SERVICE_URL", "").strip().rstrip("/")
+    if configured_service_url:
+        service_url = configured_service_url
+    else:
+        service_mode = "in-process-fallback"
+        owned_server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ResourceHandler)
+        server_thread = threading.Thread(
+            target=owned_server.serve_forever,
+            name="syncfuzz-maf-resource-effect-server",
+            daemon=True,
+        )
+        server_thread.start()
+        service_url = f"http://127.0.0.1:{owned_server.server_address[1]}"
+
+    def post_json(path: str, value: dict[str, Any]) -> dict[str, Any]:
+        payload = json.dumps(value).encode("utf-8")
+        request = urllib.request.Request(
+            service_url + path,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=3) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def reset_service() -> None:
+        try:
+            if service_mode != "in-process-fallback" and ledger_path.exists():
+                ledger_path.unlink()
+            post_json("/reset", {})
+            events.append({"phase": "resource-service-reset", "service_url": service_url, "service_mode": service_mode})
+        except Exception as exc:
+            events.append({"phase": "resource-service-reset-failed", "service_url": service_url, "error": str(exc)})
+
+    def post_resource(source: str, op_id: str) -> int:
+        data = post_json(
+            "/effect/resources",
+            {
+                "kind": "syncfuzz-maf-workflow-resource",
+                "payload": {
+                    "operation_id": op_id,
+                    "marker": EXTERNAL_MARKER,
+                    "source": source,
+                    "task_id": RESOURCE_REPLAY_TASK,
+                },
+            },
+        )
+        resource = data.get("resource") if isinstance(data.get("resource"), dict) else {}
+        resource_id = str(resource.get("id") or "")
+        if service_mode != "in-process-fallback":
+            return append_resource_entry(
+                source,
+                op_id,
+                service="external-http-resource-service",
+                resource_id=resource_id,
+            )
+        return int(data.get("count") or len([entry for entry in ledger_entries() if entry.get("operation_id") == op_id]))
+
+    class StartExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="resource-start")
+
+        @handler
+        async def process(self, message: str, ctx: WorkflowContext[str]) -> None:
+            events.append({"phase": "resource-start", "message": message})
+            await ctx.send_message(operation_id)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            return {"operation_id": operation_id}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "resource-start-restore", "state": state})
+
+    class ResourceExecutor(Executor):
+        def __init__(self, *, source: str, write_witness: bool) -> None:
+            super().__init__(id="resource-effect")
+            self.source = source
+            self.write_witness = write_witness
+
+        @handler
+        async def process(self, op_id: str, ctx: WorkflowContext[Never, str]) -> None:
+            count = post_resource(self.source, op_id)
+            duplicate = count >= 2
+            if self.write_witness:
+                label = "DUPLICATE_MAF_WORKFLOW_RESOURCE_EFFECT" if duplicate else "SINGLE_MAF_WORKFLOW_RESOURCE_EFFECT"
+                witness_path.write_text(
+                    f"{label}\nOPERATION_ID={op_id}\nMARKER={EXTERNAL_MARKER}\nENTRIES={count}\nSERVICE_URL={service_url}\nSERVICE_MODE={service_mode}\n",
+                    encoding="utf-8",
+                )
+                await ctx.yield_output(label)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            return {"ledger_entries": len(ledger_entries()), "service_url": service_url}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "resource-effect-restore", "state": state})
+
+    def build_workflow(max_iterations: int, *, source: str, write_witness: bool):
+        start = StartExecutor()
+        resource = ResourceExecutor(source=source, write_witness=write_witness)
+        return (
+            WorkflowBuilder(
+                start_executor=start,
+                name=WORKFLOW_NAME + "-resource-replay",
+                checkpoint_storage=storage,
+                max_iterations=max_iterations,
+                output_from=[resource],
+            )
+            .add_edge(start, resource)
+            .build()
+        )
+
+    summary: dict[str, Any] = {
+        "schema_version": "syncfuzz.maf-workflow-checkpoint.v1",
+        "task_id": RESOURCE_REPLAY_TASK,
+        "workflow_name": WORKFLOW_NAME + "-resource-replay",
+        "checkpoint_backend": "file",
+        "checkpoint_dir": str(checkpoint_dir),
+        "checkpoint_ids": [],
+        "selected_checkpoint_id": "",
+        "selected_checkpoint_iteration": 0,
+        "restored": False,
+        "runtime_object_recreated": False,
+        "pre_restore_timed_out": False,
+        "post_restore_timed_out": False,
+        "duplicate_effect_observed": False,
+        "external_effect_entries": 0,
+        "external_service_url": service_url,
+        "external_service_mode": service_mode,
+        "external_service_observed": False,
+        "operation_id": operation_id,
+        "post_restore_outputs": [],
+        "events": events,
+    }
+
+    try:
+        reset_service()
+        try:
+            await asyncio.wait_for(
+                build_workflow(100, source="initial-run", write_witness=False).run("syncfuzz-start"),
+                timeout=pre_timeout,
+            )
+        except asyncio.TimeoutError:
+            summary["pre_restore_timed_out"] = True
+        except Exception as exc:
+            summary["pre_restore_error"] = f"{type(exc).__name__}: {exc}"
+            summary["pre_restore_traceback"] = traceback.format_exc(limit=4)
+
+        ids = checkpoint_ids(checkpoint_dir)
+        summary["checkpoint_ids"] = ids
+        if witness_path.exists():
+            witness_path.unlink()
+
+        if ids:
+            selected = ids[0]
+            summary["selected_checkpoint_id"] = selected
+            try:
+                result = await asyncio.wait_for(
+                    build_workflow(100, source="restored-run", write_witness=True).run(
+                        checkpoint_id=selected,
+                        checkpoint_storage=storage,
+                    ),
+                    timeout=restore_timeout,
+                )
+                summary["post_restore_outputs"] = [str(value) for value in result.get_outputs()]
+                summary["restored"] = True
+            except asyncio.TimeoutError:
+                summary["post_restore_timed_out"] = True
+                summary["restored"] = witness_path.exists()
+            except Exception as exc:
+                summary["post_restore_error"] = f"{type(exc).__name__}: {exc}"
+                summary["post_restore_traceback"] = traceback.format_exc(limit=4)
+                summary["restored"] = witness_path.exists()
+            summary["runtime_object_recreated"] = True
+
+        operation_entries = [entry for entry in ledger_entries() if entry.get("operation_id") == operation_id]
+        summary["external_effect_entries"] = len(operation_entries)
+        summary["external_service_observed"] = len(operation_entries) > 0
+        summary["duplicate_effect_observed"] = len(operation_entries) >= 2
+        write_json(workspace / SUMMARY_ARTIFACT, summary)
+        if summary["restored"] and summary["external_service_observed"] and summary["duplicate_effect_observed"]:
+            return 0
+        return 1
+    finally:
+        if owned_server is not None:
+            owned_server.shutdown()
+            owned_server.server_close()
 
 
 async def run_partial_commit_replay(workspace: Path, pre_timeout: float, restore_timeout: float) -> int:

@@ -2637,6 +2637,45 @@ func TestEvaluateMAFWorkflowHTTPReplayTargetOracleConfirmed(t *testing.T) {
 	}
 }
 
+func TestEvaluateMAFWorkflowResourceReplayTargetOracleConfirmed(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetMAFWorkflowResourceReplayArtifact), []byte("DUPLICATE_MAF_WORKFLOW_RESOURCE_EFFECT\nOPERATION_ID=syncfuzz-maf-workflow-resource-operation-1\nMARKER=SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT\nENTRIES=2\nSERVICE_URL=http://127.0.0.1:1\nSERVICE_MODE=external-process\n"), 0o644); err != nil {
+		t.Fatalf("write MAF workflow resource replay witness: %v", err)
+	}
+	summary := mafWorkflowCheckpointArtifactData{
+		SchemaVersion:           "syncfuzz.maf-workflow-checkpoint.v1",
+		WorkflowName:            "syncfuzz-maf-workflow-checkpoint-resource-replay",
+		CheckpointBackend:       "file",
+		CheckpointDir:           filepath.Join(tmp, "maf-workflow-checkpoints"),
+		CheckpointIDs:           []string{"checkpoint-a"},
+		SelectedCheckpointID:    "checkpoint-a",
+		Restored:                true,
+		RuntimeObjectRecreated:  true,
+		DuplicateEffectObserved: true,
+		ExternalEffectEntries:   2,
+		ExternalServiceObserved: true,
+		ExternalServiceURL:      "http://127.0.0.1:1",
+		ExternalServiceMode:     "external-process",
+		OperationID:             "syncfuzz-maf-workflow-resource-operation-1",
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("marshal MAF workflow artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, mafWorkflowArtifact), raw, 0o644); err != nil {
+		t.Fatalf("write MAF workflow artifact: %v", err)
+	}
+
+	oracle := evaluateTargetOracle(tmp, "maf-workflow-checkpoint", MAFWorkflowResourceReplayTargetTaskID, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !oracle.Confirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected confirmed MAF workflow resource replay oracle: %#v", oracle)
+	}
+	compliance := evaluateTargetTaskComplianceForTarget(tmp, "maf-workflow-checkpoint", MAFWorkflowResourceReplayTargetTaskID)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected compliant MAF workflow resource replay task: %#v", compliance)
+	}
+}
+
 func TestEvaluateMAFWorkflowPartialCommitTargetOracleConfirmed(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmp, TargetMAFWorkflowPartialCommitArtifact), []byte("DUPLICATE_PARTIAL_COMMIT_REPLAY\nOPERATION_ID=syncfuzz-maf-workflow-partial-operation-1\nMARKER=SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT\nENTRIES=2\n"), 0o644); err != nil {

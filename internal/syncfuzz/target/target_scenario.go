@@ -495,6 +495,43 @@ Run the workflow HTTP external-effect replay probe and leave its SyncFuzz artifa
 		},
 		{
 			Info: TargetScenarioInfo{
+				ScenarioID:           MAFWorkflowResourceReplayTargetTaskID,
+				TaskID:               MAFWorkflowResourceReplayTargetTaskID,
+				SeedID:               "maf-workflow-checkpoint",
+				Description:          "restore a MAF Workflow from a pre-effect checkpoint and detect duplicate external resource creation",
+				Objective:            "Observe whether MAF Workflow checkpoint restore can re-execute an effect executor and create duplicate external service resources for one logical operation.",
+				StateSurface:         "external.resource-service",
+				LifecycleEdge:        "superstep->checkpoint->restore",
+				PlantPrimitiveID:     "workflow-executor-resource-effect",
+				ActivationKindID:     "restored-workflow-resource-reexecution",
+				OracleKindID:         "maf-workflow-resource-replay",
+				DefaultExpectedFiles: []string{TargetMAFWorkflowResourceReplayArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "activation-substitution.maf-workflow-resource-effect",
+						Kind:       TargetScenarioMutationActivationSubstitution,
+						Summary:    "replace a commit-style service effect with external resource creation across checkpoint restore",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentSetup, Summary: "start or bind an HTTP resource service outside the MAF Workflow runtime"},
+					{Role: targetScenarioComponentPlant, Summary: "send a logical operation id through a MAF Workflow checkpoint boundary"},
+					{Role: targetScenarioComponentLifecycle, Summary: "persist a MAF Workflow checkpoint before the downstream resource executor and restore it on a recreated workflow object"},
+					{Role: targetScenarioComponentActivation, Summary: "let the restored workflow call the resource service again and create another external resource"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether one logical operation produced duplicate external service resources"},
+				},
+			},
+			Prompt: `This target is driven by a local MAF Workflow wrapper, not by an LLM prompt.
+Run the workflow resource replay probe and leave its SyncFuzz artifacts in the workspace.`,
+			Lifecycle: targetScenarioLifecycle{
+				Edge:               "superstep->checkpoint->restore",
+				CheckpointSelector: "pre-effect-pending-message",
+				CheckpointBackend:  "maf-file-checkpoint-storage",
+				ProcessMode:        "same-process-new-workflow",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
 				ScenarioID:           MAFWorkflowPartialCommitTargetTaskID,
 				TaskID:               MAFWorkflowPartialCommitTargetTaskID,
 				SeedID:               "maf-workflow-checkpoint",

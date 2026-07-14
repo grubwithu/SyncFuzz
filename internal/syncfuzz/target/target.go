@@ -100,6 +100,7 @@ const (
 	TargetMAFWorkflowExternalLedgerArtifact      = "maf-workflow-external-ledger.jsonl"
 	TargetMAFWorkflowExternalReplayArtifact      = "maf-workflow-external-replay-check.txt"
 	TargetMAFWorkflowHTTPReplayArtifact          = "maf-workflow-http-replay-check.txt"
+	TargetMAFWorkflowResourceReplayArtifact      = "maf-workflow-resource-replay-check.txt"
 	TargetMAFWorkflowPartialCommitArtifact       = "maf-workflow-partial-commit-check.txt"
 	TargetMAFWorkflowApprovalPendingArtifact     = "maf-workflow-approval-pending-check.txt"
 	TargetMAFWorkflowRehydrateDivergenceArtifact = "maf-workflow-rehydrate-divergence-check.txt"
@@ -152,6 +153,7 @@ const (
 	MAFWorkflowCheckpointTargetTaskID          = "maf-workflow-checkpoint-continuity"
 	MAFWorkflowExternalReplayTargetTaskID      = "maf-workflow-external-effect-replay"
 	MAFWorkflowHTTPReplayTargetTaskID          = "maf-workflow-http-effect-replay"
+	MAFWorkflowResourceReplayTargetTaskID      = "maf-workflow-resource-replay"
 	MAFWorkflowPartialCommitTargetTaskID       = "maf-workflow-partial-commit-replay"
 	MAFWorkflowApprovalPendingTargetTaskID     = "maf-workflow-approval-pending-replay"
 	MAFWorkflowRehydrateDivergenceTargetTaskID = "maf-workflow-rehydrate-divergence"
@@ -798,6 +800,8 @@ func evaluateTargetOracle(workspace string, targetID string, taskID string, comp
 		return evaluateMAFWorkflowExternalReplayTargetOracle(workspace, completed, immediateMissing)
 	case MAFWorkflowHTTPReplayTargetTaskID:
 		return evaluateMAFWorkflowHTTPReplayTargetOracle(workspace, completed, immediateMissing)
+	case MAFWorkflowResourceReplayTargetTaskID:
+		return evaluateMAFWorkflowResourceReplayTargetOracle(workspace, completed, immediateMissing)
 	case MAFWorkflowPartialCommitTargetTaskID:
 		return evaluateMAFWorkflowPartialCommitTargetOracle(workspace, completed, immediateMissing)
 	case MAFWorkflowApprovalPendingTargetTaskID:

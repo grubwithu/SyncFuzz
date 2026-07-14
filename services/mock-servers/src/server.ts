@@ -14,6 +14,15 @@ type EffectResource = {
   createdAt: string;
 };
 
+type EffectCommit = {
+  id: string;
+  operationId: string;
+  marker?: string;
+  source?: string;
+  payload: unknown;
+  createdAt: string;
+};
+
 type AuthorityToken = {
   token: string;
   scope: string;
@@ -28,6 +37,7 @@ type State = {
   effects: {
     resources: EffectResource[];
     events: unknown[];
+    commits: EffectCommit[];
   };
   authority: {
     tokens: AuthorityToken[];
@@ -80,7 +90,11 @@ const server = http.createServer(async (req: any, res: any) => {
       };
       state.effects.resources.push(resource);
       persistState();
-      return send(res, 201, { resource, idempotentReplay: false });
+      const operationId = operationIdFromPayload(resource.payload);
+      const count = operationId
+        ? state.effects.resources.filter((item) => operationIdFromPayload(item.payload) === operationId).length
+        : state.effects.resources.length;
+      return send(res, 201, { resource, idempotentReplay: false, count });
     }
 
     if (req.method === "POST" && url.pathname === "/effect/events") {
@@ -88,6 +102,27 @@ const server = http.createServer(async (req: any, res: any) => {
       state.effects.events.push({ ...body, receivedAt: new Date().toISOString() });
       persistState();
       return send(res, 201, { ok: true });
+    }
+
+    if (req.method === "POST" && url.pathname === "/effect/commits") {
+      const body = await readBody(req);
+      const operationId = asOptionalString(body.operationId) || asOptionalString(body.operation_id);
+      if (!operationId) {
+        return send(res, 400, { error: "missing_operation_id" });
+      }
+
+      const commit: EffectCommit = {
+        id: `commit_${state.effects.commits.length + 1}`,
+        operationId,
+        marker: asOptionalString(body.marker),
+        source: asOptionalString(body.source),
+        payload: body.payload ?? null,
+        createdAt: new Date().toISOString()
+      };
+      state.effects.commits.push(commit);
+      persistState();
+      const count = state.effects.commits.filter((item) => item.operationId === operationId).length;
+      return send(res, 201, { commit, count });
     }
 
     if (req.method === "POST" && url.pathname === "/authority/tokens") {
@@ -140,7 +175,8 @@ function emptyState(): State {
   return {
     effects: {
       resources: [],
-      events: []
+      events: [],
+      commits: []
     },
     authority: {
       tokens: []
@@ -153,10 +189,24 @@ function loadState(): State {
     if (!fs.existsSync(dbPath)) {
       return emptyState();
     }
-    return JSON.parse(fs.readFileSync(dbPath, "utf8"));
+    return normalizeState(JSON.parse(fs.readFileSync(dbPath, "utf8")));
   } catch {
     return emptyState();
   }
+}
+
+function normalizeState(value: any): State {
+  const empty = emptyState();
+  return {
+    effects: {
+      resources: Array.isArray(value?.effects?.resources) ? value.effects.resources : empty.effects.resources,
+      events: Array.isArray(value?.effects?.events) ? value.effects.events : empty.effects.events,
+      commits: Array.isArray(value?.effects?.commits) ? value.effects.commits : empty.effects.commits
+    },
+    authority: {
+      tokens: Array.isArray(value?.authority?.tokens) ? value.authority.tokens : empty.authority.tokens
+    }
+  };
 }
 
 function persistState(): void {
@@ -194,4 +244,12 @@ function readBody(req: any): Promise<any> {
 
 function asOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function operationIdFromPayload(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as { operation_id?: unknown; operationId?: unknown };
+  return asOptionalString(record.operation_id) || asOptionalString(record.operationId);
 }

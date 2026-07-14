@@ -189,6 +189,9 @@ func TestTargetTaskGroupsExposeMAFWorkspaceResidueBundle(t *testing.T) {
 	if !ContainsString(workflowGroup.Tasks, MAFWorkflowHTTPReplayTargetTaskID) {
 		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowHTTPReplayTargetTaskID, workflowGroup)
 	}
+	if !ContainsString(workflowGroup.Tasks, MAFWorkflowResourceReplayTargetTaskID) {
+		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowResourceReplayTargetTaskID, workflowGroup)
+	}
 	if !ContainsString(workflowGroup.Tasks, MAFWorkflowPartialCommitTargetTaskID) {
 		t.Fatalf("expected %s in maf-workflow: %#v", MAFWorkflowPartialCommitTargetTaskID, workflowGroup)
 	}
@@ -320,6 +323,26 @@ func TestTargetScenariosExposeMAFWorkflowHTTPReplay(t *testing.T) {
 	}
 	if focus, ok := TargetScenarioMutationFocus(info.Mutations); !ok || focus.Kind != TargetScenarioMutationActivationSubstitution {
 		t.Fatalf("expected activation-substitution focus for HTTP replay: %#v", info.Mutations)
+	}
+}
+
+func TestTargetScenariosExposeMAFWorkflowResourceReplay(t *testing.T) {
+	scenario, ok := targetScenarioByID(MAFWorkflowResourceReplayTargetTaskID)
+	if !ok {
+		t.Fatalf("expected MAF workflow resource replay scenario")
+	}
+	info := scenario.Info
+	if info.SeedID != "maf-workflow-checkpoint" || info.LifecycleEdge != "superstep->checkpoint->restore" {
+		t.Fatalf("unexpected MAF workflow resource replay metadata: %#v", info)
+	}
+	if info.StateSurface != "external.resource-service" || info.OracleKindID != "maf-workflow-resource-replay" {
+		t.Fatalf("unexpected MAF workflow resource replay state/oracle metadata: %#v", info)
+	}
+	if !ContainsString(info.DefaultExpectedFiles, TargetMAFWorkflowResourceReplayArtifact) {
+		t.Fatalf("expected MAF workflow resource replay witness: %#v", info.DefaultExpectedFiles)
+	}
+	if focus, ok := TargetScenarioMutationFocus(info.Mutations); !ok || focus.Kind != TargetScenarioMutationActivationSubstitution {
+		t.Fatalf("expected activation-substitution focus for resource replay: %#v", info.Mutations)
 	}
 }
 
