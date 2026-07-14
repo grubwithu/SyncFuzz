@@ -532,6 +532,43 @@ Run the workflow resource replay probe and leave its SyncFuzz artifacts in the w
 		},
 		{
 			Info: TargetScenarioInfo{
+				ScenarioID:           MAFWorkflowAuthorityReplayTargetTaskID,
+				TaskID:               MAFWorkflowAuthorityReplayTargetTaskID,
+				SeedID:               "maf-workflow-checkpoint",
+				Description:          "restore a MAF Workflow from a pre-authority-consume checkpoint and observe consumed token authority state",
+				Objective:            "Observe whether MAF Workflow checkpoint restore can replay use of an already consumed authority token and expose agent state versus authority state desynchronization.",
+				StateSurface:         "authority.token-state",
+				LifecycleEdge:        "superstep->checkpoint->restore",
+				PlantPrimitiveID:     "workflow-authority-token-issue",
+				ActivationKindID:     "restored-authority-token-consume",
+				OracleKindID:         "maf-workflow-authority-token-replay",
+				DefaultExpectedFiles: []string{TargetMAFWorkflowAuthorityReplayArtifact},
+				Mutations: []TargetScenarioMutation{
+					{
+						MutationID: "phase-shift.maf-workflow-authority-token-replay",
+						Kind:       TargetScenarioMutationPhaseShift,
+						Summary:    "shift the restore boundary between authority token issue and token consume so replay sees authority-side consumed state",
+					},
+				},
+				Components: []TargetScenarioComponent{
+					{Role: targetScenarioComponentSetup, Summary: "start or bind an authority service outside the MAF Workflow runtime"},
+					{Role: targetScenarioComponentPlant, Summary: "issue a service-side authority token and carry it through a MAF Workflow checkpoint boundary"},
+					{Role: targetScenarioComponentLifecycle, Summary: "persist a checkpoint after token issue but before token consume, then restore it on a recreated workflow object"},
+					{Role: targetScenarioComponentActivation, Summary: "let the restored workflow try to consume the same already-consumed authority token"},
+					{Role: targetScenarioComponentOracle, Summary: "classify whether authority state rejects the replay with token_already_consumed"},
+				},
+			},
+			Prompt: `This target is driven by a local MAF Workflow wrapper, not by an LLM prompt.
+Run the workflow authority token replay probe and leave its SyncFuzz artifacts in the workspace.`,
+			Lifecycle: targetScenarioLifecycle{
+				Edge:               "superstep->checkpoint->restore",
+				CheckpointSelector: "post-token-issue-pre-consume",
+				CheckpointBackend:  "maf-file-checkpoint-storage",
+				ProcessMode:        "same-process-new-workflow",
+			},
+		},
+		{
+			Info: TargetScenarioInfo{
 				ScenarioID:           MAFWorkflowPartialCommitTargetTaskID,
 				TaskID:               MAFWorkflowPartialCommitTargetTaskID,
 				SeedID:               "maf-workflow-checkpoint",

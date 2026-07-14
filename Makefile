@@ -179,6 +179,7 @@ help:
 	@echo "  make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-http-effect-replay"
 	@echo "  make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-http-effect-replay MAF_WORKFLOW_EFFECT_SERVICE_URL=http://127.0.0.1:8910"
 	@echo "  make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-resource-replay"
+	@echo "  make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-authority-token-replay"
 	@echo "  make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-approval-pending-replay"
 	@echo "  make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-rehydrate-divergence"
 	@echo "  make target-maf-github-copilot-shell-suite TARGET_GROUP=maf-baseline REPEAT=3"

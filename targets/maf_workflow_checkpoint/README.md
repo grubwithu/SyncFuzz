@@ -10,6 +10,7 @@ Current task:
 - `maf-workflow-external-effect-replay`
 - `maf-workflow-http-effect-replay`
 - `maf-workflow-resource-replay`
+- `maf-workflow-authority-token-replay`
 - `maf-workflow-partial-commit-replay`
 - `maf-workflow-approval-pending-replay`
 - `maf-workflow-rehydrate-divergence`
@@ -26,6 +27,8 @@ The wrapper writes:
 - `maf-workflow-http-replay-check.txt` for the HTTP external-service replay task
 - `maf-workflow-resource-ledger.jsonl` for the resource-service replay task
 - `maf-workflow-resource-replay-check.txt` for the resource-service replay task
+- `maf-workflow-authority-ledger.jsonl` for the authority-token replay task
+- `maf-workflow-authority-token-replay-check.txt` for the authority-token replay task
 - `maf-workflow-partial-commit-check.txt` for the partial-commit replay task
 - `maf-workflow-approval-pending-check.txt` for the approval-pending replay task
 - `maf-workflow-rehydrate-divergence-check.txt` for the resume-vs-rehydrate divergence task
@@ -43,12 +46,14 @@ make target-maf-workflow-checkpoint
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-external-effect-replay
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-http-effect-replay
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-resource-replay
+make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-authority-token-replay
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-partial-commit-replay
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-approval-pending-replay
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-rehydrate-divergence
 ```
 
-`maf-workflow-http-effect-replay` and `maf-workflow-resource-replay` can call a real mock service process instead
+`maf-workflow-http-effect-replay`, `maf-workflow-resource-replay`, and
+`maf-workflow-authority-token-replay` can call a real mock service process instead
 of the default in-process fallback. Start the mock server in one terminal:
 
 ```bash
@@ -61,6 +66,7 @@ Then run the workflow task against that service:
 ```bash
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-http-effect-replay MAF_WORKFLOW_EFFECT_SERVICE_URL=http://127.0.0.1:8910
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-resource-replay MAF_WORKFLOW_EFFECT_SERVICE_URL=http://127.0.0.1:8910
+make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-authority-token-replay MAF_WORKFLOW_EFFECT_SERVICE_URL=http://127.0.0.1:8910
 ```
 
 When `MAF_WORKFLOW_EFFECT_SERVICE_URL` is unset, the target starts a local

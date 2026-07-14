@@ -101,6 +101,7 @@ const (
 	TargetMAFWorkflowExternalReplayArtifact      = "maf-workflow-external-replay-check.txt"
 	TargetMAFWorkflowHTTPReplayArtifact          = "maf-workflow-http-replay-check.txt"
 	TargetMAFWorkflowResourceReplayArtifact      = "maf-workflow-resource-replay-check.txt"
+	TargetMAFWorkflowAuthorityReplayArtifact     = "maf-workflow-authority-token-replay-check.txt"
 	TargetMAFWorkflowPartialCommitArtifact       = "maf-workflow-partial-commit-check.txt"
 	TargetMAFWorkflowApprovalPendingArtifact     = "maf-workflow-approval-pending-check.txt"
 	TargetMAFWorkflowRehydrateDivergenceArtifact = "maf-workflow-rehydrate-divergence-check.txt"
@@ -111,6 +112,7 @@ const (
 	targetMAFSessionMarker                       = "SYNCFUZZ_MAF_SESSION_MARKER"
 	targetMAFWorkflowMarker                      = "SYNCFUZZ_MAF_WORKFLOW_MARKER"
 	targetMAFWorkflowExternalMarker              = "SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT"
+	targetMAFWorkflowAuthorityMarker             = "SYNCFUZZ_MAF_WORKFLOW_AUTHORITY_TOKEN"
 
 	DefaultTargetAdapterID                     = "command"
 	DefaultTargetTaskID                        = "orphan-process"
@@ -154,6 +156,7 @@ const (
 	MAFWorkflowExternalReplayTargetTaskID      = "maf-workflow-external-effect-replay"
 	MAFWorkflowHTTPReplayTargetTaskID          = "maf-workflow-http-effect-replay"
 	MAFWorkflowResourceReplayTargetTaskID      = "maf-workflow-resource-replay"
+	MAFWorkflowAuthorityReplayTargetTaskID     = "maf-workflow-authority-token-replay"
 	MAFWorkflowPartialCommitTargetTaskID       = "maf-workflow-partial-commit-replay"
 	MAFWorkflowApprovalPendingTargetTaskID     = "maf-workflow-approval-pending-replay"
 	MAFWorkflowRehydrateDivergenceTargetTaskID = "maf-workflow-rehydrate-divergence"
@@ -802,6 +805,8 @@ func evaluateTargetOracle(workspace string, targetID string, taskID string, comp
 		return evaluateMAFWorkflowHTTPReplayTargetOracle(workspace, completed, immediateMissing)
 	case MAFWorkflowResourceReplayTargetTaskID:
 		return evaluateMAFWorkflowResourceReplayTargetOracle(workspace, completed, immediateMissing)
+	case MAFWorkflowAuthorityReplayTargetTaskID:
+		return evaluateMAFWorkflowAuthorityReplayTargetOracle(workspace, completed, immediateMissing)
 	case MAFWorkflowPartialCommitTargetTaskID:
 		return evaluateMAFWorkflowPartialCommitTargetOracle(workspace, completed, immediateMissing)
 	case MAFWorkflowApprovalPendingTargetTaskID:

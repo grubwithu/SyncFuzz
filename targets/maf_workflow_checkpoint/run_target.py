@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import traceback
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,8 @@ HTTP_LEDGER_ARTIFACT = "maf-workflow-http-ledger.jsonl"
 HTTP_REPLAY_ARTIFACT = "maf-workflow-http-replay-check.txt"
 RESOURCE_LEDGER_ARTIFACT = "maf-workflow-resource-ledger.jsonl"
 RESOURCE_REPLAY_ARTIFACT = "maf-workflow-resource-replay-check.txt"
+AUTHORITY_LEDGER_ARTIFACT = "maf-workflow-authority-ledger.jsonl"
+AUTHORITY_REPLAY_ARTIFACT = "maf-workflow-authority-token-replay-check.txt"
 PARTIAL_COMMIT_ARTIFACT = "maf-workflow-partial-commit-check.txt"
 APPROVAL_PENDING_ARTIFACT = "maf-workflow-approval-pending-check.txt"
 REHYDRATE_DIVERGENCE_ARTIFACT = "maf-workflow-rehydrate-divergence-check.txt"
@@ -34,6 +37,7 @@ CHECKPOINT_CONTINUITY_TASK = "maf-workflow-checkpoint-continuity"
 EXTERNAL_EFFECT_REPLAY_TASK = "maf-workflow-external-effect-replay"
 HTTP_EFFECT_REPLAY_TASK = "maf-workflow-http-effect-replay"
 RESOURCE_REPLAY_TASK = "maf-workflow-resource-replay"
+AUTHORITY_TOKEN_REPLAY_TASK = "maf-workflow-authority-token-replay"
 PARTIAL_COMMIT_REPLAY_TASK = "maf-workflow-partial-commit-replay"
 APPROVAL_PENDING_REPLAY_TASK = "maf-workflow-approval-pending-replay"
 REHYDRATE_DIVERGENCE_TASK = "maf-workflow-rehydrate-divergence"
@@ -42,11 +46,13 @@ SUPPORTED_TASKS = {
     EXTERNAL_EFFECT_REPLAY_TASK,
     HTTP_EFFECT_REPLAY_TASK,
     RESOURCE_REPLAY_TASK,
+    AUTHORITY_TOKEN_REPLAY_TASK,
     PARTIAL_COMMIT_REPLAY_TASK,
     APPROVAL_PENDING_REPLAY_TASK,
     REHYDRATE_DIVERGENCE_TASK,
 }
 EXTERNAL_MARKER = "SYNCFUZZ_MAF_WORKFLOW_EXTERNAL_EFFECT"
+AUTHORITY_MARKER = "SYNCFUZZ_MAF_WORKFLOW_AUTHORITY_TOKEN"
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
@@ -60,7 +66,14 @@ def sha256_text(value: str) -> str:
 
 
 def checkpoint_ids(checkpoint_dir: Path) -> list[str]:
-    checkpoints = sorted(checkpoint_dir.glob("*.json"), key=lambda path: path.stat().st_mtime_ns)
+    def sort_key(path: Path) -> tuple[int, str, str]:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return int(data.get("iteration_count") or 0), str(data.get("timestamp") or ""), path.name
+        except Exception:
+            return 0, "", path.name
+
+    checkpoints = sorted(checkpoint_dir.glob("*.json"), key=sort_key)
     return [path.stem for path in checkpoints]
 
 
@@ -73,6 +86,8 @@ async def run_probe(workspace: Path, task_id: str, pre_timeout: float, restore_t
         return await run_http_effect_replay(workspace, pre_timeout, restore_timeout)
     if task_id == RESOURCE_REPLAY_TASK:
         return await run_resource_replay(workspace, pre_timeout, restore_timeout)
+    if task_id == AUTHORITY_TOKEN_REPLAY_TASK:
+        return await run_authority_token_replay(workspace, pre_timeout, restore_timeout)
     if task_id == PARTIAL_COMMIT_REPLAY_TASK:
         return await run_partial_commit_replay(workspace, pre_timeout, restore_timeout)
     if task_id == APPROVAL_PENDING_REPLAY_TASK:
@@ -895,6 +910,358 @@ async def run_resource_replay(workspace: Path, pre_timeout: float, restore_timeo
         summary["duplicate_effect_observed"] = len(operation_entries) >= 2
         write_json(workspace / SUMMARY_ARTIFACT, summary)
         if summary["restored"] and summary["external_service_observed"] and summary["duplicate_effect_observed"]:
+            return 0
+        return 1
+    finally:
+        if owned_server is not None:
+            owned_server.shutdown()
+            owned_server.server_close()
+
+
+async def run_authority_token_replay(workspace: Path, pre_timeout: float, restore_timeout: float) -> int:
+    from agent_framework import Executor, FileCheckpointStorage, WorkflowBuilder, WorkflowContext, handler
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir = workspace / CHECKPOINT_DIR
+    storage = FileCheckpointStorage(checkpoint_dir)
+    ledger_path = workspace / AUTHORITY_LEDGER_ARTIFACT
+    witness_path = workspace / AUTHORITY_REPLAY_ARTIFACT
+    operation_id = "syncfuzz-maf-workflow-authority-operation-1"
+    events: list[dict[str, Any]] = []
+    owned_server: http.server.ThreadingHTTPServer | None = None
+    service_mode = "external-process"
+
+    def ledger_entries() -> list[dict[str, Any]]:
+        if not ledger_path.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        for line in ledger_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                entries.append(json.loads(line))
+        return entries
+
+    def append_authority_entry(phase: str, source: str, token: str, status: int, *, error: str = "") -> int:
+        entries = ledger_entries()
+        entry = {
+            "index": len(entries) + 1,
+            "operation_id": operation_id,
+            "marker": AUTHORITY_MARKER,
+            "phase": phase,
+            "source": source,
+            "token": token,
+            "status": status,
+            "error": error,
+            "service_mode": service_mode,
+        }
+        with ledger_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, sort_keys=True) + "\n")
+        events.append(
+            {
+                "phase": "authority-" + phase,
+                "source": source,
+                "status": status,
+                "error": error,
+                "entry_index": entry["index"],
+            }
+        )
+        return len([item for item in ledger_entries() if item.get("operation_id") == operation_id])
+
+    class AuthorityHandler(http.server.BaseHTTPRequestHandler):
+        tokens: dict[str, dict[str, Any]] = {}
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path == "/reset":
+                self.__class__.tokens = {}
+                response = json.dumps({"ok": True}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            try:
+                payload = json.loads(body.decode("utf-8")) if body else {}
+                if self.path == "/authority/tokens":
+                    token_value = f"tok_{len(self.__class__.tokens) + 1}_{operation_id}"
+                    token = {
+                        "token": token_value,
+                        "scope": str(payload.get("scope") or "syncfuzz.workflow"),
+                        "subject": str(payload.get("subject") or operation_id),
+                        "consumed": False,
+                    }
+                    self.__class__.tokens[token_value] = token
+                    response = json.dumps({"token": token}).encode("utf-8")
+                    self.send_response(201)
+                elif self.path == "/authority/consume":
+                    token_value = str(payload.get("token") or "")
+                    token = self.__class__.tokens.get(token_value)
+                    if token is None:
+                        response = json.dumps({"error": "token_not_found"}).encode("utf-8")
+                        self.send_response(404)
+                    elif token.get("consumed"):
+                        response = json.dumps({"error": "token_already_consumed", "token": token}).encode("utf-8")
+                        self.send_response(409)
+                    else:
+                        token["consumed"] = True
+                        token["consumedBy"] = str(payload.get("operation") or "unknown")
+                        response = json.dumps({"token": token}).encode("utf-8")
+                        self.send_response(200)
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+            except Exception as exc:
+                response = json.dumps({"ok": False, "error": str(exc)}).encode("utf-8")
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+    configured_service_url = os.environ.get("MAF_WORKFLOW_EFFECT_SERVICE_URL", "").strip().rstrip("/")
+    if configured_service_url:
+        service_url = configured_service_url
+    else:
+        service_mode = "in-process-fallback"
+        owned_server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), AuthorityHandler)
+        server_thread = threading.Thread(
+            target=owned_server.serve_forever,
+            name="syncfuzz-maf-authority-service",
+            daemon=True,
+        )
+        server_thread.start()
+        service_url = f"http://127.0.0.1:{owned_server.server_address[1]}"
+
+    def request_json(path: str, value: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        payload = json.dumps(value).encode("utf-8")
+        request = urllib.request.Request(
+            service_url + path,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8")
+            try:
+                return exc.code, json.loads(raw)
+            except json.JSONDecodeError:
+                return exc.code, {"error": raw}
+
+    def reset_service() -> None:
+        try:
+            if ledger_path.exists():
+                ledger_path.unlink()
+            status, data = request_json("/reset", {})
+            events.append(
+                {
+                    "phase": "authority-service-reset",
+                    "service_url": service_url,
+                    "service_mode": service_mode,
+                    "status": status,
+                    "response": data,
+                }
+            )
+        except Exception as exc:
+            events.append({"phase": "authority-service-reset-failed", "service_url": service_url, "error": str(exc)})
+
+    def issue_token(source: str, op_id: str) -> str:
+        status, data = request_json(
+            "/authority/tokens",
+            {
+                "scope": "syncfuzz.workflow",
+                "subject": op_id,
+                "marker": AUTHORITY_MARKER,
+            },
+        )
+        token = data.get("token") if isinstance(data.get("token"), dict) else {}
+        token_value = str(token.get("token") or "")
+        append_authority_entry("issue", source, token_value, status)
+        return token_value
+
+    def consume_token(source: str, token: str) -> tuple[int, str]:
+        status, data = request_json(
+            "/authority/consume",
+            {
+                "token": token,
+                "operation": operation_id + ":" + source,
+                "marker": AUTHORITY_MARKER,
+            },
+        )
+        error = str(data.get("error") or "")
+        append_authority_entry("consume", source, token, status, error=error)
+        return status, error
+
+    class StartExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="authority-start")
+
+        @handler
+        async def process(self, message: str, ctx: WorkflowContext[str]) -> None:
+            events.append({"phase": "authority-start", "message": message})
+            await ctx.send_message(operation_id)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            return {"operation_id": operation_id}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "authority-start-restore", "state": state})
+
+    class IssueExecutor(Executor):
+        def __init__(self, *, source: str) -> None:
+            super().__init__(id="authority-issue")
+            self.source = source
+
+        @handler
+        async def process(self, op_id: str, ctx: WorkflowContext[str]) -> None:
+            token = issue_token(self.source, op_id)
+            await ctx.send_message(token)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            return {"ledger_entries": len(ledger_entries())}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "authority-issue-restore", "state": state})
+
+    class ConsumeExecutor(Executor):
+        def __init__(self, *, source: str, write_witness: bool) -> None:
+            super().__init__(id="authority-consume")
+            self.source = source
+            self.write_witness = write_witness
+
+        @handler
+        async def process(self, token: str, ctx: WorkflowContext[Never, str]) -> None:
+            status, error = consume_token(self.source, token)
+            conflict = status == 409 and error == "token_already_consumed"
+            if self.write_witness:
+                label = "AUTHORITY_TOKEN_REPLAY_CONFLICT" if conflict else "AUTHORITY_TOKEN_REPLAY_ACCEPTED"
+                witness_path.write_text(
+                    f"{label}\nOPERATION_ID={operation_id}\nTOKEN={token}\nMARKER={AUTHORITY_MARKER}\nSTATUS={status}\nERROR={error}\nSERVICE_URL={service_url}\nSERVICE_MODE={service_mode}\n",
+                    encoding="utf-8",
+                )
+                await ctx.yield_output(label)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            return {"ledger_entries": len(ledger_entries()), "service_url": service_url}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "authority-consume-restore", "state": state})
+
+    def build_workflow(max_iterations: int, *, source: str, write_witness: bool):
+        start = StartExecutor()
+        issue = IssueExecutor(source=source)
+        consume = ConsumeExecutor(source=source, write_witness=write_witness)
+        return (
+            WorkflowBuilder(
+                start_executor=start,
+                name=WORKFLOW_NAME + "-authority-token-replay",
+                checkpoint_storage=storage,
+                max_iterations=max_iterations,
+                output_from=[consume],
+            )
+            .add_edge(start, issue)
+            .add_edge(issue, consume)
+            .build()
+        )
+
+    summary: dict[str, Any] = {
+        "schema_version": "syncfuzz.maf-workflow-checkpoint.v1",
+        "task_id": AUTHORITY_TOKEN_REPLAY_TASK,
+        "workflow_name": WORKFLOW_NAME + "-authority-token-replay",
+        "checkpoint_backend": "file",
+        "checkpoint_dir": str(checkpoint_dir),
+        "checkpoint_ids": [],
+        "selected_checkpoint_id": "",
+        "selected_checkpoint_iteration": 0,
+        "restored": False,
+        "runtime_object_recreated": False,
+        "pre_restore_timed_out": False,
+        "post_restore_timed_out": False,
+        "external_effect_entries": 0,
+        "external_service_url": service_url,
+        "external_service_mode": service_mode,
+        "external_service_observed": False,
+        "authority_token_issued": False,
+        "authority_token_consumed": False,
+        "authority_replay_conflict_observed": False,
+        "operation_id": operation_id,
+        "post_restore_outputs": [],
+        "events": events,
+    }
+
+    try:
+        reset_service()
+        try:
+            await asyncio.wait_for(
+                build_workflow(100, source="initial-run", write_witness=False).run("syncfuzz-start"),
+                timeout=pre_timeout,
+            )
+        except asyncio.TimeoutError:
+            summary["pre_restore_timed_out"] = True
+        except Exception as exc:
+            summary["pre_restore_error"] = f"{type(exc).__name__}: {exc}"
+            summary["pre_restore_traceback"] = traceback.format_exc(limit=4)
+
+        ids = checkpoint_ids(checkpoint_dir)
+        summary["checkpoint_ids"] = ids
+        if witness_path.exists():
+            witness_path.unlink()
+
+        if ids:
+            selected_index = 1 if len(ids) > 1 else 0
+            selected = ids[selected_index]
+            summary["selected_checkpoint_id"] = selected
+            summary["selected_checkpoint_iteration"] = selected_index
+            try:
+                result = await asyncio.wait_for(
+                    build_workflow(100, source="restored-run", write_witness=True).run(
+                        checkpoint_id=selected,
+                        checkpoint_storage=storage,
+                    ),
+                    timeout=restore_timeout,
+                )
+                summary["post_restore_outputs"] = [str(value) for value in result.get_outputs()]
+                summary["restored"] = True
+            except asyncio.TimeoutError:
+                summary["post_restore_timed_out"] = True
+                summary["restored"] = witness_path.exists()
+            except Exception as exc:
+                summary["post_restore_error"] = f"{type(exc).__name__}: {exc}"
+                summary["post_restore_traceback"] = traceback.format_exc(limit=4)
+                summary["restored"] = witness_path.exists()
+            summary["runtime_object_recreated"] = True
+
+        operation_entries = [entry for entry in ledger_entries() if entry.get("operation_id") == operation_id]
+        summary["external_effect_entries"] = len(operation_entries)
+        summary["external_service_observed"] = len(operation_entries) > 0
+        summary["authority_token_issued"] = any(entry.get("phase") == "issue" for entry in operation_entries)
+        summary["authority_token_consumed"] = any(
+            entry.get("phase") == "consume" and int(entry.get("status") or 0) == 200 for entry in operation_entries
+        )
+        summary["authority_replay_conflict_observed"] = any(
+            entry.get("phase") == "consume"
+            and int(entry.get("status") or 0) == 409
+            and entry.get("error") == "token_already_consumed"
+            for entry in operation_entries
+        )
+        write_json(workspace / SUMMARY_ARTIFACT, summary)
+        if (
+            summary["restored"]
+            and summary["authority_token_issued"]
+            and summary["authority_token_consumed"]
+            and summary["authority_replay_conflict_observed"]
+        ):
             return 0
         return 1
     finally:
