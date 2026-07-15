@@ -122,6 +122,46 @@ func TestSummarizeTargetCoverageFrontierUsesPromptRepairForUnactivatedTask(t *te
 	}
 }
 
+func TestSummarizeTargetCoverageFrontierUsesActivationRepairForActivationPendingTask(t *testing.T) {
+	base := testTargetScenarioCandidateWithProfile("task-a", "seed-a", "primitive-a", target.TargetPromptProfileBaselineID)
+	base.PromptVariantID = target.TargetPromptVariantBaseID
+	base.CandidateID = targetScheduleCandidateIDWithVariant("test-target", base.TaskID, base.PromptProfileID, base.PromptVariantID)
+	lifecycle := base
+	lifecycle.PromptVariantID = target.TargetPromptVariantLifecycleBoundaryID
+	lifecycle.CandidateID = targetScheduleCandidateIDWithVariant("test-target", lifecycle.TaskID, lifecycle.PromptProfileID, lifecycle.PromptVariantID)
+	activation := base
+	activation.PromptVariantID = target.TargetPromptVariantActivationFocusID
+	activation.CandidateID = targetScheduleCandidateIDWithVariant("test-target", activation.TaskID, activation.PromptProfileID, activation.PromptVariantID)
+	other := testTargetScenarioCandidateWithProfile("task-b", "seed-b", "primitive-b", target.TargetPromptProfileBaselineID)
+
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates:    []TargetScheduleCandidate{base, lifecycle, activation, other},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	frontier := summarizeTargetCoverageFrontier(matrix, []TargetSuiteRunResult{
+		{
+			CandidateID:     base.CandidateID,
+			TaskID:          base.TaskID,
+			PromptProfileID: base.PromptProfileID,
+			PromptVariantID: base.PromptVariantID,
+			OutcomeCategory: corpus.TargetObservationActivationNotTriggered,
+			ActivationStage: TargetActivationStageActivationPending,
+		},
+	}, nil, 1)
+	if len(frontier) != 1 {
+		t.Fatalf("expected one frontier candidate, got %#v", frontier)
+	}
+	if frontier[0].CandidateID != activation.CandidateID {
+		t.Fatalf("expected activation-focused candidate, got %#v", frontier[0])
+	}
+	if frontier[0].SelectionMode != targetFrontierSelectionActivationRepair {
+		t.Fatalf("expected activation-repair selection mode, got %#v", frontier[0])
+	}
+}
+
 func TestSummarizeTargetCoverageFrontierUsesSeedExpansionAfterConfirmedHit(t *testing.T) {
 	matrix := &TargetScheduleMatrix{
 		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",

@@ -61,6 +61,47 @@ func TestRunTargetSuiteRepeatsSingleTask(t *testing.T) {
 	}
 }
 
+func TestTargetActivationStageForObservationPreservesProgressTaxonomy(t *testing.T) {
+	cases := []struct {
+		name string
+		in   corpus.TargetObservationDetails
+		want TargetActivationStage
+	}{
+		{
+			name: "execution",
+			in:   corpus.TargetObservationDetails{Category: corpus.TargetObservationExecutionNotReached},
+			want: TargetActivationStageExecutionPending,
+		},
+		{
+			name: "lifecycle",
+			in:   corpus.TargetObservationDetails{Category: corpus.TargetObservationLifecycleNotTriggered},
+			want: TargetActivationStageLifecyclePending,
+		},
+		{
+			name: "plant",
+			in:   corpus.TargetObservationDetails{Category: corpus.TargetObservationStateNotPlanted},
+			want: TargetActivationStageStateNotPlanted,
+		},
+		{
+			name: "activation",
+			in:   corpus.TargetObservationDetails{Category: corpus.TargetObservationActivationNotTriggered},
+			want: TargetActivationStageActivationPending,
+		},
+		{
+			name: "reached",
+			in:   corpus.TargetObservationDetails{Category: corpus.TargetObservationCleanNegative, ActivationReached: true},
+			want: TargetActivationStageActivationReached,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := targetActivationStageForObservation(tc.in); got != tc.want {
+				t.Fatalf("unexpected activation stage: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunTargetSuiteSupportsMultipleBuiltInTasks(t *testing.T) {
 	tmp := t.TempDir()
 	command := `case "$SYNCFUZZ_TASK_ID" in

@@ -2,7 +2,10 @@ package corpus_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
@@ -59,6 +62,68 @@ func TestReplayCorpusEntryReproducesSignature(t *testing.T) {
 	}
 	if result.OutcomeCategory != corpus.ReplayOutcomeReproduced {
 		t.Fatalf("expected reproduced outcome category, got %#v", result)
+	}
+}
+
+func TestReplayTargetCorpusEntryPreservesStoredExecutionPlan(t *testing.T) {
+	tmp := t.TempDir()
+	artifactDir := filepath.Join(tmp, "source-target-run")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create source artifact directory: %v", err)
+	}
+	signature := target.TargetSignature(target.DefaultTargetTaskID)
+	if err := core.WriteJSON(filepath.Join(artifactDir, target.TargetTaskArtifact), target.TargetTask{
+		SchemaVersion:  "syncfuzz.target-task.v1",
+		RunID:          "source-run",
+		AdapterID:      target.DefaultTargetAdapterID,
+		TargetID:       "execution-plan-replay-target",
+		TaskID:         target.DefaultTargetTaskID,
+		Prompt:         "write the process mode witness",
+		Command:        `printf '%s' "$SYNCFUZZ_LANGGRAPH_PROCESS_MODE" > late-effect`,
+		TimeoutMillis:  int64(time.Second / time.Millisecond),
+		ObserveDelayMs: 1,
+		Environment:    "local",
+		ExpectedFiles:  []string{"late-effect"},
+		Scenario: &target.TargetScenarioInfo{
+			TaskID: target.DefaultTargetTaskID,
+			ExecutionPlan: &target.TargetScenarioExecutionPlan{
+				ProcessMode: "mutated-mode",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write source target task: %v", err)
+	}
+	corpusDir := filepath.Join(tmp, "corpus")
+	entry := corpus.CorpusEntry{
+		ExecutionKind: corpus.CorpusExecutionTarget,
+		EntryID:       "target-execution-plan-replay",
+		SuiteID:       "suite-test",
+		RunID:         "source-run",
+		Kind:          "target-confirmed",
+		Signature:     signature,
+		AdapterID:     target.DefaultTargetAdapterID,
+		TargetID:      "execution-plan-replay-target",
+		TaskID:        target.DefaultTargetTaskID,
+		ArtifactDir:   artifactDir,
+	}
+	if err := corpus.AppendCorpusEntries(corpusDir, []corpus.CorpusEntry{entry}); err != nil {
+		t.Fatalf("append target corpus entry: %v", err)
+	}
+
+	result, err := corpus.ReplayCorpusEntry(context.Background(), corpus.ReplayOptions{
+		CorpusDir: corpusDir,
+		EntryID:   entry.EntryID,
+		OutDir:    filepath.Join(tmp, "replays"),
+	})
+	if err != nil {
+		t.Fatalf("ReplayCorpusEntry failed: %v", err)
+	}
+	witness, err := os.ReadFile(filepath.Join(result.RunArtifactDir, "workspace", "late-effect"))
+	if err != nil {
+		t.Fatalf("read replay witness: %v", err)
+	}
+	if string(witness) != "mutated-mode" {
+		t.Fatalf("expected stored execution plan during replay, got %q", witness)
 	}
 }
 

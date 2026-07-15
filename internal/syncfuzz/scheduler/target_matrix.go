@@ -151,6 +151,12 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 			if derived, ok := targetDerivedMutationFocusCandidate(candidate); ok {
 				candidates = append(candidates, derived)
 			}
+			if derived, ok := targetDerivedActivationFocusCandidate(candidate); ok {
+				candidates = append(candidates, derived)
+			}
+			if derived, ok := targetDerivedProcessModePhaseShiftCandidate(candidate); ok {
+				candidates = append(candidates, derived)
+			}
 		}
 	}
 
@@ -247,6 +253,61 @@ func targetDerivedLifecycleBoundaryCandidate(base TargetScheduleCandidate) (Targ
 	}
 	derived.Generated = true
 	derived.CandidateID = targetScheduleCandidateIDWithVariant(base.TargetID, base.TaskID, base.PromptProfileID, derived.PromptVariantID)
+	return derived, true
+}
+
+func targetDerivedActivationFocusCandidate(base TargetScheduleCandidate) (TargetScheduleCandidate, bool) {
+	if target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID {
+		return TargetScheduleCandidate{}, false
+	}
+	if strings.TrimSpace(base.ActivationKindID) == "" || !targetCandidateHasActivationMutation(base) {
+		return TargetScheduleCandidate{}, false
+	}
+
+	derived := base
+	derived.PromptVariantID = target.TargetPromptVariantActivationFocusID
+	if variant, err := targetPromptVariantInfo(derived.PromptVariantID); err == nil {
+		derived.PromptVariantDescription = variant.Description
+	}
+	derived.Generated = true
+	derived.CandidateID = targetScheduleCandidateIDWithVariant(base.TargetID, base.TaskID, base.PromptProfileID, derived.PromptVariantID)
+	return derived, true
+}
+
+func targetCandidateHasActivationMutation(candidate TargetScheduleCandidate) bool {
+	if candidate.MutationFocusKind == target.TargetScenarioMutationActivationSubstitution {
+		return true
+	}
+	for _, mutation := range candidate.Mutations {
+		if mutation.Kind == target.TargetScenarioMutationActivationSubstitution {
+			return true
+		}
+	}
+	return false
+}
+
+func targetDerivedProcessModePhaseShiftCandidate(base TargetScheduleCandidate) (TargetScheduleCandidate, bool) {
+	if target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID || base.ExecutionPlan == nil {
+		return TargetScheduleCandidate{}, false
+	}
+	if strings.TrimSpace(base.ExecutionPlan.ProcessMode) != "split-process" {
+		return TargetScheduleCandidate{}, false
+	}
+
+	const mutationID = "phase-shift.process-mode.single-process"
+	derived := base
+	plan := *base.ExecutionPlan
+	plan.ProcessMode = "single"
+	derived.ExecutionPlan = &plan
+	derived.Generated = true
+	derived.MutationFocusID = mutationID
+	derived.MutationFocusKind = target.TargetScenarioMutationPhaseShift
+	derived.Mutations = append(append([]target.TargetScenarioMutation{}, base.Mutations...), target.TargetScenarioMutation{
+		MutationID: mutationID,
+		Kind:       target.TargetScenarioMutationPhaseShift,
+		Summary:    "run the same checkpoint operation in one runtime process instead of splitting initial and resumed phases",
+	})
+	derived.CandidateID = base.CandidateID + "/phase-shift-single-process"
 	return derived, true
 }
 

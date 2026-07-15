@@ -47,9 +47,10 @@ type targetExplorationState struct {
 }
 
 type targetPromptRepairFeedback struct {
-	taskScores       map[string]int
-	seenRealizations map[string]map[string]struct{}
-	selected         map[string]struct{}
+	taskScores        map[string]int
+	preferredVariants map[string]string
+	seenRealizations  map[string]map[string]struct{}
+	selected          map[string]struct{}
 }
 
 type targetVariantExpansionContext struct {
@@ -162,6 +163,9 @@ func targetFeedbackSummaryLess(left TargetCandidateSummary, right TargetCandidat
 	}
 	if left.ContractViolations != right.ContractViolations {
 		return left.ContractViolations > right.ContractViolations
+	}
+	if left.ActivationProgressScore != right.ActivationProgressScore {
+		return left.ActivationProgressScore > right.ActivationProgressScore
 	}
 	if left.ActivationReached != right.ActivationReached {
 		return left.ActivationReached > right.ActivationReached
@@ -853,9 +857,10 @@ func newTargetPromptRepairFeedback(summaryByCandidate map[string]TargetCandidate
 		return nil
 	}
 	type taskState struct {
-		seenRealizations  map[string]struct{}
-		activationReached int
-		repairScore       int
+		seenRealizations      map[string]struct{}
+		preferredVariantScore map[string]int
+		activationReached     int
+		repairScore           int
 	}
 	tasks := make(map[string]*taskState)
 	for _, summary := range summaryByCandidate {
@@ -865,30 +870,52 @@ func newTargetPromptRepairFeedback(summaryByCandidate map[string]TargetCandidate
 		state := tasks[summary.TaskID]
 		if state == nil {
 			state = &taskState{
-				seenRealizations: make(map[string]struct{}),
+				seenRealizations:      make(map[string]struct{}),
+				preferredVariantScore: make(map[string]int),
 			}
 			tasks[summary.TaskID] = state
 		}
 		state.seenRealizations[targetPromptRepairRealizationID(summary.PromptProfileID, summary.PromptVariantID)] = struct{}{}
 		state.activationReached += summary.ActivationReached
-		state.repairScore += targetPromptRepairOutcomeCount(summary, corpus.TargetObservationExecutionNotReached) * targetPromptRepairOutcomeWeight(corpus.TargetObservationExecutionNotReached)
-		state.repairScore += targetPromptRepairOutcomeCount(summary, corpus.TargetObservationTaskNoncompliant) * targetPromptRepairOutcomeWeight(corpus.TargetObservationTaskNoncompliant)
-		state.repairScore += targetPromptRepairOutcomeCount(summary, corpus.TargetObservationLifecycleNotTriggered) * targetPromptRepairOutcomeWeight(corpus.TargetObservationLifecycleNotTriggered)
-		state.repairScore += targetPromptRepairOutcomeCount(summary, corpus.TargetObservationStateNotPlanted) * targetPromptRepairOutcomeWeight(corpus.TargetObservationStateNotPlanted)
-		state.repairScore += targetPromptRepairOutcomeCount(summary, corpus.TargetObservationActivationNotTriggered) * targetPromptRepairOutcomeWeight(corpus.TargetObservationActivationNotTriggered)
-		state.repairScore += targetPromptRepairOutcomeCount(summary, corpus.TargetObservationOracleInconclusive) * targetPromptRepairOutcomeWeight(corpus.TargetObservationOracleInconclusive)
+		summaryRepairScore := 0
+		for _, outcome := range summary.OutcomeSummaries {
+			weight := outcome.TotalRuns * targetPromptRepairOutcomeWeight(outcome.Category)
+			summaryRepairScore += weight
+			state.repairScore += weight
+			if variantID := targetPromptRepairVariantForOutcome(outcome.Category); variantID != "" {
+				state.preferredVariantScore[variantID] += weight
+			}
+		}
+		if summaryRepairScore == 0 && summary.ActivationReached == 0 {
+			stage := summary.MaxActivationStage
+			if stage == "" {
+				stage = targetCandidateMaxActivationStage(summary.ActivationSummaries)
+			}
+			category := targetPromptRepairCategoryForStage(stage)
+			runs := summary.Runs
+			if runs < 1 {
+				runs = 1
+			}
+			weight := runs * targetPromptRepairOutcomeWeight(category)
+			state.repairScore += weight
+			if variantID := targetPromptRepairVariantForOutcome(category); variantID != "" {
+				state.preferredVariantScore[variantID] += weight
+			}
+		}
 	}
 
 	feedback := &targetPromptRepairFeedback{
-		taskScores:       make(map[string]int),
-		seenRealizations: make(map[string]map[string]struct{}),
-		selected:         make(map[string]struct{}),
+		taskScores:        make(map[string]int),
+		preferredVariants: make(map[string]string),
+		seenRealizations:  make(map[string]map[string]struct{}),
+		selected:          make(map[string]struct{}),
 	}
 	for taskID, state := range tasks {
 		if state.activationReached > 0 || state.repairScore <= 0 {
 			continue
 		}
 		feedback.taskScores[taskID] = state.repairScore
+		feedback.preferredVariants[taskID] = targetPromptRepairPreferredVariant(state.preferredVariantScore)
 		feedback.seenRealizations[taskID] = state.seenRealizations
 	}
 	if len(feedback.taskScores) == 0 {
@@ -902,9 +929,10 @@ func newTargetPromptRepairFeedbackFromResults(candidateByID map[string]TargetSch
 		return nil
 	}
 	type taskState struct {
-		seenRealizations  map[string]struct{}
-		activationReached int
-		repairScore       int
+		seenRealizations      map[string]struct{}
+		preferredVariantScore map[string]int
+		activationReached     int
+		repairScore           int
 	}
 	tasks := make(map[string]*taskState)
 	for _, result := range results {
@@ -928,7 +956,8 @@ func newTargetPromptRepairFeedbackFromResults(candidateByID map[string]TargetSch
 		state := tasks[taskID]
 		if state == nil {
 			state = &taskState{
-				seenRealizations: make(map[string]struct{}),
+				seenRealizations:      make(map[string]struct{}),
+				preferredVariantScore: make(map[string]int),
 			}
 			tasks[taskID] = state
 		}
@@ -936,34 +965,36 @@ func newTargetPromptRepairFeedbackFromResults(candidateByID map[string]TargetSch
 		if result.ActivationStage == TargetActivationStageActivationReached {
 			state.activationReached++
 		}
-		state.repairScore += targetPromptRepairOutcomeWeight(result.OutcomeCategory)
+		category := result.OutcomeCategory
+		weight := targetPromptRepairOutcomeWeight(category)
+		if weight == 0 && result.ActivationStage != TargetActivationStageActivationReached {
+			category = targetPromptRepairCategoryForStage(result.ActivationStage)
+			weight = targetPromptRepairOutcomeWeight(category)
+		}
+		state.repairScore += weight
+		if variantID := targetPromptRepairVariantForOutcome(category); variantID != "" {
+			state.preferredVariantScore[variantID] += weight
+		}
 	}
 
 	feedback := &targetPromptRepairFeedback{
-		taskScores:       make(map[string]int),
-		seenRealizations: make(map[string]map[string]struct{}),
-		selected:         make(map[string]struct{}),
+		taskScores:        make(map[string]int),
+		preferredVariants: make(map[string]string),
+		seenRealizations:  make(map[string]map[string]struct{}),
+		selected:          make(map[string]struct{}),
 	}
 	for taskID, state := range tasks {
 		if state.activationReached > 0 || state.repairScore <= 0 {
 			continue
 		}
 		feedback.taskScores[taskID] = state.repairScore
+		feedback.preferredVariants[taskID] = targetPromptRepairPreferredVariant(state.preferredVariantScore)
 		feedback.seenRealizations[taskID] = state.seenRealizations
 	}
 	if len(feedback.taskScores) == 0 {
 		return nil
 	}
 	return feedback
-}
-
-func targetPromptRepairOutcomeCount(summary TargetCandidateSummary, category corpus.TargetObservationCategory) int {
-	for _, item := range summary.OutcomeSummaries {
-		if item.Category == category {
-			return item.TotalRuns
-		}
-	}
-	return 0
 }
 
 func targetPromptRepairOutcomeWeight(category corpus.TargetObservationCategory) int {
@@ -985,6 +1016,48 @@ func targetPromptRepairOutcomeWeight(category corpus.TargetObservationCategory) 
 	}
 }
 
+func targetPromptRepairVariantForOutcome(category corpus.TargetObservationCategory) string {
+	switch category {
+	case corpus.TargetObservationLifecycleNotTriggered:
+		return target.TargetPromptVariantLifecycleBoundaryID
+	case corpus.TargetObservationStateNotPlanted:
+		return target.TargetPromptVariantMutationFocusID
+	case corpus.TargetObservationActivationNotTriggered:
+		return target.TargetPromptVariantActivationFocusID
+	default:
+		return ""
+	}
+}
+
+func targetPromptRepairCategoryForStage(stage TargetActivationStage) corpus.TargetObservationCategory {
+	switch stage {
+	case TargetActivationStageExecutionPending:
+		return corpus.TargetObservationExecutionNotReached
+	case TargetActivationStageTaskNoncompliant:
+		return corpus.TargetObservationTaskNoncompliant
+	case TargetActivationStageLifecyclePending:
+		return corpus.TargetObservationLifecycleNotTriggered
+	case TargetActivationStageStateNotPlanted:
+		return corpus.TargetObservationStateNotPlanted
+	case TargetActivationStageActivationPending:
+		return corpus.TargetObservationActivationNotTriggered
+	default:
+		return ""
+	}
+}
+
+func targetPromptRepairPreferredVariant(scores map[string]int) string {
+	bestVariant := ""
+	bestScore := 0
+	for variantID, score := range scores {
+		if score > bestScore || (score == bestScore && targetPromptVariantRank(variantID) > targetPromptVariantRank(bestVariant)) {
+			bestVariant = variantID
+			bestScore = score
+		}
+	}
+	return bestVariant
+}
+
 func targetPromptRepairScore(candidate TargetScheduleCandidate, feedback *targetPromptRepairFeedback) int {
 	if feedback == nil || candidate.TaskID == "" {
 		return 0
@@ -1000,7 +1073,21 @@ func targetPromptRepairScore(candidate TargetScheduleCandidate, feedback *target
 	if _, ok := seenRealizations[targetPromptRepairRealizationID(candidate.PromptProfileID, candidate.PromptVariantID)]; ok {
 		return 0
 	}
+	if target.NormalizeTargetPromptVariantID(candidate.PromptVariantID) == feedback.preferredVariants[candidate.TaskID] {
+		score += 3
+	}
 	return score
+}
+
+func targetPromptRepairPreferredVariantForCandidate(candidate TargetScheduleCandidate, feedback *targetPromptRepairFeedback) string {
+	if feedback == nil || candidate.TaskID == "" {
+		return ""
+	}
+	variantID := feedback.preferredVariants[candidate.TaskID]
+	if variantID == "" || target.NormalizeTargetPromptVariantID(candidate.PromptVariantID) != variantID {
+		return ""
+	}
+	return variantID
 }
 
 func targetConsumePromptRepair(feedback *targetPromptRepairFeedback, candidate TargetScheduleCandidate) {

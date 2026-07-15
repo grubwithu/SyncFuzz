@@ -24,6 +24,9 @@ INCLUDE_PLANNED ?= false
 FEEDBACK_FROM ?=
 CANDIDATE_LIMIT ?= 0
 MINIMIZE_FROM ?=
+MINIMIZE_EXECUTE ?= false
+MINIMIZE_CANDIDATE_LIMIT ?= 1
+MINIMIZE_MAX_TRIALS ?= 32
 
 # Generic target runner
 TARGET_ADAPTER ?= command
@@ -147,6 +150,7 @@ help:
 	@echo "  make target-prompt-profiles"
 	@echo "  make target-matrix TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=all"
 	@echo "  make target-minimize MINIMIZE_FROM=runs/target-suite-<id>/target-suite-result.json"
+	@echo "  make target-minimize MINIMIZE_FROM=runs/target-suite-<id>/target-suite-result.json MINIMIZE_EXECUTE=true MINIMIZE_MAX_TRIALS=16"
 	@echo "  make target-run TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh"
 	@echo "  make target-suite TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh REPEAT=3"
 	@echo "  make target-matrix-suite TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=all"
@@ -272,8 +276,8 @@ target-matrix:
 	$(SYNCFUZZ) target matrix --target $(TARGET_ID) --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS)
 
 target-minimize:
-	@test -n "$(MINIMIZE_FROM)" || (echo "usage: make target-minimize MINIMIZE_FROM=runs/target-suite-<id>/target-suite-result.json"; exit 2)
-	$(SYNCFUZZ) target minimize --from $(MINIMIZE_FROM) --out $(OUT)
+	@test -n "$(MINIMIZE_FROM)" || (echo "usage: make target-minimize MINIMIZE_FROM=runs/target-suite-<id>/target-suite-result.json [MINIMIZE_EXECUTE=true]"; exit 2)
+	$(SYNCFUZZ) target minimize --from $(MINIMIZE_FROM) --out $(OUT) $(if $(filter true,$(MINIMIZE_EXECUTE)),--execute --candidate-limit $(MINIMIZE_CANDIDATE_LIMIT) --max-trials $(MINIMIZE_MAX_TRIALS),)
 
 target-run:
 	$(LOAD_DOTENV); $(SYNCFUZZ) target run --adapter $(TARGET_ADAPTER) --target $(TARGET_ID) --task $(TARGET_TASK) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_RUN_ARGS) $(TARGET_COMMAND_ARGS) $(TARGET_COMMAND_FILE_ARGS)

@@ -234,10 +234,11 @@ func TestSummarizeTargetDimensionCoverageGainTracksNewValuesAndTransitions(t *te
 func TestSummarizeTargetDimensionCoverageGainStatsWeightsProgress(t *testing.T) {
 	gains := []TargetDimensionCoverageGainSummary{
 		{
-			Dimension:                  "seed_id",
-			NewExecutedValues:          []string{"seed-a"},
-			NewConfirmedValues:         []string{"seed-a"},
-			NewActivationReachedValues: []string{"seed-a"},
+			Dimension:                   "seed_id",
+			NewExecutedValues:           []string{"seed-a"},
+			NewConfirmedValues:          []string{"seed-a"},
+			NewActivationProgressValues: []string{"seed-a"},
+			NewActivationReachedValues:  []string{"seed-a"},
 		},
 		{
 			Dimension:         "task_id",
@@ -246,12 +247,50 @@ func TestSummarizeTargetDimensionCoverageGainStatsWeightsProgress(t *testing.T) 
 	}
 
 	stats := summarizeTargetDimensionCoverageGainStats(gains)
-	if stats.NewExecutedCount != 2 || stats.NewConfirmedCount != 1 || stats.NewActivationReachedCount != 1 {
+	if stats.NewExecutedCount != 2 || stats.NewConfirmedCount != 1 || stats.NewActivationProgressCount != 1 || stats.NewActivationReachedCount != 1 {
 		t.Fatalf("unexpected coverage gain counts: %#v", stats)
 	}
-	wantScore := targetDimensionGapWeight("seed_id")*6 + targetDimensionGapWeight("task_id")
+	wantScore := targetDimensionGapWeight("seed_id")*8 + targetDimensionGapWeight("task_id")
 	if stats.WeightedScore != wantScore {
 		t.Fatalf("unexpected weighted score: got %d want %d", stats.WeightedScore, wantScore)
+	}
+}
+
+func TestSummarizeTargetDimensionCoverageGainTracksIntermediateActivationProgress(t *testing.T) {
+	universe := []TargetScheduleCandidate{
+		{
+			CandidateID:      "cand-a",
+			TaskID:           "task-a",
+			SeedID:           "seed-a",
+			PlantPrimitiveID: "primitive-a",
+			ActivationKindID: "activation-a",
+			OracleKindID:     "oracle-a",
+		},
+	}
+	previous := []TargetSuiteRunResult{
+		{
+			CandidateID:     "cand-a",
+			ActivationStage: TargetActivationStageLifecyclePending,
+		},
+	}
+	current := []TargetSuiteRunResult{
+		{
+			CandidateID:     "cand-a",
+			ActivationStage: TargetActivationStageActivationPending,
+		},
+	}
+
+	gains := summarizeTargetDimensionCoverageGain(universe, previous, current)
+	taskGain := findTargetDimensionCoverageGain(t, gains, "task_id")
+	if len(taskGain.NewExecutedValues) != 0 || len(taskGain.NewActivationReachedValues) != 0 {
+		t.Fatalf("expected only intermediate progress gain, got %#v", taskGain)
+	}
+	if len(taskGain.NewActivationProgressValues) != 1 || taskGain.NewActivationProgressValues[0] != "task-a" {
+		t.Fatalf("unexpected activation progress gain: %#v", taskGain)
+	}
+	stats := summarizeTargetDimensionCoverageGainStats(gains)
+	if stats.NewActivationProgressCount == 0 || stats.WeightedScore <= 0 {
+		t.Fatalf("expected activation progress to contribute to gain stats: %#v", stats)
 	}
 }
 

@@ -155,12 +155,18 @@ func replayTargetEntry(ctx context.Context, entry CorpusEntry, opts ReplayOption
 	if err != nil {
 		return nil, err
 	}
+	var executionPlan *target.TargetScenarioExecutionPlan
+	if task.Scenario != nil && task.Scenario.ExecutionPlan != nil {
+		plan := *task.Scenario.ExecutionPlan
+		executionPlan = &plan
+	}
 
 	runResult, err := target.RunTarget(ctx, target.TargetRunOptions{
 		AdapterID:        task.AdapterID,
 		TargetID:         task.TargetID,
 		TaskID:           task.TaskID,
 		Objective:        task.Objective,
+		ExecutionPlan:    executionPlan,
 		PromptProfileID:  task.PromptProfileID,
 		PromptVariantID:  task.PromptVariantID,
 		Prompt:           task.Prompt,

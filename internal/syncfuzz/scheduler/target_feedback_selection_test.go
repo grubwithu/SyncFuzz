@@ -336,6 +336,82 @@ func TestSelectTargetMatrixCandidatesSkipsPromptRepairOnceActivationReached(t *t
 	}
 }
 
+func TestPromptRepairPrefersActivationVariantAfterActivationPendingOutcome(t *testing.T) {
+	feedback := newTargetPromptRepairFeedback(map[string]TargetCandidateSummary{
+		"test-target/task-a": {
+			CandidateID:     "test-target/task-a",
+			TaskID:          "task-a",
+			PromptProfileID: target.TargetPromptProfileBaselineID,
+			PromptVariantID: target.TargetPromptVariantBaseID,
+			OutcomeSummaries: []TargetSuiteOutcomeStats{
+				{Category: corpus.TargetObservationActivationNotTriggered, TotalRuns: 1},
+			},
+		},
+	})
+	if feedback == nil {
+		t.Fatal("expected activation-pending outcome to create prompt repair feedback")
+	}
+
+	lifecycle := testTargetScheduleCandidate("task-a", target.TargetPromptProfileBaselineID)
+	lifecycle.PromptVariantID = target.TargetPromptVariantLifecycleBoundaryID
+	activation := lifecycle
+	activation.PromptVariantID = target.TargetPromptVariantActivationFocusID
+
+	activationScore := targetPromptRepairScore(activation, feedback)
+	lifecycleScore := targetPromptRepairScore(lifecycle, feedback)
+	if activationScore <= lifecycleScore {
+		t.Fatalf("expected activation-focused repair to score higher: activation=%d lifecycle=%d", activationScore, lifecycleScore)
+	}
+}
+
+func TestPromptRepairUsesActivationStageWhenOutcomeSummaryIsUnavailable(t *testing.T) {
+	feedback := newTargetPromptRepairFeedback(map[string]TargetCandidateSummary{
+		"test-target/task-a": {
+			CandidateID:     "test-target/task-a",
+			TaskID:          "task-a",
+			PromptProfileID: target.TargetPromptProfileBaselineID,
+			PromptVariantID: target.TargetPromptVariantBaseID,
+			Runs:            2,
+			ActivationSummaries: []TargetSuiteActivationStats{
+				{Stage: TargetActivationStageStateNotPlanted, TotalRuns: 2},
+			},
+		},
+	})
+	if feedback == nil {
+		t.Fatal("expected stage-only feedback to create a prompt repair signal")
+	}
+
+	mutation := testTargetScheduleCandidate("task-a", target.TargetPromptProfileBaselineID)
+	mutation.PromptVariantID = target.TargetPromptVariantMutationFocusID
+	lifecycle := mutation
+	lifecycle.PromptVariantID = target.TargetPromptVariantLifecycleBoundaryID
+	if targetPromptRepairScore(mutation, feedback) <= targetPromptRepairScore(lifecycle, feedback) {
+		t.Fatal("expected state-not-planted progress to prefer mutation-focused repair")
+	}
+}
+
+func TestPromptRepairFromResultsUsesActivationStageWhenOutcomeIsUnavailable(t *testing.T) {
+	base := testTargetScheduleCandidate("task-a", target.TargetPromptProfileBaselineID)
+	candidates := map[string]TargetScheduleCandidate{base.CandidateID: base}
+	feedback := newTargetPromptRepairFeedbackFromResults(candidates, []TargetSuiteRunResult{
+		{
+			CandidateID:     base.CandidateID,
+			ActivationStage: TargetActivationStageActivationPending,
+		},
+	})
+	if feedback == nil {
+		t.Fatal("expected stage-only run result to create prompt repair feedback")
+	}
+
+	activation := base
+	activation.PromptVariantID = target.TargetPromptVariantActivationFocusID
+	lifecycle := base
+	lifecycle.PromptVariantID = target.TargetPromptVariantLifecycleBoundaryID
+	if targetPromptRepairScore(activation, feedback) <= targetPromptRepairScore(lifecycle, feedback) {
+		t.Fatal("expected activation-pending stage to prefer activation-focused repair")
+	}
+}
+
 func TestSelectTargetMatrixCandidatesPrefersSeedExpansionAfterConfirmedHit(t *testing.T) {
 	matrix := &TargetScheduleMatrix{
 		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",

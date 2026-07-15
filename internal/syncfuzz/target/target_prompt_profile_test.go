@@ -76,6 +76,31 @@ func TestDefaultTargetPromptVariantWithProfileAddsLifecycleBoundaryOverlay(t *te
 	}
 }
 
+func TestDefaultTargetPromptVariantWithProfileAddsActivationFocusOverlay(t *testing.T) {
+	base := target.DefaultTargetPromptWithProfile(target.DiscardedServerTrustedClientTargetTaskID, target.TargetPromptProfileBaselineID)
+	variant := target.DefaultTargetPromptVariantWithProfile(
+		target.DiscardedServerTrustedClientTargetTaskID,
+		target.TargetPromptProfileBaselineID,
+		target.TargetPromptVariantActivationFocusID,
+	)
+
+	if base == variant {
+		t.Fatalf("expected activation-focus variant to change prompt text")
+	}
+	if !strings.Contains(variant, "Activation focus for this run") {
+		t.Fatalf("expected activation-focus overlay, got %q", variant)
+	}
+	if !strings.Contains(variant, "later activation") || !strings.Contains(variant, "Do not execute or emulate that follow-up during setup") {
+		t.Fatalf("expected activation guardrails in prompt variant, got %q", variant)
+	}
+	if strings.Contains(variant, "Execute the trusted activation step") {
+		t.Fatalf("activation overlay must not ask the initial setup run to perform the follow-up: %q", variant)
+	}
+	if !strings.Contains(variant, "trusted client") {
+		t.Fatalf("expected activation summary from scenario components, got %q", variant)
+	}
+}
+
 func TestBuildTargetScheduleMatrixExpandsPromptProfiles(t *testing.T) {
 	matrix, err := scheduler.BuildTargetScheduleMatrix(scheduler.TargetMatrixOptions{
 		TargetID:         "langgraph-shell-react",

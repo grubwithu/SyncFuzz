@@ -309,8 +309,10 @@ func targetPromptVariantRank(variantID string) int {
 		return 1
 	case target.TargetPromptVariantMutationFocusID:
 		return 2
-	default:
+	case target.TargetPromptVariantActivationFocusID:
 		return 3
+	default:
+		return 4
 	}
 }
 

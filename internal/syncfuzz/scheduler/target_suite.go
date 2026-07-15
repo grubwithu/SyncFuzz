@@ -95,6 +95,11 @@ type TargetActivationStage string
 
 const (
 	TargetActivationStageActivationReached TargetActivationStage = "activation-reached"
+	TargetActivationStageActivationPending TargetActivationStage = "activation-pending"
+	TargetActivationStageStateNotPlanted   TargetActivationStage = "state-not-planted"
+	TargetActivationStageLifecyclePending  TargetActivationStage = "lifecycle-pending"
+	TargetActivationStageTaskNoncompliant  TargetActivationStage = "task-noncompliant"
+	TargetActivationStageExecutionPending  TargetActivationStage = "execution-pending"
 	TargetActivationStagePreActivation     TargetActivationStage = "pre-activation"
 )
 
@@ -424,7 +429,11 @@ func runTargetSuiteTask(
 	taskID := candidate.TaskID
 	runLateObserveDelay := opts.LateObserveDelay
 	if runLateObserveDelay == 0 {
-		runLateObserveDelay = target.DefaultTargetLateObserveDelay(taskID)
+		if candidate.DefaultLateObserveDelay > 0 {
+			runLateObserveDelay = time.Duration(candidate.DefaultLateObserveDelay) * time.Millisecond
+		} else {
+			runLateObserveDelay = target.DefaultTargetLateObserveDelay(taskID)
+		}
 	}
 	item := TargetSuiteRunResult{
 		CandidateID:          candidate.CandidateID,
@@ -456,6 +465,7 @@ func runTargetSuiteTask(
 		TargetID:         opts.TargetID,
 		TaskID:           taskID,
 		Objective:        opts.Objective,
+		ExecutionPlan:    cloneTargetExecutionPlan(candidate.ExecutionPlan),
 		PromptProfileID:  candidate.PromptProfileID,
 		PromptVariantID:  candidate.PromptVariantID,
 		Prompt:           runPrompt,
@@ -520,6 +530,14 @@ func runTargetSuiteTask(
 	result.Results = append(result.Results, item)
 }
 
+func cloneTargetExecutionPlan(plan *target.TargetScenarioExecutionPlan) *target.TargetScenarioExecutionPlan {
+	if plan == nil {
+		return nil
+	}
+	copyPlan := *plan
+	return &copyPlan
+}
+
 func targetScheduledTaskCandidate(targetID string, taskID string, promptProfileID string, candidateID string) TargetScheduleCandidate {
 	item := TargetScheduleCandidate{
 		CandidateID:             candidateID,
@@ -566,6 +584,18 @@ func finalizeTargetSuiteItemMetrics(item *TargetSuiteRunResult, started time.Tim
 func targetActivationStageForObservation(details corpus.TargetObservationDetails) TargetActivationStage {
 	if details.ActivationReached {
 		return TargetActivationStageActivationReached
+	}
+	switch details.Category {
+	case corpus.TargetObservationExecutionNotReached, corpus.TargetObservationError:
+		return TargetActivationStageExecutionPending
+	case corpus.TargetObservationTaskNoncompliant:
+		return TargetActivationStageTaskNoncompliant
+	case corpus.TargetObservationLifecycleNotTriggered:
+		return TargetActivationStageLifecyclePending
+	case corpus.TargetObservationStateNotPlanted:
+		return TargetActivationStageStateNotPlanted
+	case corpus.TargetObservationActivationNotTriggered:
+		return TargetActivationStageActivationPending
 	}
 	return TargetActivationStagePreActivation
 }
@@ -782,10 +812,20 @@ func targetActivationStageOrder(stage TargetActivationStage) int {
 	switch stage {
 	case TargetActivationStageActivationReached:
 		return 0
-	case TargetActivationStagePreActivation:
+	case TargetActivationStageActivationPending:
 		return 1
-	default:
+	case TargetActivationStageStateNotPlanted:
 		return 2
+	case TargetActivationStageLifecyclePending:
+		return 3
+	case TargetActivationStageTaskNoncompliant:
+		return 4
+	case TargetActivationStageExecutionPending:
+		return 5
+	case TargetActivationStagePreActivation:
+		return 6
+	default:
+		return 7
 	}
 }
 

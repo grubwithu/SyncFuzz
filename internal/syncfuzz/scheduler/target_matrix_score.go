@@ -30,6 +30,8 @@ type TargetCandidateSummary struct {
 	OracleConfirmed         int                                         `json:"oracle_confirmed"`
 	OracleNegative          int                                         `json:"oracle_negative"`
 	OracleInconclusive      int                                         `json:"oracle_inconclusive"`
+	MaxActivationStage      TargetActivationStage                       `json:"max_activation_stage,omitempty"`
+	ActivationProgressScore int                                         `json:"activation_progress_score,omitempty"`
 	ActivationReached       int                                         `json:"activation_reached"`
 	ActivationNotReached    int                                         `json:"activation_not_reached"`
 	ComplianceCompliant     int                                         `json:"compliance_compliant"`
@@ -116,6 +118,8 @@ func summarizeTargetCandidates(results []TargetSuiteRunResult) []TargetCandidate
 		}
 		summary.OutcomeSummaries = targetSuiteOutcomeStats(accumulator.outcomeStats)
 		summary.ActivationSummaries = targetSuiteActivationStats(accumulator.activationStats)
+		summary.MaxActivationStage = targetCandidateMaxActivationStage(summary.ActivationSummaries)
+		summary.ActivationProgressScore = targetActivationStageProgressScore(summary.MaxActivationStage)
 		summary.Score = targetCandidateScore(summary)
 		summary.CostPenalty = targetCandidateCostPenalty(summary)
 		summary.Status = targetCandidateStatus(summary)
@@ -230,12 +234,47 @@ func (a *targetCandidateAccumulator) observe(result TargetSuiteRunResult) {
 func targetCandidateScore(summary TargetCandidateSummary) int {
 	return summary.ContractViolations*4 +
 		summary.Confirmed*2 +
+		summary.ActivationProgressScore +
 		summary.ActivationReached +
 		summary.OracleInconclusive -
 		targetCandidateOutcomeCount(summary, corpus.TargetObservationTaskNoncompliant)*2 -
 		targetCandidateOutcomeCount(summary, corpus.TargetObservationExecutionNotReached)*2 -
 		summary.ComplianceViolated*2 -
 		summary.Errors*5
+}
+
+func targetCandidateMaxActivationStage(summaries []TargetSuiteActivationStats) TargetActivationStage {
+	var best TargetActivationStage
+	bestScore := -1
+	for _, summary := range summaries {
+		score := targetActivationStageProgressScore(summary.Stage)
+		if score > bestScore {
+			best = summary.Stage
+			bestScore = score
+		}
+	}
+	return best
+}
+
+func targetActivationStageProgressScore(stage TargetActivationStage) int {
+	switch stage {
+	case TargetActivationStageActivationReached:
+		return 5
+	case TargetActivationStageActivationPending:
+		return 4
+	case TargetActivationStageStateNotPlanted:
+		return 3
+	case TargetActivationStageLifecyclePending:
+		return 2
+	case TargetActivationStageTaskNoncompliant:
+		return 1
+	case TargetActivationStageExecutionPending:
+		return 0
+	case TargetActivationStagePreActivation:
+		return 0
+	default:
+		return 0
+	}
 }
 
 func targetCandidateCostPenalty(summary TargetCandidateSummary) int {

@@ -123,6 +123,43 @@ func TestRunTargetWritesScenarioIntoTargetTaskArtifact(t *testing.T) {
 	}
 }
 
+func TestRunTargetTaskArtifactRecordsExecutionPlanOverride(t *testing.T) {
+	tmp := t.TempDir()
+	plan := &TargetScenarioExecutionPlan{
+		LifecycleOperationID: "checkpoint-replay",
+		CheckpointSelector:   "mutated-checkpoint",
+		Replay:               true,
+		CheckpointBackend:    "disk",
+		ProcessMode:          "split-process",
+	}
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:        filepath.Join(tmp, "runs"),
+		TargetID:      "scenario-plan-override",
+		TaskID:        PersistentShellForkTargetTaskID,
+		ExecutionPlan: plan,
+		Command:       `printf 'SYSTEM_GIT=/usr/bin/git\n' > shell-poison-fork-check.txt`,
+		ObserveDelay:  10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(result.ArtifactDir, TargetTaskArtifact))
+	if err != nil {
+		t.Fatalf("read target task artifact: %v", err)
+	}
+	var task TargetTask
+	if err := json.Unmarshal(raw, &task); err != nil {
+		t.Fatalf("decode target task artifact: %v", err)
+	}
+	if task.Scenario == nil || task.Scenario.ExecutionPlan == nil {
+		t.Fatalf("expected overridden execution plan in target task artifact: %#v", task.Scenario)
+	}
+	if task.Scenario.ExecutionPlan.CheckpointSelector != "mutated-checkpoint" || !task.Scenario.ExecutionPlan.Replay || task.Scenario.ExecutionPlan.ForkFollowup {
+		t.Fatalf("unexpected execution plan override: %#v", task.Scenario.ExecutionPlan)
+	}
+}
+
 func TestTargetTaskGroupsExposeMAFWorkspaceResidueBundle(t *testing.T) {
 	groups := TargetTaskGroups()
 

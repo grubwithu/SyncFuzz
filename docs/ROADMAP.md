@@ -275,7 +275,10 @@ Phase 5B 主线：
 - 启动 MAF 三阶段接入：官方 shell sample、session restore、最小 Workflow + `CheckpointStorage`；
 - 把第二个真实 target 的重点放到 superstep/checkpoint 边界，而不是重复 LangGraph 的 persistent shell residue；
 - 已把 target run 接入 real-target matrix / suite / campaign：`syncfuzz target matrix`、`target suite --matrix`、`target campaign` 已可对 `target/task` candidate 做 feedback-ranked exploration；
+- target candidate 的 Scenario IR `execution_plan` 已接入真实运行环境，matrix/campaign 中保存的 replay/fork、checkpoint selector、backend、process mode 和 follow-up 不再只是描述性字段；matrix 已据此自动派生第一条 `phase-shift-single-process` semantic mutation，用同一 task / oracle 比较 split-process 与 single-process checkpoint execution；
 - 已增加第一条 deterministic wording 维度：真实 target candidate 现在可以扩成 `target/task/prompt-profile`，用少量稳定 prompt profile 比较“同一语义任务、不同操作表述”对 runtime residue 的影响；
+- feedback guidance 已开始消费多阶段 activation progress，并按 lifecycle / plant / activation stall 定向选择结构化 prompt variant；frontier 会记录对应 repair mode，campaign coverage gain 也会奖励尚未到达最终 oracle 的前向进展；
+- minimization 已从计划 artifact 推进到可执行 runner：`target minimize --execute` 会在受限 trial budget 内删除 prompt 行并逐项收紧 execution plan，用 oracle、attribution、signature、compliance 和 contract 复验每次删减；后续继续扩展到 Scenario IR component、primitive 与 activation reduction；
 - 把 replay / verify 的失败原因细化成 taxonomy，而不再只停留在 failed / unconfirmed / error。
 
 Phase 5B 优先级重排：

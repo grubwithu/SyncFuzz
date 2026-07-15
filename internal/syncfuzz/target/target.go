@@ -177,6 +177,7 @@ type TargetRunOptions struct {
 	TargetID         string
 	TaskID           string
 	Objective        string
+	ExecutionPlan    *TargetScenarioExecutionPlan
 	PromptProfileID  string
 	PromptVariantID  string
 	Prompt           string
@@ -433,6 +434,10 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		info.Components = append([]TargetScenarioComponent{}, info.Components...)
 		info.Mutations = append([]TargetScenarioMutation{}, info.Mutations...)
 		info.ExecutionPlan = targetScenarioExecutionPlanInfo(scenario.Lifecycle)
+		if opts.ExecutionPlan != nil {
+			plan := *opts.ExecutionPlan
+			info.ExecutionPlan = &plan
+		}
 		task.Scenario = &info
 	}
 	if err := core.WriteJSON(filepath.Join(run.RunDir, TargetTaskArtifact), task); err != nil {
@@ -2906,13 +2911,17 @@ func targetCommandEnv(opts TargetRunOptions, runID string, workspacePath string)
 		"SYNCFUZZ_PROMPT_FILE": promptFile,
 		"SYNCFUZZ_TASK_FILE":   taskFile,
 	}
-	for key, value := range targetTaskEnvOverrides(opts.TaskID) {
+	for key, value := range targetTaskEnvOverridesWithPlan(opts.TaskID, opts.ExecutionPlan) {
 		env[key] = value
 	}
 	return env
 }
 
 func targetTaskEnvOverrides(taskID string) map[string]string {
+	return targetTaskEnvOverridesWithPlan(taskID, nil)
+}
+
+func targetTaskEnvOverridesWithPlan(taskID string, executionPlan *TargetScenarioExecutionPlan) map[string]string {
 	base := map[string]string{
 		"SYNCFUZZ_LANGGRAPH_REQUIRE_TOOL_USE":    "true",
 		"SYNCFUZZ_LANGGRAPH_REPLAY":              "false",
@@ -2926,20 +2935,28 @@ func targetTaskEnvOverrides(taskID string) map[string]string {
 	if !ok {
 		return nil
 	}
-	if scenario.Lifecycle.Replay {
+	plan := targetScenarioExecutionPlanInfo(scenario.Lifecycle)
+	if executionPlan != nil {
+		copyPlan := *executionPlan
+		plan = &copyPlan
+	}
+	if plan == nil {
+		return base
+	}
+	if plan.Replay {
 		base["SYNCFUZZ_LANGGRAPH_REPLAY"] = "true"
 	}
-	if scenario.Lifecycle.CheckpointSelector != "" {
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] = scenario.Lifecycle.CheckpointSelector
+	if plan.CheckpointSelector != "" {
+		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] = plan.CheckpointSelector
 	}
-	if scenario.Lifecycle.ForkMessage != "" {
-		base["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = scenario.Lifecycle.ForkMessage
+	if plan.ForkFollowup && plan.ForkMessage != "" {
+		base["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = plan.ForkMessage
 	}
-	if scenario.Lifecycle.CheckpointBackend != "" {
-		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] = scenario.Lifecycle.CheckpointBackend
+	if plan.CheckpointBackend != "" {
+		base["SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND"] = plan.CheckpointBackend
 	}
-	if scenario.Lifecycle.ProcessMode != "" {
-		base["SYNCFUZZ_LANGGRAPH_PROCESS_MODE"] = scenario.Lifecycle.ProcessMode
+	if plan.ProcessMode != "" {
+		base["SYNCFUZZ_LANGGRAPH_PROCESS_MODE"] = plan.ProcessMode
 	}
 	return base
 }

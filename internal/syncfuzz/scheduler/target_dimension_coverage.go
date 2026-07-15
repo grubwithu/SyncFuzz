@@ -17,17 +17,19 @@ type TargetDimensionCoverageSummary struct {
 }
 
 type TargetDimensionCoverageGainSummary struct {
-	Dimension                  string   `json:"dimension"`
-	NewExecutedValues          []string `json:"new_executed_values,omitempty"`
-	NewConfirmedValues         []string `json:"new_confirmed_values,omitempty"`
-	NewActivationReachedValues []string `json:"new_activation_reached_values,omitempty"`
+	Dimension                   string   `json:"dimension"`
+	NewExecutedValues           []string `json:"new_executed_values,omitempty"`
+	NewConfirmedValues          []string `json:"new_confirmed_values,omitempty"`
+	NewActivationProgressValues []string `json:"new_activation_progress_values,omitempty"`
+	NewActivationReachedValues  []string `json:"new_activation_reached_values,omitempty"`
 }
 
 type TargetDimensionCoverageGainStats struct {
-	NewExecutedCount          int `json:"new_executed_count,omitempty"`
-	NewConfirmedCount         int `json:"new_confirmed_count,omitempty"`
-	NewActivationReachedCount int `json:"new_activation_reached_count,omitempty"`
-	WeightedScore             int `json:"weighted_score,omitempty"`
+	NewExecutedCount           int `json:"new_executed_count,omitempty"`
+	NewConfirmedCount          int `json:"new_confirmed_count,omitempty"`
+	NewActivationProgressCount int `json:"new_activation_progress_count,omitempty"`
+	NewActivationReachedCount  int `json:"new_activation_reached_count,omitempty"`
+	WeightedScore              int `json:"weighted_score,omitempty"`
 }
 
 type targetDimensionDescriptor struct {
@@ -39,12 +41,14 @@ type targetDimensionCoverageValue struct {
 	executed          bool
 	confirmed         bool
 	activationReached bool
+	activationStage   TargetActivationStage
 }
 
 type targetDimensionExecutionState struct {
 	executed          bool
 	confirmed         bool
 	activationReached bool
+	activationStage   TargetActivationStage
 }
 
 func summarizeTargetDimensionCoverage(universe []TargetScheduleCandidate, results []TargetSuiteRunResult) []TargetDimensionCoverageSummary {
@@ -116,14 +120,18 @@ func summarizeTargetDimensionCoverageGain(
 			if !stateBefore.confirmed && stateAfter.confirmed {
 				gain.NewConfirmedValues = append(gain.NewConfirmedValues, value)
 			}
+			if !stateAfter.activationReached && targetActivationStageProgressScore(stateAfter.activationStage) > targetActivationStageProgressScore(stateBefore.activationStage) {
+				gain.NewActivationProgressValues = append(gain.NewActivationProgressValues, value)
+			}
 			if !stateBefore.activationReached && stateAfter.activationReached {
 				gain.NewActivationReachedValues = append(gain.NewActivationReachedValues, value)
 			}
 		}
 		sort.Strings(gain.NewExecutedValues)
 		sort.Strings(gain.NewConfirmedValues)
+		sort.Strings(gain.NewActivationProgressValues)
 		sort.Strings(gain.NewActivationReachedValues)
-		if len(gain.NewExecutedValues) == 0 && len(gain.NewConfirmedValues) == 0 && len(gain.NewActivationReachedValues) == 0 {
+		if len(gain.NewExecutedValues) == 0 && len(gain.NewConfirmedValues) == 0 && len(gain.NewActivationProgressValues) == 0 && len(gain.NewActivationReachedValues) == 0 {
 			continue
 		}
 		out = append(out, gain)
@@ -137,9 +145,11 @@ func summarizeTargetDimensionCoverageGainStats(gains []TargetDimensionCoverageGa
 		weight := targetDimensionGapWeight(gain.Dimension)
 		stats.NewExecutedCount += len(gain.NewExecutedValues)
 		stats.NewConfirmedCount += len(gain.NewConfirmedValues)
+		stats.NewActivationProgressCount += len(gain.NewActivationProgressValues)
 		stats.NewActivationReachedCount += len(gain.NewActivationReachedValues)
 		stats.WeightedScore += weight * len(gain.NewExecutedValues)
 		stats.WeightedScore += weight * 2 * len(gain.NewConfirmedValues)
+		stats.WeightedScore += weight * 2 * len(gain.NewActivationProgressValues)
 		stats.WeightedScore += weight * 3 * len(gain.NewActivationReachedValues)
 	}
 	return stats
@@ -182,6 +192,9 @@ func collectTargetDimensionCoverage(universe []TargetScheduleCandidate, results 
 		if result.ActivationStage == TargetActivationStageActivationReached {
 			state.activationReached = true
 		}
+		if targetActivationStageProgressScore(result.ActivationStage) > targetActivationStageProgressScore(state.activationStage) {
+			state.activationStage = result.ActivationStage
+		}
 		candidateState[result.CandidateID] = state
 	}
 
@@ -203,6 +216,9 @@ func collectTargetDimensionCoverage(universe []TargetScheduleCandidate, results 
 				current.executed = current.executed || state.executed
 				current.confirmed = current.confirmed || state.confirmed
 				current.activationReached = current.activationReached || state.activationReached
+				if targetActivationStageProgressScore(state.activationStage) > targetActivationStageProgressScore(current.activationStage) {
+					current.activationStage = state.activationStage
+				}
 			}
 		}
 	}

@@ -723,6 +723,26 @@ func TestTargetTaskEnvOverridesConfigureReplayAndForkLifecycle(t *testing.T) {
 	}
 }
 
+func TestTargetTaskEnvOverridesUsesCandidateExecutionPlan(t *testing.T) {
+	plan := &TargetScenarioExecutionPlan{
+		LifecycleOperationID: "checkpoint-replay",
+		CheckpointSelector:   "mutated-checkpoint",
+		Replay:               true,
+		CheckpointBackend:    "disk",
+		ProcessMode:          "split-process",
+	}
+	env := targetTaskEnvOverridesWithPlan(PersistentShellForkTargetTaskID, plan)
+	if env["SYNCFUZZ_LANGGRAPH_REPLAY"] != "true" {
+		t.Fatalf("expected candidate plan to replace the built-in fork operation: %#v", env)
+	}
+	if env["SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR"] != "mutated-checkpoint" {
+		t.Fatalf("expected candidate checkpoint selector override: %#v", env)
+	}
+	if env["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] != "" {
+		t.Fatalf("expected replay candidate plan to clear the built-in fork follow-up: %#v", env)
+	}
+}
+
 func TestDefaultTargetPromptDeleteResidueForkAvoidsUnstableContentChecks(t *testing.T) {
 	prompt := DefaultTargetPrompt(DeleteResidueForkTargetTaskID)
 	if !strings.Contains(prompt, "printf '%s\\n' 'SYNCFUZZ_DELETE_RESIDUE_MARKER' > branch-delete-note.txt") {

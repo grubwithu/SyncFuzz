@@ -26,7 +26,7 @@ func TestBuildTargetScheduleMatrixExpandsGroupsAndContracts(t *testing.T) {
 	if matrix.TargetID != "langgraph-shell-react" {
 		t.Fatalf("unexpected target id %q", matrix.TargetID)
 	}
-	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 7 {
+	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 9 {
 		t.Fatalf("unexpected target matrix size: %#v", matrix)
 	}
 	replay, err := findTargetMatrixCandidate(matrix, target.PersistentShellReplayTargetTaskID)
@@ -70,7 +70,7 @@ func TestBuildTargetScheduleMatrixExpandsSeeds(t *testing.T) {
 	if len(matrix.SeedIDs) != 1 || matrix.SeedIDs[0] != "shell-path-residue" {
 		t.Fatalf("unexpected seed ids: %#v", matrix)
 	}
-	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 7 {
+	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 9 {
 		t.Fatalf("unexpected seed-expanded matrix size: %#v", matrix)
 	}
 }
@@ -83,13 +83,57 @@ func TestBuildTargetScheduleMatrixAddsMutationFocusDerivedCandidates(t *testing.
 	if err != nil {
 		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
 	}
-	if matrix.TotalCandidates != 3 {
-		t.Fatalf("expected base plus two derived candidates, got %#v", matrix)
+	if matrix.TotalCandidates != 4 {
+		t.Fatalf("expected base plus prompt and process-mode derived candidates, got %#v", matrix)
+	}
+	want := map[string]struct {
+		variant   string
+		generated bool
+	}{
+		"langgraph-shell-react/persistent-shell-poisoning-replay":                            {variant: target.TargetPromptVariantBaseID},
+		"langgraph-shell-react/persistent-shell-poisoning-replay/lifecycle-boundary":         {variant: target.TargetPromptVariantLifecycleBoundaryID, generated: true},
+		"langgraph-shell-react/persistent-shell-poisoning-replay/mutation-focus":             {variant: target.TargetPromptVariantMutationFocusID, generated: true},
+		"langgraph-shell-react/persistent-shell-poisoning-replay/phase-shift-single-process": {variant: target.TargetPromptVariantBaseID, generated: true},
+	}
+	for _, candidate := range matrix.Candidates {
+		expected, ok := want[candidate.CandidateID]
+		if !ok {
+			t.Fatalf("unexpected candidate id: %#v", candidate)
+		}
+		if candidate.PromptVariantID != expected.variant {
+			t.Fatalf("unexpected prompt variant for %q: %#v", candidate.CandidateID, candidate)
+		}
+		if candidate.Generated != expected.generated {
+			t.Fatalf("unexpected generated flag: %#v", candidate)
+		}
+		if strings.HasSuffix(candidate.CandidateID, "/phase-shift-single-process") {
+			if candidate.ExecutionPlan == nil || candidate.ExecutionPlan.ProcessMode != "single" {
+				t.Fatalf("expected executable single-process phase shift: %#v", candidate)
+			}
+			if candidate.MutationFocusKind != target.TargetScenarioMutationPhaseShift || candidate.MutationFocusID != "phase-shift.process-mode.single-process" {
+				t.Fatalf("expected phase-shift mutation provenance: %#v", candidate)
+			}
+		}
+	}
+}
+
+func TestBuildTargetScheduleMatrixAddsActivationFocusDerivedCandidates(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		Tasks:    []string{target.DiscardedServerTrustedClientTargetTaskID},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	if matrix.TotalCandidates != 5 {
+		t.Fatalf("expected prompt variants plus process-mode phase shift, got %#v", matrix)
 	}
 	want := map[string]string{
-		"langgraph-shell-react/persistent-shell-poisoning-replay":                    target.TargetPromptVariantBaseID,
-		"langgraph-shell-react/persistent-shell-poisoning-replay/lifecycle-boundary": target.TargetPromptVariantLifecycleBoundaryID,
-		"langgraph-shell-react/persistent-shell-poisoning-replay/mutation-focus":     target.TargetPromptVariantMutationFocusID,
+		"langgraph-shell-react/discarded-server-trusted-client":                            target.TargetPromptVariantBaseID,
+		"langgraph-shell-react/discarded-server-trusted-client/lifecycle-boundary":         target.TargetPromptVariantLifecycleBoundaryID,
+		"langgraph-shell-react/discarded-server-trusted-client/mutation-focus":             target.TargetPromptVariantMutationFocusID,
+		"langgraph-shell-react/discarded-server-trusted-client/activation-focus":           target.TargetPromptVariantActivationFocusID,
+		"langgraph-shell-react/discarded-server-trusted-client/phase-shift-single-process": target.TargetPromptVariantBaseID,
 	}
 	for _, candidate := range matrix.Candidates {
 		wantVariant, ok := want[candidate.CandidateID]
@@ -99,11 +143,13 @@ func TestBuildTargetScheduleMatrixAddsMutationFocusDerivedCandidates(t *testing.
 		if candidate.PromptVariantID != wantVariant {
 			t.Fatalf("unexpected prompt variant for %q: %#v", candidate.CandidateID, candidate)
 		}
-		if wantVariant == target.TargetPromptVariantBaseID && candidate.Generated {
-			t.Fatalf("base candidate should not be generated: %#v", candidate)
-		}
-		if wantVariant != target.TargetPromptVariantBaseID && !candidate.Generated {
-			t.Fatalf("derived candidate should be marked generated: %#v", candidate)
+		if wantVariant == target.TargetPromptVariantActivationFocusID {
+			if !candidate.Generated {
+				t.Fatalf("activation focus candidate should be generated: %#v", candidate)
+			}
+			if candidate.ActivationKindID != "trusted-client-consume" {
+				t.Fatalf("expected activation metadata to be preserved: %#v", candidate)
+			}
 		}
 	}
 }

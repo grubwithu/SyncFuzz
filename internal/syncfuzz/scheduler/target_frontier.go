@@ -9,11 +9,14 @@ import (
 const targetFrontierDefaultLimit = 5
 
 const (
-	targetFrontierSelectionCoverageGap   = "coverage-gap"
-	targetFrontierSelectionExploration   = "exploration-novelty"
-	targetFrontierSelectionPromptRepair  = "prompt-repair"
-	targetFrontierSelectionVariantExpand = "variant-expansion"
-	targetFrontierSelectionSeedExpand    = "seed-expansion"
+	targetFrontierSelectionCoverageGap      = "coverage-gap"
+	targetFrontierSelectionExploration      = "exploration-novelty"
+	targetFrontierSelectionPromptRepair     = "prompt-repair"
+	targetFrontierSelectionLifecycleRepair  = "lifecycle-repair"
+	targetFrontierSelectionStateRepair      = "state-plant-repair"
+	targetFrontierSelectionActivationRepair = "activation-repair"
+	targetFrontierSelectionVariantExpand    = "variant-expansion"
+	targetFrontierSelectionSeedExpand       = "seed-expansion"
 )
 
 type TargetFrontierCandidate struct {
@@ -157,7 +160,7 @@ func summarizeTargetCoverageFrontier(
 		coveredGaps := targetCandidateCoveredGaps(pick, gaps)
 		selectionMode := targetFrontierSelectionExploration
 		if bestRepair > 0 {
-			selectionMode = targetFrontierSelectionPromptRepair
+			selectionMode = targetFrontierPromptRepairSelectionMode(pick, repair)
 		} else if bestVariantExpansion > 0 {
 			selectionMode = targetFrontierSelectionVariantExpand
 		} else if bestExpansion > 0 {
@@ -193,6 +196,19 @@ func summarizeTargetCoverageFrontier(
 	}
 
 	return out
+}
+
+func targetFrontierPromptRepairSelectionMode(candidate TargetScheduleCandidate, feedback *targetPromptRepairFeedback) string {
+	switch targetPromptRepairPreferredVariantForCandidate(candidate, feedback) {
+	case target.TargetPromptVariantLifecycleBoundaryID:
+		return targetFrontierSelectionLifecycleRepair
+	case target.TargetPromptVariantMutationFocusID:
+		return targetFrontierSelectionStateRepair
+	case target.TargetPromptVariantActivationFocusID:
+		return targetFrontierSelectionActivationRepair
+	default:
+		return targetFrontierSelectionPromptRepair
+	}
 }
 
 func targetCandidateCoveredGaps(candidate TargetScheduleCandidate, gaps targetDimensionGapSet) []string {
