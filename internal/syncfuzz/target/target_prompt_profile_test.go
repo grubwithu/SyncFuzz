@@ -110,20 +110,26 @@ func TestBuildTargetScheduleMatrixExpandsPromptProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scheduler.BuildTargetScheduleMatrix failed: %v", err)
 	}
-	if matrix.TotalCandidates != 2 {
+	if matrix.TotalCandidates != 6 {
 		t.Fatalf("expected prompt profiles to expand candidate count: %#v", matrix)
 	}
 	if len(matrix.PromptProfiles) != 2 || matrix.PromptProfiles[0] != target.TargetPromptProfileBaselineID || matrix.PromptProfiles[1] != target.TargetPromptProfileWorkflowID {
 		t.Fatalf("unexpected prompt profile list: %#v", matrix.PromptProfiles)
 	}
-	if matrix.Candidates[0].CandidateID != "langgraph-shell-react/persistent-shell-poisoning" {
-		t.Fatalf("expected baseline candidate id to remain stable: %#v", matrix.Candidates[0])
+	var baselineFound, workflowFound bool
+	for _, candidate := range matrix.Candidates {
+		switch candidate.CandidateID {
+		case "langgraph-shell-react/persistent-shell-poisoning":
+			baselineFound = true
+		case "langgraph-shell-react/persistent-shell-poisoning/workflow":
+			workflowFound = true
+			if candidate.PromptProfileID != target.TargetPromptProfileWorkflowID {
+				t.Fatalf("expected workflow prompt profile metadata: %#v", candidate)
+			}
+		}
 	}
-	if matrix.Candidates[1].CandidateID != "langgraph-shell-react/persistent-shell-poisoning/workflow" {
-		t.Fatalf("expected workflow candidate id to include prompt profile: %#v", matrix.Candidates[1])
-	}
-	if matrix.Candidates[1].PromptProfileID != target.TargetPromptProfileWorkflowID {
-		t.Fatalf("expected workflow prompt profile metadata: %#v", matrix.Candidates[1])
+	if !baselineFound || !workflowFound {
+		t.Fatalf("expected baseline and workflow candidates to remain present: %#v", matrix.Candidates)
 	}
 }
 

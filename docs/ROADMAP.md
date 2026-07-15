@@ -273,9 +273,9 @@ Phase 5B 主线：
 
 - 让 `Scenario IR` 成为 testcase 的主事实来源，而不是继续扩大手写 task catalog；
 - 为 LangGraph 写出第一份 `Recovery Contract Profile`，并把 target 结果稳定拆成 residue observation、contract interpretation、activation consequence 三层；
-- 已把完整 Scenario IR 接入 real-target matrix / suite / campaign，并形成 `PATH -> env/function` fork primitive-substitution family、Unix-listener trusted-action activation substitution 与 `phase-shift-single-process`；后续重点是继续扩展 compatibility-aware family，再实现 `lifecycle splice` 与更完整的 `fault-phase / phase-shift mutation`；
+- 已把完整 Scenario IR 接入 real-target matrix / suite / campaign，并形成第一组 portable same-run primitive-substitution candidate `persistent-shell-poisoning/primitive-shell-env-export` / `persistent-shell-poisoning/primitive-shell-function-define` / `persistent-shell-poisoning/primitive-shell-cwd-change` / `persistent-shell-poisoning/primitive-shell-umask-set`、`PATH replay -> env/function` primitive-substitution pair `persistent-shell-poisoning-replay/primitive-shell-env-export` / `persistent-shell-poisoning-replay/primitive-shell-function-define`、第一条 portable same-run trusted-activation candidate `unix-listener-residue/activation-trusted-action`、`PATH -> env/function` fork primitive-substitution family、Unix-listener 与 inherited-FD trusted-action activation substitution、`unix-listener-residue-fork/lifecycle-splice-checkpoint-replay`，以及 `phase-shift-single-process`；后续重点是继续扩展 compatibility-aware family，再实现更广的 `lifecycle splice` 与 `fault-phase / phase-shift mutation`；
 - 把 `targets/langgraph_shell_react/` 从“单进程内 durable checkpointer”继续推进到“跨进程恢复可消费的 durable checkpointer”；
-- 让 `MAF` 消费与 LangGraph 共享的 portable scenario，并进入同一套 `campaign / replay / verify / minimize`；
+- 把当前 `LangGraph` / `MAF` 已共享的 same-run portable scenario 继续扩展到更高价值 family，并让 `MAF` 进入同一套 `campaign / replay / verify / minimize`；
 - minimization 从 prompt / execution-plan reduction 升级到 `Scenario IR component reduction`，并逐步支持 `Semantic Fidelity`；
 - 把 replay / verify 的失败原因细化成 taxonomy，同时尽快通过对照实验验证 feedback 的方法贡献。
 
@@ -287,7 +287,7 @@ Phase 5B 优先级重排：
 - 接下来两周的核心顺序是：
   1. 冻结 `Scenario IR` schema，并把 `3 - 5` 个 LangGraph testcase 迁移到纯 IR；
   2. 扩展已经落地的 `primitive substitution` 与 `activation substitution` family；
-  3. 让 `MAF` 消费至少一个完全相同的 portable scenario；
+  3. 把当前 same-run portable scenario 扩展到更高价值的 replay / fork / trusted-activation family；
   4. 实现一次 `lifecycle splice` 或 `cross-seed crossover`；
   5. 把 minimizer 扩展到 `IR component reduction`；
   6. 运行 `random / fixed enumeration / feedback-guided / full SyncFuzz` 四组小预算实验；

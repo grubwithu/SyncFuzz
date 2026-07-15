@@ -26,7 +26,7 @@ func TestBuildTargetScheduleMatrixExpandsGroupsAndContracts(t *testing.T) {
 	if matrix.TargetID != "langgraph-shell-react" {
 		t.Fatalf("unexpected target id %q", matrix.TargetID)
 	}
-	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 11 {
+	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 17 {
 		t.Fatalf("unexpected target matrix size: %#v", matrix)
 	}
 	replay, err := findTargetMatrixCandidate(matrix, target.PersistentShellReplayTargetTaskID)
@@ -73,7 +73,7 @@ func TestBuildTargetScheduleMatrixExpandsSeeds(t *testing.T) {
 	if len(matrix.SeedIDs) != 1 || matrix.SeedIDs[0] != "shell-path-residue" {
 		t.Fatalf("unexpected seed ids: %#v", matrix)
 	}
-	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 11 {
+	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 17 {
 		t.Fatalf("unexpected seed-expanded matrix size: %#v", matrix)
 	}
 }
@@ -86,8 +86,8 @@ func TestBuildTargetScheduleMatrixAddsMutationFocusDerivedCandidates(t *testing.
 	if err != nil {
 		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
 	}
-	if matrix.TotalCandidates != 4 {
-		t.Fatalf("expected base plus prompt and process-mode derived candidates, got %#v", matrix)
+	if matrix.TotalCandidates != 6 {
+		t.Fatalf("expected replay base, prompt/process-mode variants, and generated replay substitutions, got %#v", matrix)
 	}
 	want := map[string]struct {
 		variant   string
@@ -97,6 +97,11 @@ func TestBuildTargetScheduleMatrixAddsMutationFocusDerivedCandidates(t *testing.
 		"langgraph-shell-react/persistent-shell-poisoning-replay/lifecycle-boundary":         {variant: target.TargetPromptVariantLifecycleBoundaryID, generated: true},
 		"langgraph-shell-react/persistent-shell-poisoning-replay/mutation-focus":             {variant: target.TargetPromptVariantMutationFocusID, generated: true},
 		"langgraph-shell-react/persistent-shell-poisoning-replay/phase-shift-single-process": {variant: target.TargetPromptVariantBaseID, generated: true},
+		"langgraph-shell-react/persistent-shell-poisoning-replay/primitive-shell-env-export": {variant: target.TargetPromptVariantBaseID, generated: true},
+		"langgraph-shell-react/persistent-shell-poisoning-replay/primitive-shell-function-define": {
+			variant:   target.TargetPromptVariantBaseID,
+			generated: true,
+		},
 	}
 	for _, candidate := range matrix.Candidates {
 		expected, ok := want[candidate.CandidateID]
@@ -229,6 +234,153 @@ func TestBuildTargetScheduleMatrixAddsExecutablePrimitiveSubstitutionFamily(t *t
 	}
 }
 
+func TestBuildTargetScheduleMatrixAddsPortableContinuationPrimitiveSubstitutionFamily(t *testing.T) {
+	tests := []struct {
+		targetID        string
+		expectContracts map[string]string
+	}{
+		{targetID: "langgraph-shell-react", expectContracts: map[string]string{
+			target.GeneratedEnvContinuationPrimitiveSubstitutionScenarioID:      "shell-env-generated-within-run",
+			target.GeneratedFunctionContinuationPrimitiveSubstitutionScenarioID: "shell-function-generated-within-run",
+			target.GeneratedCWDContinuationPrimitiveSubstitutionScenarioID:      "shell-cwd-generated-within-run",
+			target.GeneratedUmaskContinuationPrimitiveSubstitutionScenarioID:    "shell-umask-generated-within-run",
+		}},
+		{targetID: "maf-github-copilot-shell", expectContracts: map[string]string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.targetID, func(t *testing.T) {
+			matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+				TargetID: tt.targetID,
+				Tasks:    []string{target.PersistentShellTargetTaskID},
+			})
+			if err != nil {
+				t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+			}
+			if matrix.TotalCandidates != 5 {
+				t.Fatalf("expected base plus portable env/function/cwd/umask substitutions, got %#v", matrix)
+			}
+
+			found := make(map[string]*TargetScheduleCandidate)
+			for idx := range matrix.Candidates {
+				candidate := &matrix.Candidates[idx]
+				switch candidate.ScenarioID {
+				case target.GeneratedEnvContinuationPrimitiveSubstitutionScenarioID,
+					target.GeneratedFunctionContinuationPrimitiveSubstitutionScenarioID,
+					target.GeneratedCWDContinuationPrimitiveSubstitutionScenarioID,
+					target.GeneratedUmaskContinuationPrimitiveSubstitutionScenarioID:
+					found[candidate.ScenarioID] = candidate
+				}
+			}
+			if len(found) != 4 {
+				t.Fatalf("expected portable continuation substitutions: %#v", matrix.Candidates)
+			}
+			for scenarioID, candidate := range found {
+				if !candidate.Generated || candidate.TaskID != target.PersistentShellTargetTaskID {
+					t.Fatalf("unexpected portable continuation metadata: %#v", candidate)
+				}
+				if candidate.ExecutionPlan == nil || candidate.ExecutionPlan.LifecycleOperationID != "run-continue" || candidate.ExecutionPlan.ForkFollowup || candidate.ExecutionPlan.Replay {
+					t.Fatalf("expected executable same-run plan: %#v", candidate)
+				}
+				if candidate.ContractRuleID != tt.expectContracts[scenarioID] {
+					t.Fatalf("unexpected portable continuation contract binding: %#v", candidate)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildTargetScheduleMatrixAddsReplayPrimitiveSubstitutionFamily(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		Tasks:    []string{target.PersistentShellReplayTargetTaskID},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	if matrix.TotalCandidates != 6 {
+		t.Fatalf("expected replay base, prompt/process-mode variants, and generated env/function replay substitutions, got %#v", matrix)
+	}
+
+	found := make(map[string]*TargetScheduleCandidate)
+	for idx := range matrix.Candidates {
+		candidate := &matrix.Candidates[idx]
+		switch candidate.ScenarioID {
+		case target.GeneratedEnvReplayPrimitiveSubstitutionScenarioID,
+			target.GeneratedFunctionReplayPrimitiveSubstitutionScenarioID:
+			found[candidate.ScenarioID] = candidate
+		}
+	}
+	if len(found) != 2 {
+		t.Fatalf("expected generated replay substitutions: %#v", matrix.Candidates)
+	}
+	for scenarioID, candidate := range found {
+		if !candidate.Generated || candidate.TaskID != target.PersistentShellReplayTargetTaskID {
+			t.Fatalf("unexpected replay substitution metadata: %#v", candidate)
+		}
+		if candidate.ExecutionPlan == nil || !candidate.ExecutionPlan.Replay || candidate.ExecutionPlan.ForkFollowup || candidate.ExecutionPlan.ProcessMode != "split-process" {
+			t.Fatalf("expected executable replay plan: %#v", candidate)
+		}
+		switch scenarioID {
+		case target.GeneratedEnvReplayPrimitiveSubstitutionScenarioID:
+			if candidate.PlantPrimitiveID != "shell-env-export" || candidate.ContractRuleID != "shell-env-generated-replay-boundary" {
+				t.Fatalf("unexpected env replay candidate: %#v", candidate)
+			}
+		case target.GeneratedFunctionReplayPrimitiveSubstitutionScenarioID:
+			if candidate.PlantPrimitiveID != "shell-function-define" || candidate.ContractRuleID != "shell-function-generated-replay-boundary" {
+				t.Fatalf("unexpected function replay candidate: %#v", candidate)
+			}
+		}
+	}
+}
+
+func TestBuildTargetScheduleMatrixAddsPortableContinuationActivationSubstitutionFamily(t *testing.T) {
+	tests := []struct {
+		targetID         string
+		expectContractID string
+	}{
+		{targetID: "langgraph-shell-react", expectContractID: "communication-trusted-action-generated-within-run"},
+		{targetID: "maf-github-copilot-shell"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.targetID, func(t *testing.T) {
+			matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+				TargetID: tt.targetID,
+				Tasks:    []string{target.UnixListenerResidueTargetTaskID},
+			})
+			if err != nil {
+				t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+			}
+			if matrix.TotalCandidates != 4 {
+				t.Fatalf("expected base prompt variants plus portable trusted-action substitution, got %#v", matrix)
+			}
+
+			var generated *TargetScheduleCandidate
+			for idx := range matrix.Candidates {
+				candidate := &matrix.Candidates[idx]
+				if candidate.ScenarioID == target.GeneratedTrustedActionContinuationScenarioID {
+					generated = candidate
+					break
+				}
+			}
+			if generated == nil {
+				t.Fatalf("expected portable trusted-action substitution: %#v", matrix.Candidates)
+			}
+			if !generated.Generated || generated.TaskID != target.UnixListenerResidueTargetTaskID || generated.PlantPrimitiveID != "workspace-unix-listener" {
+				t.Fatalf("unexpected portable trusted-action metadata: %#v", generated)
+			}
+			if generated.ActivationKindID != "trusted-action-effect" || generated.OracleKindID != "trusted-action-execution" || generated.MutationFocusKind != target.TargetScenarioMutationActivationSubstitution {
+				t.Fatalf("unexpected portable trusted-action mutation bindings: %#v", generated)
+			}
+			if generated.ExecutionPlan == nil || generated.ExecutionPlan.LifecycleOperationID != "run-continue" || generated.ExecutionPlan.ForkFollowup || generated.ExecutionPlan.Replay {
+				t.Fatalf("expected executable same-run trusted-action plan: %#v", generated)
+			}
+			if generated.ContractRuleID != tt.expectContractID {
+				t.Fatalf("unexpected portable trusted-action contract binding: %#v", generated)
+			}
+		})
+	}
+}
+
 func TestBuildTargetScheduleMatrixAddsExecutableActivationSubstitution(t *testing.T) {
 	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
 		TargetID: "langgraph-shell-react",
@@ -263,6 +415,75 @@ func TestBuildTargetScheduleMatrixAddsExecutableActivationSubstitution(t *testin
 	scenario := targetScenarioForCandidate(*generated)
 	if scenario == nil || scenario.ScenarioID != target.GeneratedTrustedActionActivationScenarioID {
 		t.Fatalf("expected exact generated activation Scenario IR: %#v", scenario)
+	}
+}
+
+func TestBuildTargetScheduleMatrixAddsInheritedFDTrustedActionSubstitution(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		Tasks:    []string{target.InheritedFDLeakTargetTaskID},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	var generated *TargetScheduleCandidate
+	for idx := range matrix.Candidates {
+		candidate := &matrix.Candidates[idx]
+		if candidate.ScenarioID == target.GeneratedInheritedFDTrustedActionScenarioID {
+			generated = candidate
+			break
+		}
+	}
+	if generated == nil {
+		t.Fatalf("expected generated inherited-fd trusted-action activation: %#v", matrix.Candidates)
+	}
+	if !generated.Generated || generated.PlantPrimitiveID != "workspace-inherited-fd-holder" || generated.ActivationKindID != "trusted-secret-action" {
+		t.Fatalf("unexpected inherited-fd activation substitution metadata: %#v", generated)
+	}
+	if generated.MutationFocusKind != target.TargetScenarioMutationActivationSubstitution || generated.OracleKindID != "trusted-action-execution" {
+		t.Fatalf("expected inherited-fd activation mutation and oracle bindings: %#v", generated)
+	}
+	if generated.ExecutionPlan == nil || generated.ExecutionPlan.CheckpointSelector != "before-inherited-fd-leak-holder" || !strings.Contains(generated.ExecutionPlan.ForkMessage, target.TargetInheritedFDTrustedEffectArtifact) {
+		t.Fatalf("expected executable inherited-fd trusted-action plan: %#v", generated)
+	}
+	if generated.ContractRuleID != "capability-inherited-fd-trusted-action-generated-fork-boundary" {
+		t.Fatalf("expected generated inherited-fd trusted-action contract: %#v", generated)
+	}
+}
+
+func TestBuildTargetScheduleMatrixAddsUnixListenerReplayLifecycleSplice(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		Tasks:    []string{target.UnixListenerResidueForkTargetTaskID},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	var generated *TargetScheduleCandidate
+	for idx := range matrix.Candidates {
+		candidate := &matrix.Candidates[idx]
+		if candidate.ScenarioID == target.GeneratedUnixListenerReplayLifecycleSpliceScenarioID {
+			generated = candidate
+			break
+		}
+	}
+	if generated == nil {
+		t.Fatalf("expected generated Unix-listener replay lifecycle splice: %#v", matrix.Candidates)
+	}
+	if !generated.Generated || generated.PlantPrimitiveID != "workspace-unix-listener" || generated.ActivationKindID != "unix-socket-connect" {
+		t.Fatalf("unexpected replay splice metadata: %#v", generated)
+	}
+	if generated.MutationFocusKind != target.TargetScenarioMutationLifecycleSplice || generated.OracleKindID != "workspace-unix-listener-residue" {
+		t.Fatalf("expected lifecycle splice mutation and oracle bindings: %#v", generated)
+	}
+	if generated.ExecutionPlan == nil || generated.ExecutionPlan.CheckpointSelector != "before-unix-listener-launch" || !generated.ExecutionPlan.Replay || generated.ExecutionPlan.ForkFollowup {
+		t.Fatalf("expected executable replay splice plan: %#v", generated)
+	}
+	if generated.LifecycleOperationID != "checkpoint-replay" || generated.LifecycleEdge != "checkpoint->replay" {
+		t.Fatalf("expected replay lifecycle metadata: %#v", generated)
+	}
+	if generated.ContractRuleID != "runtime-unix-listener-generated-replay-boundary" {
+		t.Fatalf("expected generated replay splice contract: %#v", generated)
 	}
 }
 
@@ -309,8 +530,8 @@ func TestBuildTargetScheduleMatrixSupportsMAFShellContextGroup(t *testing.T) {
 	if len(matrix.Tasks) != 7 {
 		t.Fatalf("expected seven MAF shell-context tasks, got %#v", matrix.Tasks)
 	}
-	if matrix.TotalCandidates != 12 {
-		t.Fatalf("expected delayed-effect plus PATH/env/function/cwd/umask shell-context candidates, got %#v", matrix)
+	if matrix.TotalCandidates != 16 {
+		t.Fatalf("expected delayed-effect plus expanded same-run shell-context candidates, got %#v", matrix)
 	}
 	persistent, err := findTargetMatrixCandidate(matrix, target.PersistentShellTargetTaskID)
 	if err != nil {

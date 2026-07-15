@@ -71,6 +71,7 @@ const (
 	TargetUnixListenerSocketArtifact             = "branch-listener.sock"
 	TargetUnixListenerPIDArtifact                = "branch-listener-pid.txt"
 	TargetUnixListenerForkArtifact               = "unix-listener-residue-fork-check.txt"
+	TargetUnixListenerReplayArtifact             = "unix-listener-residue-replay-check.txt"
 	TargetTrustedClientResponseArtifact          = "trusted-client-response.txt"
 	TargetDiscardedServerTrustedClientArtifact   = "discarded-server-trusted-client-check.txt"
 	TargetTrustedClientCacheArtifact             = "trusted-client-cache.txt"
@@ -79,6 +80,10 @@ const (
 	TargetTrustedActionEffectArtifact            = "trusted-action-effect.txt"
 	TargetTrustedActionCheckArtifact             = "trusted-action-check.txt"
 	targetTrustedActionPayload                   = "SYNCFUZZ_UNIX_LISTENER_RESPONSE"
+	TargetInheritedFDTrustedInputArtifact        = "inherited-fd-trusted-input.txt"
+	TargetInheritedFDTrustedEffectArtifact       = "inherited-fd-trusted-effect.txt"
+	TargetInheritedFDTrustedCheckArtifact        = "inherited-fd-trusted-check.txt"
+	targetInheritedFDTrustedPayload              = "SYNCFUZZ_INHERITED_FD_BRANCH_SECRET"
 	TargetSnapshotLateArtifact                   = "snapshot-late.json"
 	TargetProcessLateArtifact                    = "process-late.json"
 	TargetFilesystemLateArtifact                 = "filesystem-late-metadata.json"
@@ -825,18 +830,39 @@ func DefaultTargetLateObserveDelay(taskID string) time.Duration {
 
 func evaluateTargetOracleForScenario(workspace string, targetID string, taskID string, scenario *TargetScenarioInfo, completed bool, immediateMissing []string, lineage core.ProcessLineageSummary, lateObserved bool, latePresent []string, lateMissing []string) TargetOracleResult {
 	if scenario != nil {
+		if scenario.ScenarioID == GeneratedEnvReplayPrimitiveSubstitutionScenarioID {
+			return evaluateGeneratedEnvReplayTargetOracle(workspace, completed, immediateMissing)
+		}
+		if scenario.ScenarioID == GeneratedFunctionReplayPrimitiveSubstitutionScenarioID {
+			return evaluateGeneratedFunctionReplayTargetOracle(workspace, completed, immediateMissing)
+		}
 		if scenario.ScenarioID == GeneratedEnvForkPrimitiveSubstitutionScenarioID {
 			return evaluateGeneratedEnvForkTargetOracle(workspace, completed, immediateMissing)
 		}
 		if scenario.ScenarioID == GeneratedFunctionForkPrimitiveSubstitutionScenarioID {
 			return evaluateGeneratedFunctionForkTargetOracle(workspace, completed, immediateMissing)
 		}
+		if scenario.ScenarioID == GeneratedTrustedActionContinuationScenarioID {
+			return evaluateGeneratedTrustedActionContinuationOracle(workspace, targetID, completed, immediateMissing)
+		}
 		if scenario.ScenarioID == GeneratedTrustedActionActivationScenarioID {
 			return evaluateGeneratedTrustedActionTargetOracle(workspace, completed, immediateMissing)
+		}
+		if scenario.ScenarioID == GeneratedInheritedFDTrustedActionScenarioID {
+			return evaluateGeneratedInheritedFDTrustedActionOracle(workspace, completed, immediateMissing)
+		}
+		if scenario.ScenarioID == GeneratedUnixListenerReplayLifecycleSpliceScenarioID {
+			return evaluateGeneratedUnixListenerReplayLifecycleSpliceOracle(workspace, completed, immediateMissing)
 		}
 		switch strings.TrimSpace(scenario.OracleKindID) {
 		case "env-residue":
 			return evaluateEnvResidueTargetOracle(workspace, targetID, completed, immediateMissing)
+		case "function-residue":
+			return evaluateFunctionResidueTargetOracle(workspace, targetID, completed, immediateMissing)
+		case "cwd-residue":
+			return evaluateCWDResidueTargetOracle(workspace, targetID, completed, immediateMissing)
+		case "umask-residue":
+			return evaluateUmaskResidueTargetOracle(workspace, targetID, completed, immediateMissing)
 		}
 	}
 	return evaluateTargetOracle(workspace, targetID, taskID, completed, immediateMissing, lineage, lateObserved, latePresent, lateMissing)

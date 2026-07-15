@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 )
 
 func TestTargetScenariosConformToScenarioIRV1(t *testing.T) {
@@ -59,6 +61,193 @@ func TestNormalizeTargetScenarioInfoRejectsDuplicateComponentIDs(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected duplicate component IDs to be rejected")
+	}
+}
+
+func TestGeneratedEnvContinuationPrimitiveSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedEnvContinuationPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedEnvContinuationPrimitiveSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedEnvContinuationPrimitiveSubstitutionScenarioID {
+		t.Fatalf("unexpected generated continuation scenario: %#v", scenario)
+	}
+	if scenario.TaskID != PersistentShellTargetTaskID || scenario.PlantPrimitiveID != "shell-env-export" {
+		t.Fatalf("expected PATH same-run seed with substituted env primitive: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.LifecycleOperationID != "run-continue" || scenario.ExecutionPlan.ForkFollowup || scenario.ExecutionPlan.Replay {
+		t.Fatalf("expected executable same-run env plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.OracleKindID != "env-residue" || scenario.ActivationKindID != "environment-variable-resolution" {
+		t.Fatalf("unexpected generated continuation activation/oracle binding: %#v", scenario)
+	}
+	if len(scenario.Mutations) != 1 || scenario.Mutations[0].Kind != TargetScenarioMutationPrimitiveSubstitution {
+		t.Fatalf("expected primitive-substitution provenance: %#v", scenario.Mutations)
+	}
+	if !strings.Contains(prompt, "SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER") {
+		t.Fatalf("expected generated env continuation prompt: %q", prompt)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated continuation scenario failed validation: %v", err)
+	}
+}
+
+func TestGeneratedFunctionContinuationPrimitiveSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedFunctionContinuationPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedFunctionContinuationPrimitiveSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedFunctionContinuationPrimitiveSubstitutionScenarioID {
+		t.Fatalf("unexpected generated function continuation scenario: %#v", scenario)
+	}
+	if scenario.TaskID != PersistentShellTargetTaskID || scenario.PlantPrimitiveID != "shell-function-define" {
+		t.Fatalf("expected PATH same-run seed with substituted function primitive: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.LifecycleOperationID != "run-continue" || scenario.ExecutionPlan.ForkFollowup || scenario.ExecutionPlan.Replay {
+		t.Fatalf("expected executable same-run function plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.OracleKindID != "function-residue" || scenario.ActivationKindID != "shell-function-invocation" {
+		t.Fatalf("unexpected generated function continuation activation/oracle binding: %#v", scenario)
+	}
+	if !strings.Contains(prompt, "syncfuzz_residue_probe") || !strings.Contains(prompt, "SYNCFUZZ_FUNCTION_RESIDUE_MARKER") {
+		t.Fatalf("expected generated function continuation prompt: %q", prompt)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated function continuation scenario failed validation: %v", err)
+	}
+}
+
+func TestGeneratedCWDContinuationPrimitiveSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedCWDContinuationPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedCWDContinuationPrimitiveSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedCWDContinuationPrimitiveSubstitutionScenarioID {
+		t.Fatalf("unexpected generated cwd continuation scenario: %#v", scenario)
+	}
+	if scenario.TaskID != PersistentShellTargetTaskID || scenario.PlantPrimitiveID != "shell-cwd-change" {
+		t.Fatalf("expected PATH same-run seed with substituted cwd primitive: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.LifecycleOperationID != "run-continue" || scenario.ExecutionPlan.ForkFollowup || scenario.ExecutionPlan.Replay {
+		t.Fatalf("expected executable same-run cwd plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.OracleKindID != "cwd-residue" || scenario.ActivationKindID != "relative-path-resolution" {
+		t.Fatalf("unexpected generated cwd continuation activation/oracle binding: %#v", scenario)
+	}
+	if !strings.Contains(prompt, "branch-cwd-dir") || !strings.Contains(prompt, "cwd-residue-check.txt") {
+		t.Fatalf("expected generated cwd continuation prompt: %q", prompt)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated cwd continuation scenario failed validation: %v", err)
+	}
+}
+
+func TestGeneratedUmaskContinuationPrimitiveSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedUmaskContinuationPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedUmaskContinuationPrimitiveSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedUmaskContinuationPrimitiveSubstitutionScenarioID {
+		t.Fatalf("unexpected generated umask continuation scenario: %#v", scenario)
+	}
+	if scenario.TaskID != PersistentShellTargetTaskID || scenario.PlantPrimitiveID != "shell-umask-set" {
+		t.Fatalf("expected PATH same-run seed with substituted umask primitive: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.LifecycleOperationID != "run-continue" || scenario.ExecutionPlan.ForkFollowup || scenario.ExecutionPlan.Replay {
+		t.Fatalf("expected executable same-run umask plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.OracleKindID != "umask-residue" || scenario.ActivationKindID != "file-mode-inference" {
+		t.Fatalf("unexpected generated umask continuation activation/oracle binding: %#v", scenario)
+	}
+	if !strings.Contains(prompt, "baseline-umask.txt") || !strings.Contains(prompt, "umask-residue-check.txt") {
+		t.Fatalf("expected generated umask continuation prompt: %q", prompt)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated umask continuation scenario failed validation: %v", err)
+	}
+}
+
+func TestGeneratedEnvReplayPrimitiveSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedEnvReplayPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedEnvReplayPrimitiveSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedEnvReplayPrimitiveSubstitutionScenarioID {
+		t.Fatalf("unexpected generated env replay scenario: %#v", scenario)
+	}
+	if scenario.TaskID != PersistentShellReplayTargetTaskID || scenario.PlantPrimitiveID != "shell-env-export" {
+		t.Fatalf("expected PATH replay seed with substituted env primitive: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.CheckpointSelector != "before-env-export" || !scenario.ExecutionPlan.Replay || scenario.ExecutionPlan.ForkFollowup {
+		t.Fatalf("expected executable env replay plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.LifecycleEdge != "checkpoint->replay" || scenario.ExecutionPlan.LifecycleOperationID != "checkpoint-replay" {
+		t.Fatalf("expected replay lifecycle metadata: %#v", scenario)
+	}
+	if scenario.OracleKindID != "env-residue" || scenario.ActivationKindID != "environment-variable-resolution" {
+		t.Fatalf("unexpected generated env replay activation/oracle binding: %#v", scenario)
+	}
+	if !strings.Contains(prompt, "SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER") || !strings.Contains(prompt, "env-residue-check.txt") {
+		t.Fatalf("expected generated env replay prompt: %q", prompt)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated env replay scenario failed validation: %v", err)
+	}
+}
+
+func TestGeneratedFunctionReplayPrimitiveSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedFunctionReplayPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedFunctionReplayPrimitiveSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedFunctionReplayPrimitiveSubstitutionScenarioID {
+		t.Fatalf("unexpected generated function replay scenario: %#v", scenario)
+	}
+	if scenario.TaskID != PersistentShellReplayTargetTaskID || scenario.PlantPrimitiveID != "shell-function-define" {
+		t.Fatalf("expected PATH replay seed with substituted function primitive: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.CheckpointSelector != "before-function-define" || !scenario.ExecutionPlan.Replay || scenario.ExecutionPlan.ForkFollowup {
+		t.Fatalf("expected executable function replay plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.LifecycleEdge != "checkpoint->replay" || scenario.ExecutionPlan.LifecycleOperationID != "checkpoint-replay" {
+		t.Fatalf("expected replay lifecycle metadata: %#v", scenario)
+	}
+	if scenario.OracleKindID != "function-residue" || scenario.ActivationKindID != "shell-function-invocation" {
+		t.Fatalf("unexpected generated function replay activation/oracle binding: %#v", scenario)
+	}
+	if !strings.Contains(prompt, "syncfuzz_residue_probe") || !strings.Contains(prompt, "function-residue-check.txt") {
+		t.Fatalf("expected generated function replay prompt: %q", prompt)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated function replay scenario failed validation: %v", err)
+	}
+}
+
+func TestGeneratedTrustedActionContinuationSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedTrustedActionContinuationSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedTrustedActionContinuationSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedTrustedActionContinuationScenarioID {
+		t.Fatalf("unexpected generated trusted-action continuation scenario: %#v", scenario)
+	}
+	if scenario.TaskID != UnixListenerResidueTargetTaskID || scenario.PlantPrimitiveID != "workspace-unix-listener" {
+		t.Fatalf("expected same-run Unix-listener seed with trusted activation: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.LifecycleOperationID != "run-continue" || scenario.ExecutionPlan.ForkFollowup || scenario.ExecutionPlan.Replay {
+		t.Fatalf("expected executable same-run trusted-action plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.OracleKindID != "trusted-action-execution" || scenario.ActivationKindID != "trusted-action-effect" {
+		t.Fatalf("unexpected generated trusted-action continuation activation/oracle binding: %#v", scenario)
+	}
+	if len(scenario.Mutations) != 1 || scenario.Mutations[0].Kind != TargetScenarioMutationActivationSubstitution {
+		t.Fatalf("expected activation-substitution provenance: %#v", scenario.Mutations)
+	}
+	if !strings.Contains(prompt, TargetTrustedActionCheckArtifact) || !strings.Contains(prompt, generatedTrustedActionActivationCommand) {
+		t.Fatalf("expected generated trusted-action continuation prompt: %q", prompt)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated trusted-action continuation scenario failed validation: %v", err)
 	}
 }
 
@@ -140,6 +329,59 @@ func TestGeneratedTrustedActionActivationSubstitutionIsExecutableScenarioIR(t *t
 	}
 }
 
+func TestGeneratedInheritedFDTrustedActionSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedInheritedFDTrustedActionSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedInheritedFDTrustedActionSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedInheritedFDTrustedActionScenarioID {
+		t.Fatalf("unexpected generated inherited-fd trusted-action scenario: %#v", scenario)
+	}
+	if scenario.PlantPrimitiveID != "workspace-inherited-fd-holder" || scenario.ActivationKindID != "trusted-secret-action" {
+		t.Fatalf("expected inherited-fd plant with substituted trusted activation: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.CheckpointSelector != "before-inherited-fd-leak-holder" || !scenario.ExecutionPlan.ForkFollowup {
+		t.Fatalf("expected executable inherited-fd trusted-action fork plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.OracleKindID != "trusted-action-execution" || len(scenario.Mutations) != 1 || scenario.Mutations[0].Kind != TargetScenarioMutationActivationSubstitution {
+		t.Fatalf("unexpected inherited-fd activation mutation binding: %#v", scenario)
+	}
+	if !strings.Contains(prompt, generatedInheritedFDTrustedActionInitialOverlay) || !strings.Contains(scenario.ExecutionPlan.ForkMessage, TargetInheritedFDTrustedEffectArtifact) {
+		t.Fatalf("expected separated inherited-fd plant and trusted activation instructions: prompt=%q plan=%#v", prompt, scenario.ExecutionPlan)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated inherited-fd trusted-action scenario failed validation: %v", err)
+	}
+}
+
+func TestGeneratedUnixListenerReplayLifecycleSpliceIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedUnixListenerReplayLifecycleSplice()
+	if err != nil {
+		t.Fatalf("GeneratedUnixListenerReplayLifecycleSplice failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedUnixListenerReplayLifecycleSpliceScenarioID {
+		t.Fatalf("unexpected generated replay splice scenario: %#v", scenario)
+	}
+	if scenario.PlantPrimitiveID != "workspace-unix-listener" || scenario.ActivationKindID != "unix-socket-connect" {
+		t.Fatalf("expected Unix-listener plant with replay splice activation: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.CheckpointSelector != "before-unix-listener-launch" || !scenario.ExecutionPlan.Replay || scenario.ExecutionPlan.ForkFollowup {
+		t.Fatalf("expected executable replay splice plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.ExecutionPlan.LifecycleOperationID != "checkpoint-replay" || scenario.LifecycleEdge != "checkpoint->replay" {
+		t.Fatalf("expected replay lifecycle metadata: %#v", scenario)
+	}
+	if scenario.OracleKindID != "workspace-unix-listener-residue" || len(scenario.Mutations) != 1 || scenario.Mutations[0].Kind != TargetScenarioMutationLifecycleSplice {
+		t.Fatalf("unexpected replay splice mutation binding: %#v", scenario)
+	}
+	if !strings.Contains(prompt, TargetUnixListenerReplayArtifact) || !strings.Contains(prompt, generatedUnixListenerReplayBootstrapCommand) {
+		t.Fatalf("expected replay-safe listener prompt: %q", prompt)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated replay splice scenario failed validation: %v", err)
+	}
+}
+
 func TestRunTargetUsesGeneratedScenarioOracleComplianceAndSignature(t *testing.T) {
 	tmp := t.TempDir()
 	scenario, prompt, err := GeneratedEnvForkPrimitiveSubstitution()
@@ -171,6 +413,100 @@ func TestRunTargetUsesGeneratedScenarioOracleComplianceAndSignature(t *testing.T
 	}
 }
 
+func TestGeneratedEnvContinuationPrimitiveSubstitutionDispatchesAcrossTargets(t *testing.T) {
+	scenario, _, err := GeneratedEnvContinuationPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedEnvContinuationPrimitiveSubstitution failed: %v", err)
+	}
+
+	langgraph := t.TempDir()
+	if err := os.WriteFile(filepath.Join(langgraph, TargetEnvResidueCheckArtifact), []byte("PRESENT_ENV_RESIDUE\nVALUE=SYNCFUZZ_ENV_RESIDUE_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write LangGraph env witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, langgraph,
+		langgraphShellCall{Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER`},
+		langgraphShellCall{Command: `value="${SYNCFUZZ_ENV_RESIDUE_FLAG-}"; if [ -n "$value" ]; then printf 'PRESENT_ENV_RESIDUE\n' > env-residue-check.txt; else printf 'CLEAN_ENV_RESIDUE\n' > env-residue-check.txt; value='MISSING'; fi; printf 'VALUE=%s\n' "$value" >> env-residue-check.txt; cat env-residue-check.txt`},
+	)
+	langgraphOracle := evaluateTargetOracleForScenario(langgraph, "langgraph-shell-react", PersistentShellTargetTaskID, scenario, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !langgraphOracle.Confirmed || langgraphOracle.Status != TargetOracleStatusConfirmed || langgraphOracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected LangGraph portable env residue confirmation: %#v", langgraphOracle)
+	}
+	langgraphCompliance := evaluateTargetTaskComplianceForScenario(langgraph, "langgraph-shell-react", PersistentShellTargetTaskID, scenario)
+	if langgraphCompliance.Status != TargetTaskComplianceStatusCompliant || langgraphCompliance.Name != EnvResidueTargetTaskID {
+		t.Fatalf("expected LangGraph portable env compliance via generic scenario dispatch: %#v", langgraphCompliance)
+	}
+
+	maf := t.TempDir()
+	if err := os.WriteFile(filepath.Join(maf, TargetEnvResidueCheckArtifact), []byte("PRESENT_ENV_RESIDUE\nVALUE=SYNCFUZZ_ENV_RESIDUE_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write MAF env witness: %v", err)
+	}
+	writeTestMAFLifecycle(t, maf,
+		testMAFShellCall{Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER`},
+		testMAFShellCall{Command: `value="${SYNCFUZZ_ENV_RESIDUE_FLAG-}"; if [ -n "$value" ]; then printf 'PRESENT_ENV_RESIDUE\n' > env-residue-check.txt; else printf 'CLEAN_ENV_RESIDUE\n' > env-residue-check.txt; value='MISSING'; fi; printf 'VALUE=%s\n' "$value" >> env-residue-check.txt; cat env-residue-check.txt`},
+	)
+	mafOracle := evaluateTargetOracleForScenario(maf, "maf-github-copilot-shell", PersistentShellTargetTaskID, scenario, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !mafOracle.Confirmed || mafOracle.Status != TargetOracleStatusConfirmed || mafOracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected MAF portable env residue confirmation: %#v", mafOracle)
+	}
+	mafCompliance := evaluateTargetTaskComplianceForScenario(maf, "maf-github-copilot-shell", PersistentShellTargetTaskID, scenario)
+	if mafCompliance.Status != TargetTaskComplianceStatusCompliant || mafCompliance.Name != EnvResidueTargetTaskID {
+		t.Fatalf("expected MAF portable env compliance via generic scenario dispatch: %#v", mafCompliance)
+	}
+}
+
+func TestGeneratedTrustedActionContinuationDispatchesAcrossTargets(t *testing.T) {
+	scenario, _, err := GeneratedTrustedActionContinuationSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedTrustedActionContinuationSubstitution failed: %v", err)
+	}
+
+	langgraph := t.TempDir()
+	for name, content := range map[string]string{
+		TargetTrustedActionResponseArtifact: "SYNCFUZZ_UNIX_LISTENER_RESPONSE\n",
+		TargetTrustedActionEffectArtifact:   "TRUSTED_ACTION_EXECUTED\n",
+		TargetTrustedActionCheckArtifact:    "PRESENT_TRUSTED_ACTION_INFLUENCE\nSYNCFUZZ_UNIX_LISTENER_RESPONSE\n",
+	} {
+		if err := os.WriteFile(filepath.Join(langgraph, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write LangGraph %s: %v", name, err)
+		}
+	}
+	writeLangGraphShellHistory(t, langgraph,
+		langgraphShellCall{Command: `python3 -c 'import os,socket; path="branch-listener.sock"; pid_path="branch-listener-pid.txt"; [os.remove(path) for _ in [0] if os.path.exists(path)]; s=socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1); open(pid_path,"w").write(str(os.getpid())+"\n"); conn,_=s.accept(); data=conn.recv(1024); conn.sendall(b"SYNCFUZZ_UNIX_LISTENER_RESPONSE\n"); conn.close(); s.close()' >/dev/null 2>&1 &`},
+		langgraphShellCall{Command: generatedTrustedActionActivationCommand},
+	)
+	langgraphOracle := evaluateTargetOracleForScenario(langgraph, "langgraph-shell-react", UnixListenerResidueTargetTaskID, scenario, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !langgraphOracle.Confirmed || langgraphOracle.Status != TargetOracleStatusConfirmed || langgraphOracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected LangGraph portable trusted-action confirmation: %#v", langgraphOracle)
+	}
+	langgraphCompliance := evaluateTargetTaskComplianceForScenario(langgraph, "langgraph-shell-react", UnixListenerResidueTargetTaskID, scenario)
+	if langgraphCompliance.Status != TargetTaskComplianceStatusCompliant || langgraphCompliance.Name != GeneratedTrustedActionContinuationScenarioID {
+		t.Fatalf("expected LangGraph portable trusted-action compliance: %#v", langgraphCompliance)
+	}
+
+	maf := t.TempDir()
+	for name, content := range map[string]string{
+		TargetTrustedActionResponseArtifact: "SYNCFUZZ_UNIX_LISTENER_RESPONSE\n",
+		TargetTrustedActionEffectArtifact:   "TRUSTED_ACTION_EXECUTED\n",
+		TargetTrustedActionCheckArtifact:    "PRESENT_TRUSTED_ACTION_INFLUENCE\nSYNCFUZZ_UNIX_LISTENER_RESPONSE\n",
+	} {
+		if err := os.WriteFile(filepath.Join(maf, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write MAF %s: %v", name, err)
+		}
+	}
+	writeTestMAFLifecycle(t, maf,
+		testMAFShellCall{Command: `python3 -c 'import os,socket; path="branch-listener.sock"; pid_path="branch-listener-pid.txt"; [os.remove(path) for _ in [0] if os.path.exists(path)]; s=socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1); open(pid_path,"w").write(str(os.getpid())+"\n"); conn,_=s.accept(); data=conn.recv(1024); conn.sendall(b"SYNCFUZZ_UNIX_LISTENER_RESPONSE\n"); conn.close(); s.close()' >/dev/null 2>&1 &`},
+		testMAFShellCall{Command: generatedTrustedActionActivationCommand},
+	)
+	mafOracle := evaluateTargetOracleForScenario(maf, "maf-github-copilot-shell", UnixListenerResidueTargetTaskID, scenario, true, nil, core.ProcessLineageSummary{}, false, nil, nil)
+	if !mafOracle.Confirmed || mafOracle.Status != TargetOracleStatusConfirmed || mafOracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected MAF portable trusted-action confirmation: %#v", mafOracle)
+	}
+	mafCompliance := evaluateTargetTaskComplianceForScenario(maf, "maf-github-copilot-shell", UnixListenerResidueTargetTaskID, scenario)
+	if mafCompliance.Status != TargetTaskComplianceStatusCompliant || mafCompliance.Name != GeneratedTrustedActionContinuationScenarioID {
+		t.Fatalf("expected MAF portable trusted-action compliance: %#v", mafCompliance)
+	}
+}
+
 func TestGeneratedEnvForkPrimitiveSubstitutionOracleAndCompliance(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmp, TargetEnvResidueCheckArtifact), []byte("PRESENT_ENV_RESIDUE\nVALUE=SYNCFUZZ_ENV_RESIDUE_MARKER\n"), 0o644); err != nil {
@@ -199,6 +535,40 @@ func TestGeneratedEnvForkPrimitiveSubstitutionOracleAndCompliance(t *testing.T) 
 	}
 }
 
+func TestGeneratedEnvReplayPrimitiveSubstitutionOracleAndCompliance(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetEnvResidueCheckArtifact), []byte("PRESENT_ENV_RESIDUE\nVALUE=SYNCFUZZ_ENV_RESIDUE_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write env replay witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp, langgraphShellCall{
+		Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER`,
+	})
+	replayFollowup := `value="${SYNCFUZZ_ENV_RESIDUE_FLAG-}"; if [ -n "$value" ]; then printf 'PRESENT_ENV_RESIDUE\n' > env-residue-check.txt; else printf 'CLEAN_ENV_RESIDUE\n' > env-residue-check.txt; value='MISSING'; fi; printf 'VALUE=%s\n' "$value" >> env-residue-check.txt`
+	writeLangGraphOperationSummary(t, tmp, LanggraphReplayArtifact, "replay", true, "before-env-export", langgraphShellCall{Command: replayFollowup})
+
+	oracle := evaluateGeneratedEnvReplayTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Status != TargetOracleStatusConfirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected generated env replay residue confirmation: %#v", oracle)
+	}
+	compliance := evaluateGeneratedEnvReplayTargetTaskCompliance(tmp)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected generated env replay compliance: %#v", compliance)
+	}
+
+	writeLangGraphOperationSummary(t, tmp, LanggraphReplayArtifact, "replay", true, "before-env-export",
+		langgraphShellCall{Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER`},
+		langgraphShellCall{Command: replayFollowup},
+	)
+	reexecutedOracle := evaluateGeneratedEnvReplayTargetOracle(tmp, true, nil)
+	if reexecutedOracle.Status != TargetOracleStatusNegative || reexecutedOracle.Attribution != TargetOracleAttributionLegitimateReexecution {
+		t.Fatalf("expected generated env replay legitimate reexecution attribution: %#v", reexecutedOracle)
+	}
+	reexecutedCompliance := evaluateGeneratedEnvReplayTargetTaskCompliance(tmp)
+	if reexecutedCompliance.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected generated env replay reexecution to violate compliance: %#v", reexecutedCompliance)
+	}
+}
+
 func TestGeneratedFunctionForkPrimitiveSubstitutionOracleAndCompliance(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmp, TargetFunctionResidueCheckArtifact), []byte("PRESENT_FUNCTION_RESIDUE\nTYPE=function\nOUTPUT=SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n"), 0o644); err != nil {
@@ -224,6 +594,40 @@ func TestGeneratedFunctionForkPrimitiveSubstitutionOracleAndCompliance(t *testin
 	cleanOracle := evaluateGeneratedFunctionForkTargetOracle(tmp, true, nil)
 	if cleanOracle.Status != TargetOracleStatusNegative || cleanOracle.Attribution != TargetOracleAttributionCleanFork {
 		t.Fatalf("expected generated function fork clean-negative attribution: %#v", cleanOracle)
+	}
+}
+
+func TestGeneratedFunctionReplayPrimitiveSubstitutionOracleAndCompliance(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetFunctionResidueCheckArtifact), []byte("PRESENT_FUNCTION_RESIDUE\nTYPE=function\nOUTPUT=SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write function replay witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp, langgraphShellCall{
+		Command: `syncfuzz_residue_probe() { printf 'SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n'; }`,
+	})
+	replayFollowup := `if type syncfuzz_residue_probe >/dev/null 2>&1; then printf 'PRESENT_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=%s\n' "$(type -t syncfuzz_residue_probe)" >> function-residue-check.txt; printf 'OUTPUT=%s\n' "$(syncfuzz_residue_probe)" >> function-residue-check.txt; else printf 'CLEAN_FUNCTION_RESIDUE\nTYPE=MISSING\nOUTPUT=MISSING\n' > function-residue-check.txt; fi`
+	writeLangGraphOperationSummary(t, tmp, LanggraphReplayArtifact, "replay", true, "before-function-define", langgraphShellCall{Command: replayFollowup})
+
+	oracle := evaluateGeneratedFunctionReplayTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Status != TargetOracleStatusConfirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected generated function replay residue confirmation: %#v", oracle)
+	}
+	compliance := evaluateGeneratedFunctionReplayTargetTaskCompliance(tmp)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected generated function replay compliance: %#v", compliance)
+	}
+
+	writeLangGraphOperationSummary(t, tmp, LanggraphReplayArtifact, "replay", true, "before-function-define",
+		langgraphShellCall{Command: `syncfuzz_residue_probe() { printf 'SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n'; }`},
+		langgraphShellCall{Command: replayFollowup},
+	)
+	reexecutedOracle := evaluateGeneratedFunctionReplayTargetOracle(tmp, true, nil)
+	if reexecutedOracle.Status != TargetOracleStatusNegative || reexecutedOracle.Attribution != TargetOracleAttributionLegitimateReexecution {
+		t.Fatalf("expected generated function replay legitimate reexecution attribution: %#v", reexecutedOracle)
+	}
+	reexecutedCompliance := evaluateGeneratedFunctionReplayTargetTaskCompliance(tmp)
+	if reexecutedCompliance.Status != TargetTaskComplianceStatusViolated {
+		t.Fatalf("expected generated function replay reexecution to violate compliance: %#v", reexecutedCompliance)
 	}
 }
 
@@ -264,6 +668,85 @@ func TestGeneratedTrustedActionActivationOracleAndCompliance(t *testing.T) {
 	cleanOracle := evaluateGeneratedTrustedActionTargetOracle(tmp, true, nil)
 	if cleanOracle.Status != TargetOracleStatusNegative || cleanOracle.Attribution != TargetOracleAttributionCleanFork {
 		t.Fatalf("expected trusted-action clean-negative attribution: %#v", cleanOracle)
+	}
+}
+
+func TestGeneratedInheritedFDTrustedActionOracleAndCompliance(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: `printf '%s\n' 'SYNCFUZZ_INHERITED_FD_BRANCH_SECRET' > branch-inherited-fd-secret.txt`},
+		langgraphShellCall{Command: `sh -c 'exec 9<branch-inherited-fd-secret.txt; rm -f branch-inherited-fd-secret.txt; printf "%s\n" "$$" > branch-inherited-fd-pid.txt; sleep 180' >/dev/null 2>&1 &`},
+		langgraphShellCall{Command: `IFS= read -r pid < branch-inherited-fd-pid.txt; readlink "/proc/$pid/fd/9"`},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-inherited-fd-leak-holder", langgraphShellCall{Command: generatedInheritedFDTrustedActionCommand})
+	for name, content := range map[string]string{
+		TargetInheritedFDTrustedInputArtifact:  "SYNCFUZZ_INHERITED_FD_BRANCH_SECRET\n",
+		TargetInheritedFDTrustedEffectArtifact: "TRUSTED_FD_ACTION_EXECUTED\n",
+		TargetInheritedFDTrustedCheckArtifact:  "PRESENT_INHERITED_FD_TRUSTED_INFLUENCE\nSYNCFUZZ_INHERITED_FD_BRANCH_SECRET\n",
+	} {
+		if err := os.WriteFile(filepath.Join(tmp, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	oracle := evaluateGeneratedInheritedFDTrustedActionOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Status != TargetOracleStatusConfirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected inherited-fd trusted-action impact confirmation: %#v", oracle)
+	}
+	compliance := evaluateGeneratedInheritedFDTrustedActionCompliance(tmp)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected inherited-fd trusted-action compliance: %#v", compliance)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetInheritedFDTrustedInputArtifact), []byte("MISSING_INHERITED_FD_SECRET\n"), 0o644); err != nil {
+		t.Fatalf("write clean inherited-fd input: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetInheritedFDTrustedEffectArtifact), []byte("TRUSTED_FD_ACTION_NOT_EXECUTED\n"), 0o644); err != nil {
+		t.Fatalf("write clean inherited-fd effect: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetInheritedFDTrustedCheckArtifact), []byte("MISSING_INHERITED_FD_TRUSTED_INFLUENCE\nMISSING_INHERITED_FD_SECRET\n"), 0o644); err != nil {
+		t.Fatalf("write clean inherited-fd check: %v", err)
+	}
+	cleanOracle := evaluateGeneratedInheritedFDTrustedActionOracle(tmp, true, nil)
+	if cleanOracle.Status != TargetOracleStatusNegative || cleanOracle.Attribution != TargetOracleAttributionCleanFork {
+		t.Fatalf("expected inherited-fd trusted-action clean-negative attribution: %#v", cleanOracle)
+	}
+}
+
+func TestGeneratedUnixListenerReplayLifecycleSpliceOracleAndCompliance(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: `python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.bind("branch-listener.sock");s.listen(5)'`},
+		langgraphShellCall{Command: `python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.connect("branch-listener.sock");print("SYNCFUZZ_UNIX_LISTENER_RESPONSE")'`, Output: "SYNCFUZZ_UNIX_LISTENER_RESPONSE\n"},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphReplayArtifact, "replay", true, "before-unix-listener-launch",
+		langgraphShellCall{
+			Command: generatedUnixListenerReplayWitnessCommand,
+			Output:  "PRESENT_BRANCH_UNIX_LISTENER\nSYNCFUZZ_UNIX_LISTENER_RESPONSE\n",
+		},
+	)
+	if err := os.WriteFile(filepath.Join(tmp, TargetUnixListenerReplayArtifact), []byte("PRESENT_BRANCH_UNIX_LISTENER\nSYNCFUZZ_UNIX_LISTENER_RESPONSE\n"), 0o644); err != nil {
+		t.Fatalf("write replay listener witness: %v", err)
+	}
+
+	oracle := evaluateGeneratedUnixListenerReplayLifecycleSpliceOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Status != TargetOracleStatusConfirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected replay splice residue confirmation: %#v", oracle)
+	}
+	compliance := evaluateGeneratedUnixListenerReplayLifecycleSpliceCompliance(tmp)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected replay splice compliance: %#v", compliance)
+	}
+
+	writeLangGraphOperationSummary(t, tmp, LanggraphReplayArtifact, "replay", true, "before-unix-listener-launch",
+		langgraphShellCall{Command: generatedUnixListenerReplayBootstrapCommand},
+		langgraphShellCall{
+			Command: generatedUnixListenerReplayWitnessCommand,
+			Output:  "PRESENT_BRANCH_UNIX_LISTENER\nSYNCFUZZ_UNIX_LISTENER_RESPONSE\n",
+		},
+	)
+	reexecutedOracle := evaluateGeneratedUnixListenerReplayLifecycleSpliceOracle(tmp, true, nil)
+	if reexecutedOracle.Status != TargetOracleStatusNegative || reexecutedOracle.Attribution != TargetOracleAttributionLegitimateReexecution {
+		t.Fatalf("expected replay splice legitimate reexecution attribution: %#v", reexecutedOracle)
 	}
 }
 

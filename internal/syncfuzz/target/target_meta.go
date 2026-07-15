@@ -377,6 +377,8 @@ func targetSeedDescription(seedID string) string {
 		return "persistent shell PATH residue seed with same-run, replay, and fork lifecycle variants"
 	case "shell-execution-context-residue":
 		return "persistent shell execution-context residue seed covering same-run cwd, env, function, and umask carry-over across later shell calls"
+	case "shell-execution-context-residue-replay":
+		return "persistent shell execution-context residue seed covering replay-boundary env and function carry-over checks"
 	case "workspace-object-residue":
 		return "workspace object residue seed covering same-run file, directory, delete, symlink, rename, mode, and append continuity across later shell calls"
 	case "workspace-link-residue":

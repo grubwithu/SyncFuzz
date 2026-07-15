@@ -160,6 +160,26 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 			if derived, ok := targetDerivedProcessModePhaseShiftCandidate(candidate); ok {
 				candidates = append(candidates, derived)
 			}
+			if derived, err := targetDerivedLifecycleSpliceCandidates(candidate); err != nil {
+				return nil, err
+			} else {
+				candidates = append(candidates, derived...)
+			}
+			if derived, err := targetDerivedContinuationPrimitiveSubstitutionCandidates(candidate); err != nil {
+				return nil, err
+			} else {
+				candidates = append(candidates, derived...)
+			}
+			if derived, err := targetDerivedReplayPrimitiveSubstitutionCandidates(candidate); err != nil {
+				return nil, err
+			} else {
+				candidates = append(candidates, derived...)
+			}
+			if derived, err := targetDerivedContinuationActivationSubstitutionCandidates(candidate); err != nil {
+				return nil, err
+			} else {
+				candidates = append(candidates, derived...)
+			}
 			if derived, err := targetDerivedForkPrimitiveSubstitutionCandidates(candidate); err != nil {
 				return nil, err
 			} else {
@@ -324,6 +344,37 @@ func targetDerivedProcessModePhaseShiftCandidate(base TargetScheduleCandidate) (
 	return derived, true
 }
 
+func targetDerivedLifecycleSpliceCandidates(base TargetScheduleCandidate) ([]TargetScheduleCandidate, error) {
+	if base.TargetID != "langgraph-shell-react" {
+		return nil, nil
+	}
+	if target.NormalizeTargetPromptProfileID(base.PromptProfileID) != target.TargetPromptProfileBaselineID ||
+		target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID {
+		return nil, nil
+	}
+	var (
+		generated []target.GeneratedTargetScenarioCandidate
+		err       error
+	)
+	switch base.TaskID {
+	case target.UnixListenerResidueForkTargetTaskID:
+		generated, err = target.GeneratedUnixListenerLifecycleSplices()
+	default:
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	derived := make([]TargetScheduleCandidate, 0, len(generated))
+	for _, generatedCandidate := range generated {
+		if generatedCandidate.Scenario == nil || generatedCandidate.CandidateSuffix == "" {
+			continue
+		}
+		derived = append(derived, targetDerivedGeneratedScenarioCandidate(base, generatedCandidate))
+	}
+	return derived, nil
+}
+
 func targetDerivedForkPrimitiveSubstitutionCandidates(base TargetScheduleCandidate) ([]TargetScheduleCandidate, error) {
 	if base.TargetID != "langgraph-shell-react" || base.TaskID != target.PersistentShellForkTargetTaskID {
 		return nil, nil
@@ -346,15 +397,102 @@ func targetDerivedForkPrimitiveSubstitutionCandidates(base TargetScheduleCandida
 	return derived, nil
 }
 
-func targetDerivedForkActivationSubstitutionCandidates(base TargetScheduleCandidate) ([]TargetScheduleCandidate, error) {
-	if base.TargetID != "langgraph-shell-react" || base.TaskID != target.UnixListenerResidueForkTargetTaskID {
+func targetDerivedContinuationPrimitiveSubstitutionCandidates(base TargetScheduleCandidate) ([]TargetScheduleCandidate, error) {
+	switch base.TargetID {
+	case "langgraph-shell-react", "maf-github-copilot-shell":
+	default:
+		return nil, nil
+	}
+	if base.TaskID != target.PersistentShellTargetTaskID {
 		return nil, nil
 	}
 	if target.NormalizeTargetPromptProfileID(base.PromptProfileID) != target.TargetPromptProfileBaselineID ||
 		target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID {
 		return nil, nil
 	}
-	generated, err := target.GeneratedUnixListenerForkActivationSubstitutions()
+	generated, err := target.GeneratedPersistentShellContinuationPrimitiveSubstitutions()
+	if err != nil {
+		return nil, err
+	}
+	derived := make([]TargetScheduleCandidate, 0, len(generated))
+	for _, generatedCandidate := range generated {
+		if generatedCandidate.Scenario == nil || generatedCandidate.CandidateSuffix == "" {
+			continue
+		}
+		derived = append(derived, targetDerivedGeneratedScenarioCandidate(base, generatedCandidate))
+	}
+	return derived, nil
+}
+
+func targetDerivedReplayPrimitiveSubstitutionCandidates(base TargetScheduleCandidate) ([]TargetScheduleCandidate, error) {
+	if base.TargetID != "langgraph-shell-react" || base.TaskID != target.PersistentShellReplayTargetTaskID {
+		return nil, nil
+	}
+	if target.NormalizeTargetPromptProfileID(base.PromptProfileID) != target.TargetPromptProfileBaselineID ||
+		target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID {
+		return nil, nil
+	}
+	generated, err := target.GeneratedPersistentShellReplayPrimitiveSubstitutions()
+	if err != nil {
+		return nil, err
+	}
+	derived := make([]TargetScheduleCandidate, 0, len(generated))
+	for _, generatedCandidate := range generated {
+		if generatedCandidate.Scenario == nil || generatedCandidate.CandidateSuffix == "" {
+			continue
+		}
+		derived = append(derived, targetDerivedGeneratedScenarioCandidate(base, generatedCandidate))
+	}
+	return derived, nil
+}
+
+func targetDerivedContinuationActivationSubstitutionCandidates(base TargetScheduleCandidate) ([]TargetScheduleCandidate, error) {
+	switch base.TargetID {
+	case "langgraph-shell-react", "maf-github-copilot-shell":
+	default:
+		return nil, nil
+	}
+	if base.TaskID != target.UnixListenerResidueTargetTaskID {
+		return nil, nil
+	}
+	if target.NormalizeTargetPromptProfileID(base.PromptProfileID) != target.TargetPromptProfileBaselineID ||
+		target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID {
+		return nil, nil
+	}
+	generated, err := target.GeneratedUnixListenerContinuationActivationSubstitutions()
+	if err != nil {
+		return nil, err
+	}
+	derived := make([]TargetScheduleCandidate, 0, len(generated))
+	for _, generatedCandidate := range generated {
+		if generatedCandidate.Scenario == nil || generatedCandidate.CandidateSuffix == "" {
+			continue
+		}
+		derived = append(derived, targetDerivedGeneratedScenarioCandidate(base, generatedCandidate))
+	}
+	return derived, nil
+}
+
+func targetDerivedForkActivationSubstitutionCandidates(base TargetScheduleCandidate) ([]TargetScheduleCandidate, error) {
+	if base.TargetID != "langgraph-shell-react" {
+		return nil, nil
+	}
+	if target.NormalizeTargetPromptProfileID(base.PromptProfileID) != target.TargetPromptProfileBaselineID ||
+		target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID {
+		return nil, nil
+	}
+	var (
+		generated []target.GeneratedTargetScenarioCandidate
+		err       error
+	)
+	switch base.TaskID {
+	case target.UnixListenerResidueForkTargetTaskID:
+		generated, err = target.GeneratedUnixListenerForkActivationSubstitutions()
+	case target.InheritedFDLeakTargetTaskID:
+		generated, err = target.GeneratedInheritedFDForkActivationSubstitutions()
+	default:
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -384,6 +522,10 @@ func targetDerivedGeneratedScenarioCandidate(base TargetScheduleCandidate, gener
 	derived.DefaultLateObserveDelay = scenario.LateObserveDelayMs
 	derived.StateSurface = scenario.StateSurface
 	derived.LifecycleEdge = scenario.LifecycleEdge
+	derived.LifecycleOperationID = ""
+	if scenario.ExecutionPlan != nil {
+		derived.LifecycleOperationID = scenario.ExecutionPlan.LifecycleOperationID
+	}
 	derived.Components = append([]target.TargetScenarioComponent{}, scenario.Components...)
 	derived.ExecutionPlan = cloneTargetExecutionPlan(scenario.ExecutionPlan)
 	derived.PlantPrimitiveID = scenario.PlantPrimitiveID

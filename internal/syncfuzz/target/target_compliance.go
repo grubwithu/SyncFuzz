@@ -123,14 +123,29 @@ func evaluateTargetTaskComplianceForTarget(workspace string, targetID string, ta
 
 func evaluateTargetTaskComplianceForScenario(workspace string, targetID string, taskID string, scenario *TargetScenarioInfo) TargetTaskComplianceResult {
 	if scenario != nil {
+		if scenario.ScenarioID == GeneratedEnvReplayPrimitiveSubstitutionScenarioID {
+			return evaluateGeneratedEnvReplayTargetTaskCompliance(workspace)
+		}
+		if scenario.ScenarioID == GeneratedFunctionReplayPrimitiveSubstitutionScenarioID {
+			return evaluateGeneratedFunctionReplayTargetTaskCompliance(workspace)
+		}
 		if scenario.ScenarioID == GeneratedEnvForkPrimitiveSubstitutionScenarioID {
 			return evaluateGeneratedEnvForkTargetTaskCompliance(workspace)
 		}
 		if scenario.ScenarioID == GeneratedFunctionForkPrimitiveSubstitutionScenarioID {
 			return evaluateGeneratedFunctionForkTargetTaskCompliance(workspace)
 		}
+		if scenario.ScenarioID == GeneratedTrustedActionContinuationScenarioID {
+			return evaluateGeneratedTrustedActionContinuationCompliance(workspace, targetID)
+		}
 		if scenario.ScenarioID == GeneratedTrustedActionActivationScenarioID {
 			return evaluateGeneratedTrustedActionTargetTaskCompliance(workspace)
+		}
+		if scenario.ScenarioID == GeneratedInheritedFDTrustedActionScenarioID {
+			return evaluateGeneratedInheritedFDTrustedActionCompliance(workspace)
+		}
+		if scenario.ScenarioID == GeneratedUnixListenerReplayLifecycleSpliceScenarioID {
+			return evaluateGeneratedUnixListenerReplayLifecycleSpliceCompliance(workspace)
 		}
 		switch strings.TrimSpace(scenario.OracleKindID) {
 		case "env-residue":
@@ -139,6 +154,27 @@ func evaluateTargetTaskComplianceForScenario(workspace string, targetID string, 
 				return evaluateMAFEnvResidueTargetTaskCompliance(workspace)
 			default:
 				return evaluateEnvResidueTargetTaskCompliance(workspace)
+			}
+		case "function-residue":
+			switch strings.TrimSpace(targetID) {
+			case "maf-github-copilot-shell":
+				return evaluateMAFFunctionResidueTargetTaskCompliance(workspace)
+			default:
+				return evaluateFunctionResidueTargetTaskCompliance(workspace)
+			}
+		case "cwd-residue":
+			switch strings.TrimSpace(targetID) {
+			case "maf-github-copilot-shell":
+				return evaluateMAFCWDResidueTargetTaskCompliance(workspace)
+			default:
+				return evaluateCWDResidueTargetTaskCompliance(workspace)
+			}
+		case "umask-residue":
+			switch strings.TrimSpace(targetID) {
+			case "maf-github-copilot-shell":
+				return evaluateMAFUmaskResidueTargetTaskCompliance(workspace)
+			default:
+				return evaluateUmaskResidueTargetTaskCompliance(workspace)
 			}
 		}
 	}
@@ -822,6 +858,24 @@ func evaluateForkOperationSummaryMeta(result *TargetTaskComplianceResult, summar
 		appendTargetTaskEvidence(result, "fork used the expected checkpoint selector")
 	} else {
 		appendTargetTaskViolation(result, "fork used the expected checkpoint selector")
+	}
+}
+
+func evaluateReplayOperationSummaryMeta(result *TargetTaskComplianceResult, summary *langgraphOperationSummary, expectedSelector string) {
+	if summary.Operation == "replay" {
+		appendTargetTaskEvidence(result, "task requested a replay operation")
+	} else {
+		appendTargetTaskViolation(result, "task requested a replay operation")
+	}
+	if summary.Requested {
+		appendTargetTaskEvidence(result, "langgraph replay was explicitly requested")
+	} else {
+		appendTargetTaskViolation(result, "langgraph replay was explicitly requested")
+	}
+	if summary.CheckpointSelector == expectedSelector {
+		appendTargetTaskEvidence(result, "replay used the expected checkpoint selector")
+	} else {
+		appendTargetTaskViolation(result, "replay used the expected checkpoint selector")
 	}
 }
 
@@ -2026,6 +2080,17 @@ func unixListenerFollowupProducedWitness(call langgraphShellCall) bool {
 	}
 	return command == "" ||
 		strings.Contains(command, "unix-listener-residue-fork-check") ||
+		looksLikeUnixListenerResidueVerification(command)
+}
+
+func replayUnixListenerWitnessProduced(call langgraphShellCall) bool {
+	command := normalizeShellCommand(call.Command)
+	output := strings.TrimSpace(call.Output)
+	if !outputShowsUnixListenerResidueMarker(output) && !outputShowsMissingUnixListenerResidue(output) {
+		return false
+	}
+	return command == "" ||
+		strings.Contains(command, TargetUnixListenerReplayArtifact) ||
 		looksLikeUnixListenerResidueVerification(command)
 }
 

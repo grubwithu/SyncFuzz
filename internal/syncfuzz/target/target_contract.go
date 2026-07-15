@@ -1,5 +1,7 @@
 package target
 
+import "strings"
+
 type TargetContractExpectation string
 
 const (
@@ -86,6 +88,111 @@ func TargetContractProfileFor(targetID string) *TargetContractProfile {
 				Description:    "Later shell calls in the same persistent shell session can still observe earlier PATH changes.",
 			},
 			{
+				RuleID:         "shell-env-within-run",
+				TaskID:         EnvResidueTargetTaskID,
+				StateSurface:   "shell-session.env",
+				LifecycleEdge:  "run->continue",
+				Expectation:    TargetContractExpectationPreserve,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "middleware-runtime",
+				Description:    "Later shell calls in the same persistent shell session can still observe earlier environment-variable exports.",
+			},
+			{
+				RuleID:         "shell-env-generated-within-run",
+				TaskID:         PersistentShellTargetTaskID,
+				ScenarioID:     GeneratedEnvContinuationPrimitiveSubstitutionScenarioID,
+				StateSurface:   "shell-session.env",
+				LifecycleEdge:  "run->continue",
+				Expectation:    TargetContractExpectationPreserve,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "middleware-runtime",
+				Description:    "Later shell calls in the same persistent shell session can still observe earlier environment-variable exports.",
+			},
+			{
+				RuleID:         "shell-function-within-run",
+				TaskID:         FunctionResidueTargetTaskID,
+				StateSurface:   "shell-session.function",
+				LifecycleEdge:  "run->continue",
+				Expectation:    TargetContractExpectationPreserve,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "middleware-runtime",
+				Description:    "Later shell calls in the same persistent shell session can still observe earlier shell-function definitions.",
+			},
+			{
+				RuleID:         "shell-function-generated-within-run",
+				TaskID:         PersistentShellTargetTaskID,
+				ScenarioID:     GeneratedFunctionContinuationPrimitiveSubstitutionScenarioID,
+				StateSurface:   "shell-session.function",
+				LifecycleEdge:  "run->continue",
+				Expectation:    TargetContractExpectationPreserve,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "middleware-runtime",
+				Description:    "Later shell calls in the same persistent shell session can still observe earlier shell-function definitions.",
+			},
+			{
+				RuleID:         "shell-cwd-within-run",
+				TaskID:         CWDResidueTargetTaskID,
+				StateSurface:   "shell-session.cwd",
+				LifecycleEdge:  "run->continue",
+				Expectation:    TargetContractExpectationPreserve,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "middleware-runtime",
+				Description:    "Later shell calls in the same persistent shell session can still observe earlier cwd changes.",
+			},
+			{
+				RuleID:         "shell-cwd-generated-within-run",
+				TaskID:         PersistentShellTargetTaskID,
+				ScenarioID:     GeneratedCWDContinuationPrimitiveSubstitutionScenarioID,
+				StateSurface:   "shell-session.cwd",
+				LifecycleEdge:  "run->continue",
+				Expectation:    TargetContractExpectationPreserve,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "middleware-runtime",
+				Description:    "Later shell calls in the same persistent shell session can still observe earlier cwd changes.",
+			},
+			{
+				RuleID:         "shell-umask-within-run",
+				TaskID:         UmaskResidueTargetTaskID,
+				StateSurface:   "shell-session.umask",
+				LifecycleEdge:  "run->continue",
+				Expectation:    TargetContractExpectationPreserve,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "middleware-runtime",
+				Description:    "Later shell calls in the same persistent shell session can still observe earlier umask changes.",
+			},
+			{
+				RuleID:         "shell-umask-generated-within-run",
+				TaskID:         PersistentShellTargetTaskID,
+				ScenarioID:     GeneratedUmaskContinuationPrimitiveSubstitutionScenarioID,
+				StateSurface:   "shell-session.umask",
+				LifecycleEdge:  "run->continue",
+				Expectation:    TargetContractExpectationPreserve,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "middleware-runtime",
+				Description:    "Later shell calls in the same persistent shell session can still observe earlier umask changes.",
+			},
+			{
+				RuleID:         "communication-unix-listener-within-run",
+				TaskID:         UnixListenerResidueTargetTaskID,
+				StateSurface:   "runtime.unix-listener",
+				LifecycleEdge:  "run->continue",
+				Expectation:    TargetContractExpectationPreserve,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "middleware-runtime",
+				Description:    "Later shell calls in the same run can still reach an already-running Unix listener.",
+			},
+			{
+				RuleID:         "communication-trusted-action-generated-within-run",
+				TaskID:         UnixListenerResidueTargetTaskID,
+				ScenarioID:     GeneratedTrustedActionContinuationScenarioID,
+				StateSurface:   "communication.trusted-action",
+				LifecycleEdge:  "run->continue",
+				Expectation:    TargetContractExpectationPreserve,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "middleware-runtime",
+				Description:    "Later shell calls in the same run can still let an already-running Unix listener influence a fixed trusted action.",
+			},
+			{
 				RuleID:         "shell-path-replay-boundary",
 				TaskID:         PersistentShellReplayTargetTaskID,
 				StateSurface:   "shell-session.path",
@@ -94,6 +201,28 @@ func TargetContractProfileFor(targetID string) *TargetContractProfile {
 				SourceStrength: TargetContractSourceStrengthImplicit,
 				EvidenceSource: "syncfuzz-wrapper",
 				Description:    "Replay from before the PATH export should not preserve later shell-session PATH mutations across the selected checkpoint boundary.",
+			},
+			{
+				RuleID:         "shell-env-generated-replay-boundary",
+				TaskID:         PersistentShellReplayTargetTaskID,
+				ScenarioID:     GeneratedEnvReplayPrimitiveSubstitutionScenarioID,
+				StateSurface:   "shell-session.env",
+				LifecycleEdge:  "checkpoint->replay",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Replay from before the environment export should not preserve the discarded environment variable across the selected checkpoint boundary.",
+			},
+			{
+				RuleID:         "shell-function-generated-replay-boundary",
+				TaskID:         PersistentShellReplayTargetTaskID,
+				ScenarioID:     GeneratedFunctionReplayPrimitiveSubstitutionScenarioID,
+				StateSurface:   "shell-session.function",
+				LifecycleEdge:  "checkpoint->replay",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Replay from before the shell-function definition should not preserve the discarded branch function across the selected checkpoint boundary.",
 			},
 			{
 				RuleID:         "shell-path-fork-boundary",
@@ -248,6 +377,17 @@ func TargetContractProfileFor(targetID string) *TargetContractProfile {
 				Description:    "Fork from before the branch-local fd-holder launch should not let the successor branch read discarded branch data through an inherited file descriptor.",
 			},
 			{
+				RuleID:         "capability-inherited-fd-trusted-action-generated-fork-boundary",
+				TaskID:         InheritedFDLeakTargetTaskID,
+				ScenarioID:     GeneratedInheritedFDTrustedActionScenarioID,
+				StateSurface:   "capability.inherited-fd-trusted-action",
+				LifecycleEdge:  "checkpoint->fork",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Fork from before the fd-holder launch should not let a discarded branch secret influence a successor-branch trusted action.",
+			},
+			{
 				RuleID:         "runtime-unix-listener-fork-boundary",
 				TaskID:         UnixListenerResidueForkTargetTaskID,
 				StateSurface:   "runtime.unix-listener",
@@ -256,6 +396,17 @@ func TargetContractProfileFor(targetID string) *TargetContractProfile {
 				SourceStrength: TargetContractSourceStrengthImplicit,
 				EvidenceSource: "syncfuzz-wrapper",
 				Description:    "Fork from before the branch-local Unix listener launch should not let the successor branch connect to the discarded branch listener.",
+			},
+			{
+				RuleID:         "runtime-unix-listener-generated-replay-boundary",
+				TaskID:         UnixListenerResidueForkTargetTaskID,
+				ScenarioID:     GeneratedUnixListenerReplayLifecycleSpliceScenarioID,
+				StateSurface:   "runtime.unix-listener",
+				LifecycleEdge:  "checkpoint->replay",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Replay from before the branch-local Unix listener launch should not preserve the discarded branch listener across the selected checkpoint boundary.",
 			},
 			{
 				RuleID:         "communication-trusted-action-generated-fork-boundary",
@@ -327,7 +478,7 @@ func TargetContractRuleFor(profile *TargetContractProfile, taskID string) (Targe
 		return TargetContractRule{}, false
 	}
 	for _, rule := range profile.Rules {
-		if rule.TaskID == taskID {
+		if rule.TaskID == taskID && strings.TrimSpace(rule.ScenarioID) == "" {
 			return rule, true
 		}
 	}
@@ -417,6 +568,27 @@ func evaluateTargetContractInterpretationRule(profile *TargetContractProfile, ru
 }
 
 func targetContractObservedOutcomeForRule(rule TargetContractRule, oracle TargetOracleResult) (targetContractObservedOutcome, string, bool) {
+	if rule.ScenarioID == GeneratedEnvContinuationPrimitiveSubstitutionScenarioID {
+		return targetContractObservedWithinRunOutcome("environment-variable residue", oracle)
+	}
+	if rule.ScenarioID == GeneratedFunctionContinuationPrimitiveSubstitutionScenarioID {
+		return targetContractObservedWithinRunOutcome("shell-function residue", oracle)
+	}
+	if rule.ScenarioID == GeneratedCWDContinuationPrimitiveSubstitutionScenarioID {
+		return targetContractObservedWithinRunOutcome("cwd residue", oracle)
+	}
+	if rule.ScenarioID == GeneratedUmaskContinuationPrimitiveSubstitutionScenarioID {
+		return targetContractObservedWithinRunOutcome("umask residue", oracle)
+	}
+	if rule.ScenarioID == GeneratedTrustedActionContinuationScenarioID {
+		return targetContractObservedWithinRunOutcome("trusted-action influence", oracle)
+	}
+	if rule.ScenarioID == GeneratedEnvReplayPrimitiveSubstitutionScenarioID {
+		return targetContractObservedWorkspaceReplayOutcome("environment-variable residue", oracle)
+	}
+	if rule.ScenarioID == GeneratedFunctionReplayPrimitiveSubstitutionScenarioID {
+		return targetContractObservedWorkspaceReplayOutcome("shell-function residue", oracle)
+	}
 	if rule.ScenarioID == GeneratedEnvForkPrimitiveSubstitutionScenarioID {
 		return targetContractObservedWorkspaceForkOutcome("environment-variable residue", oracle)
 	}
@@ -425,6 +597,12 @@ func targetContractObservedOutcomeForRule(rule TargetContractRule, oracle Target
 	}
 	if rule.ScenarioID == GeneratedTrustedActionActivationScenarioID {
 		return targetContractObservedWorkspaceForkOutcome("trusted-action influence", oracle)
+	}
+	if rule.ScenarioID == GeneratedInheritedFDTrustedActionScenarioID {
+		return targetContractObservedWorkspaceForkOutcome("inherited-fd trusted-action influence", oracle)
+	}
+	if rule.ScenarioID == GeneratedUnixListenerReplayLifecycleSpliceScenarioID {
+		return targetContractObservedWorkspaceReplayOutcome("Unix listener residue", oracle)
 	}
 	return targetContractObservedOutcomeForTask(rule.TaskID, oracle)
 }
@@ -440,6 +618,16 @@ func targetContractObservedOutcomeForTask(taskID string, oracle TargetOracleResu
 		default:
 			return "", "", false
 		}
+	case EnvResidueTargetTaskID:
+		return targetContractObservedWithinRunOutcome("environment-variable residue", oracle)
+	case FunctionResidueTargetTaskID:
+		return targetContractObservedWithinRunOutcome("shell-function residue", oracle)
+	case CWDResidueTargetTaskID:
+		return targetContractObservedWithinRunOutcome("cwd residue", oracle)
+	case UmaskResidueTargetTaskID:
+		return targetContractObservedWithinRunOutcome("umask residue", oracle)
+	case UnixListenerResidueTargetTaskID:
+		return targetContractObservedWithinRunOutcome("Unix-listener residue", oracle)
 	case PersistentShellReplayTargetTaskID:
 		switch oracle.Attribution {
 		case TargetOracleAttributionRuntimeResidue:
@@ -503,6 +691,28 @@ func targetContractObservedWorkspaceForkOutcome(name string, oracle TargetOracle
 		return targetContractObservedPreserve, "fork preserved " + name + " across the selected checkpoint boundary", true
 	case TargetOracleAttributionCleanFork, TargetOracleAttributionWorkspaceRebuild:
 		return targetContractObservedReset, "fork did not preserve " + name + " directly across the selected checkpoint boundary", true
+	default:
+		return "", "", false
+	}
+}
+
+func targetContractObservedWithinRunOutcome(name string, oracle TargetOracleResult) (targetContractObservedOutcome, string, bool) {
+	switch oracle.Status {
+	case TargetOracleStatusConfirmed:
+		return targetContractObservedPreserve, "later shell steps preserved " + name + " within the same persistent shell session", true
+	case TargetOracleStatusNegative:
+		return targetContractObservedReset, "later shell steps did not preserve " + name + " within the same persistent shell session", true
+	default:
+		return "", "", false
+	}
+}
+
+func targetContractObservedWorkspaceReplayOutcome(name string, oracle TargetOracleResult) (targetContractObservedOutcome, string, bool) {
+	switch oracle.Attribution {
+	case TargetOracleAttributionRuntimeResidue:
+		return targetContractObservedPreserve, "replay preserved " + name + " across the selected checkpoint boundary", true
+	case TargetOracleAttributionCleanReplay, TargetOracleAttributionLegitimateReexecution, TargetOracleAttributionWorkspaceRebuild:
+		return targetContractObservedReset, "replay did not preserve " + name + " directly across the selected checkpoint boundary", true
 	default:
 		return "", "", false
 	}
