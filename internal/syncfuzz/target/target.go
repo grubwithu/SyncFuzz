@@ -75,6 +75,10 @@ const (
 	TargetDiscardedServerTrustedClientArtifact   = "discarded-server-trusted-client-check.txt"
 	TargetTrustedClientCacheArtifact             = "trusted-client-cache.txt"
 	TargetSocketResponsePoisoningArtifact        = "socket-response-poisoning-check.txt"
+	TargetTrustedActionResponseArtifact          = "trusted-action-response.txt"
+	TargetTrustedActionEffectArtifact            = "trusted-action-effect.txt"
+	TargetTrustedActionCheckArtifact             = "trusted-action-check.txt"
+	targetTrustedActionPayload                   = "SYNCFUZZ_UNIX_LISTENER_RESPONSE"
 	TargetSnapshotLateArtifact                   = "snapshot-late.json"
 	TargetProcessLateArtifact                    = "process-late.json"
 	TargetFilesystemLateArtifact                 = "filesystem-late-metadata.json"
@@ -177,6 +181,7 @@ type TargetRunOptions struct {
 	TargetID         string
 	TaskID           string
 	Objective        string
+	Scenario         *TargetScenarioInfo
 	ExecutionPlan    *TargetScenarioExecutionPlan
 	PromptProfileID  string
 	PromptVariantID  string
@@ -335,6 +340,27 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if opts.TaskID == "" {
 		opts.TaskID = DefaultTargetTaskID
 	}
+	if opts.Scenario != nil {
+		scenario := CloneTargetScenarioInfo(opts.Scenario)
+		if scenario.TaskID == "" {
+			scenario.TaskID = opts.TaskID
+		}
+		if scenario.TaskID != opts.TaskID {
+			return nil, fmt.Errorf("target scenario task %q does not match run task %q", scenario.TaskID, opts.TaskID)
+		}
+		if opts.ExecutionPlan != nil {
+			plan := *opts.ExecutionPlan
+			scenario.ExecutionPlan = &plan
+		} else if scenario.ExecutionPlan != nil {
+			plan := *scenario.ExecutionPlan
+			opts.ExecutionPlan = &plan
+		}
+		normalizedScenario, err := NormalizeTargetScenarioInfo(scenario)
+		if err != nil {
+			return nil, err
+		}
+		opts.Scenario = normalizedScenario
+	}
 	if opts.OutDir == "" {
 		opts.OutDir = "runs"
 	}
@@ -360,10 +386,18 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	opts.PromptProfileID = promptProfileID
 	opts.PromptVariantID = promptVariantID
 	if opts.Objective == "" {
-		opts.Objective = defaultTargetObjective(opts.TaskID)
+		if opts.Scenario != nil && opts.Scenario.Objective != "" {
+			opts.Objective = opts.Scenario.Objective
+		} else {
+			opts.Objective = defaultTargetObjective(opts.TaskID)
+		}
 	}
 	if len(opts.ExpectedFiles) == 0 {
-		opts.ExpectedFiles = DefaultTargetExpectedFiles(opts.TaskID)
+		if opts.Scenario != nil && len(opts.Scenario.DefaultExpectedFiles) > 0 {
+			opts.ExpectedFiles = append([]string{}, opts.Scenario.DefaultExpectedFiles...)
+		} else {
+			opts.ExpectedFiles = DefaultTargetExpectedFiles(opts.TaskID)
+		}
 	}
 
 	started := time.Now().UTC()
@@ -427,18 +461,16 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		ExpectedFiles:      opts.ExpectedFiles,
 		CreatedAt:          started.Format(time.RFC3339Nano),
 	}
-	if scenario, ok := targetScenarioByID(opts.TaskID); ok {
-		info := scenario.Info
-		info.DefaultExpectedFiles = append([]string{}, info.DefaultExpectedFiles...)
-		info.LateExpectedFiles = append([]string{}, info.LateExpectedFiles...)
-		info.Components = append([]TargetScenarioComponent{}, info.Components...)
-		info.Mutations = append([]TargetScenarioMutation{}, info.Mutations...)
+	if opts.Scenario != nil {
+		task.Scenario = CloneTargetScenarioInfo(opts.Scenario)
+	} else if scenario, ok := targetScenarioByID(opts.TaskID); ok {
+		info := CloneTargetScenarioInfo(&scenario.Info)
 		info.ExecutionPlan = targetScenarioExecutionPlanInfo(scenario.Lifecycle)
-		if opts.ExecutionPlan != nil {
-			plan := *opts.ExecutionPlan
-			info.ExecutionPlan = &plan
-		}
-		task.Scenario = &info
+		task.Scenario = mustNormalizeTargetScenarioInfo(info)
+	}
+	if task.Scenario != nil && opts.ExecutionPlan != nil {
+		plan := *opts.ExecutionPlan
+		task.Scenario.ExecutionPlan = &plan
 	}
 	if err := core.WriteJSON(filepath.Join(run.RunDir, TargetTaskArtifact), task); err != nil {
 		return nil, err
@@ -527,23 +559,26 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 
 	present, missing := expectedFileStatus(after, opts.ExpectedFiles)
 	lateExpected := defaultTargetLateExpectedFiles(opts.TaskID)
+	if opts.Scenario != nil && len(opts.Scenario.LateExpectedFiles) > 0 {
+		lateExpected = append([]string{}, opts.Scenario.LateExpectedFiles...)
+	}
 	var latePresent []string
 	var lateMissing []string
 	if lateObserved {
 		latePresent, lateMissing = expectedFileStatus(late, lateExpected)
 	}
 	completed := commandResult.ExitCode == 0 && !commandResult.TimedOut
-	targetOracle := evaluateTargetOracle(run.Workspace, opts.TargetID, opts.TaskID, completed, missing, processLineage.Summary, lateObserved, latePresent, lateMissing)
-	taskCompliance := evaluateTargetTaskComplianceForTarget(run.Workspace, opts.TargetID, opts.TaskID)
+	targetOracle := evaluateTargetOracleForScenario(run.Workspace, opts.TargetID, opts.TaskID, opts.Scenario, completed, missing, processLineage.Summary, lateObserved, latePresent, lateMissing)
+	taskCompliance := evaluateTargetTaskComplianceForScenario(run.Workspace, opts.TargetID, opts.TaskID, opts.Scenario)
 	contractProfile := TargetContractProfileFor(opts.TargetID)
 	if contractProfile != nil {
 		if err := core.WriteJSON(filepath.Join(run.RunDir, TargetContractProfileArtifact), contractProfile); err != nil {
 			return nil, err
 		}
 	}
-	contractInterpretation := EvaluateTargetContractInterpretation(contractProfile, opts.TaskID, targetOracle, taskCompliance)
+	contractInterpretation := EvaluateTargetContractInterpretationForScenario(contractProfile, opts.TaskID, opts.Scenario, targetOracle, taskCompliance)
 	expectationsMet := targetOracle.Confirmed
-	signature := TargetSignature(opts.TaskID)
+	signature := TargetSignatureForScenario(opts.TaskID, opts.Scenario)
 	evidence := targetEvidence(completed, expectationsMet, present, missing, commandResult)
 	evidence = append(evidence, targetOracle.Evidence...)
 	evidence = append(evidence, targetOracleMissingEvidence(targetOracle)...)
@@ -786,6 +821,25 @@ func DefaultTargetLateObserveDelay(taskID string) time.Duration {
 		return time.Duration(scenario.Info.LateObserveDelayMs) * time.Millisecond
 	}
 	return 0
+}
+
+func evaluateTargetOracleForScenario(workspace string, targetID string, taskID string, scenario *TargetScenarioInfo, completed bool, immediateMissing []string, lineage core.ProcessLineageSummary, lateObserved bool, latePresent []string, lateMissing []string) TargetOracleResult {
+	if scenario != nil {
+		if scenario.ScenarioID == GeneratedEnvForkPrimitiveSubstitutionScenarioID {
+			return evaluateGeneratedEnvForkTargetOracle(workspace, completed, immediateMissing)
+		}
+		if scenario.ScenarioID == GeneratedFunctionForkPrimitiveSubstitutionScenarioID {
+			return evaluateGeneratedFunctionForkTargetOracle(workspace, completed, immediateMissing)
+		}
+		if scenario.ScenarioID == GeneratedTrustedActionActivationScenarioID {
+			return evaluateGeneratedTrustedActionTargetOracle(workspace, completed, immediateMissing)
+		}
+		switch strings.TrimSpace(scenario.OracleKindID) {
+		case "env-residue":
+			return evaluateEnvResidueTargetOracle(workspace, targetID, completed, immediateMissing)
+		}
+	}
+	return evaluateTargetOracle(workspace, targetID, taskID, completed, immediateMissing, lineage, lateObserved, latePresent, lateMissing)
 }
 
 func evaluateTargetOracle(workspace string, targetID string, taskID string, completed bool, immediateMissing []string, lineage core.ProcessLineageSummary, lateObserved bool, latePresent []string, lateMissing []string) TargetOracleResult {

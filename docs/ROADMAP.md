@@ -273,7 +273,7 @@ Phase 5B 主线：
 
 - 让 `Scenario IR` 成为 testcase 的主事实来源，而不是继续扩大手写 task catalog；
 - 为 LangGraph 写出第一份 `Recovery Contract Profile`，并把 target 结果稳定拆成 residue observation、contract interpretation、activation consequence 三层；
-- 已把 target run 接入 real-target matrix / suite / campaign，且 `execution_plan` 已进入真实执行路径；后续重点是围绕它实现 `primitive substitution`、`activation substitution`、`lifecycle splice`、`fault-phase / phase-shift mutation`；
+- 已把完整 Scenario IR 接入 real-target matrix / suite / campaign，并形成 `PATH -> env/function` fork primitive-substitution family、Unix-listener trusted-action activation substitution 与 `phase-shift-single-process`；后续重点是继续扩展 compatibility-aware family，再实现 `lifecycle splice` 与更完整的 `fault-phase / phase-shift mutation`；
 - 把 `targets/langgraph_shell_react/` 从“单进程内 durable checkpointer”继续推进到“跨进程恢复可消费的 durable checkpointer”；
 - 让 `MAF` 消费与 LangGraph 共享的 portable scenario，并进入同一套 `campaign / replay / verify / minimize`；
 - minimization 从 prompt / execution-plan reduction 升级到 `Scenario IR component reduction`，并逐步支持 `Semantic Fidelity`；
@@ -286,12 +286,12 @@ Phase 5B 优先级重排：
 - `cwd` 与 `umask` 仍然值得做，但定位为低成本补充项，而不是核心突破；
 - 接下来两周的核心顺序是：
   1. 冻结 `Scenario IR` schema，并把 `3 - 5` 个 LangGraph testcase 迁移到纯 IR；
-  2. 实现 `primitive substitution` 与 `activation substitution`；
+  2. 扩展已经落地的 `primitive substitution` 与 `activation substitution` family；
   3. 让 `MAF` 消费至少一个完全相同的 portable scenario；
   4. 实现一次 `lifecycle splice` 或 `cross-seed crossover`；
   5. 把 minimizer 扩展到 `IR component reduction`；
   6. 运行 `random / fixed enumeration / feedback-guided / full SyncFuzz` 四组小预算实验；
-  7. 尝试自动合成一个 `Unix socket / FD / process` 的 trusted-activation 场景。
+  7. 把已生成的 Unix-listener trusted-action 场景扩展到 FD / process residue 与更多 trusted consequence。
 
 其中 process 线也要升级：`orphan-process-long-delay` 后续不只证明“命令返回后子进程仍存活”，还要推进到 discarded branch 中残留执行主体能够等待并操纵 future trusted state 的实验。
 

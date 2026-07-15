@@ -166,6 +166,7 @@ func replayTargetEntry(ctx context.Context, entry CorpusEntry, opts ReplayOption
 		TargetID:         task.TargetID,
 		TaskID:           task.TaskID,
 		Objective:        task.Objective,
+		Scenario:         target.CloneTargetScenarioInfo(task.Scenario),
 		ExecutionPlan:    executionPlan,
 		PromptProfileID:  task.PromptProfileID,
 		PromptVariantID:  task.PromptVariantID,

@@ -1245,6 +1245,10 @@ def resolve_operation_checkpoint(
 def resolve_checkpoint_selector(history: list[Any], selector: str) -> int:
     if selector == "before-path-export":
         return checkpoint_before_path_export(history)
+    if selector == "before-env-export":
+        return checkpoint_before_env_export(history)
+    if selector == "before-function-define":
+        return checkpoint_before_function_define(history)
     if selector == "before-file-drop":
         return checkpoint_before_file_drop(history)
     if selector == "before-directory-create":
@@ -1288,6 +1292,34 @@ def checkpoint_before_path_export(history: list[Any]) -> int:
                 return -1
             return candidate
         saw_export_in_newer_state = saw_export_in_newer_state or has_export
+    return -1
+
+
+def checkpoint_before_env_export(history: list[Any]) -> int:
+    saw_export_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_export = state_has_env_export(history[index])
+        if not saw_export_in_newer_state and has_export:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_export_in_newer_state = saw_export_in_newer_state or has_export
+    return -1
+
+
+def checkpoint_before_function_define(history: list[Any]) -> int:
+    saw_definition_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_definition = state_has_function_definition(history[index])
+        if not saw_definition_in_newer_state and has_definition:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_definition_in_newer_state = (
+            saw_definition_in_newer_state or has_definition
+        )
     return -1
 
 
@@ -1505,6 +1537,29 @@ def state_has_path_export(state: Any) -> bool:
         for command in shell_commands_from_message(message):
             if "export PATH=" in command and (
                 "workspace-bin" in command or "attacker-bin" in command
+            ):
+                return True
+    return False
+
+
+def state_has_env_export(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            if "SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER" in command:
+                return True
+    return False
+
+
+def state_has_function_definition(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            if "syncfuzz_residue_probe" in command and (
+                "syncfuzz_residue_probe()" in command
+                or "function syncfuzz_residue_probe" in command
             ):
                 return True
     return False

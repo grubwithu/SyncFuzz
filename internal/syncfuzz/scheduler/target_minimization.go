@@ -21,6 +21,8 @@ type TargetMinimizationStep struct {
 	Order         int                                `json:"order"`
 	StepID        string                             `json:"step_id"`
 	Kind          string                             `json:"kind"`
+	ComponentID   string                             `json:"component_id,omitempty"`
+	ComponentKind string                             `json:"component_kind_id,omitempty"`
 	ComponentRole target.TargetScenarioComponentRole `json:"component_role,omitempty"`
 	MutationKind  target.TargetScenarioMutationKind  `json:"mutation_kind,omitempty"`
 	Summary       string                             `json:"summary"`
@@ -89,8 +91,17 @@ func buildTargetMinimizationPlan(candidate TargetScheduleCandidate, item TargetS
 			addStep("lifecycle-tightening", role, "", "tighten lifecycle boundary: "+summary, "preserves the intended checkpoint/replay/fork boundary while removing unrelated turns")
 		case "activation":
 			addStep("activation-minimization", role, "", "minimize activation step: "+summary, "keeps the smallest command sequence that reaches the observed state")
+		case "fault":
+			addStep("fault-window-tightening", role, "", "tighten fault component: "+summary, "shrinks the failure timing window while preserving the same causal phase")
 		case "oracle":
 			addStep("oracle-preservation", role, "", "preserve oracle evidence: "+summary, "keeps only witness files and traces needed to classify the result")
+		}
+		if len(plan.Steps) > 0 {
+			step := &plan.Steps[len(plan.Steps)-1]
+			if step.ComponentRole == role {
+				step.ComponentID = component.ComponentID
+				step.ComponentKind = component.KindID
+			}
 		}
 	}
 	if len(candidate.Components) == 0 {

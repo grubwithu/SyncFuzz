@@ -1,13 +1,27 @@
 package target
 
+import (
+	"fmt"
+	"strings"
+)
+
 type TargetScenarioComponentRole string
 
 const (
-	targetScenarioComponentSetup      TargetScenarioComponentRole = "setup"
-	targetScenarioComponentPlant      TargetScenarioComponentRole = "plant"
-	targetScenarioComponentLifecycle  TargetScenarioComponentRole = "lifecycle"
-	targetScenarioComponentActivation TargetScenarioComponentRole = "activation"
-	targetScenarioComponentOracle     TargetScenarioComponentRole = "oracle"
+	TargetScenarioSchemaVersion = "syncfuzz.target-scenario.v1"
+
+	TargetScenarioComponentSetup      TargetScenarioComponentRole = "setup"
+	TargetScenarioComponentPlant      TargetScenarioComponentRole = "plant"
+	TargetScenarioComponentLifecycle  TargetScenarioComponentRole = "lifecycle"
+	TargetScenarioComponentActivation TargetScenarioComponentRole = "activation"
+	TargetScenarioComponentFault      TargetScenarioComponentRole = "fault"
+	TargetScenarioComponentOracle     TargetScenarioComponentRole = "oracle"
+
+	targetScenarioComponentSetup      = TargetScenarioComponentSetup
+	targetScenarioComponentPlant      = TargetScenarioComponentPlant
+	targetScenarioComponentLifecycle  = TargetScenarioComponentLifecycle
+	targetScenarioComponentActivation = TargetScenarioComponentActivation
+	targetScenarioComponentOracle     = TargetScenarioComponentOracle
 )
 
 type TargetScenarioMutationKind string
@@ -20,8 +34,10 @@ const (
 )
 
 type TargetScenarioComponent struct {
-	Role    TargetScenarioComponentRole `json:"role"`
-	Summary string                      `json:"summary"`
+	ComponentID string                      `json:"component_id"`
+	Role        TargetScenarioComponentRole `json:"role"`
+	KindID      string                      `json:"kind_id"`
+	Summary     string                      `json:"summary"`
 }
 
 type TargetScenarioMutation struct {
@@ -75,6 +91,7 @@ type TargetScenarioExecutionPlan struct {
 }
 
 type TargetScenarioInfo struct {
+	SchemaVersion        string                       `json:"schema_version"`
 	ScenarioID           string                       `json:"scenario_id"`
 	TaskID               string                       `json:"task_id"`
 	SeedID               string                       `json:"seed_id,omitempty"`
@@ -92,6 +109,195 @@ type TargetScenarioInfo struct {
 	Components           []TargetScenarioComponent    `json:"components,omitempty"`
 	Mutations            []TargetScenarioMutation     `json:"mutations,omitempty"`
 	ExecutionPlan        *TargetScenarioExecutionPlan `json:"execution_plan,omitempty"`
+}
+
+func CloneTargetScenarioInfo(info *TargetScenarioInfo) *TargetScenarioInfo {
+	if info == nil {
+		return nil
+	}
+	clone := *info
+	clone.DefaultExpectedFiles = append([]string{}, info.DefaultExpectedFiles...)
+	clone.LateExpectedFiles = append([]string{}, info.LateExpectedFiles...)
+	clone.Components = append([]TargetScenarioComponent{}, info.Components...)
+	clone.Mutations = append([]TargetScenarioMutation{}, info.Mutations...)
+	if info.ExecutionPlan != nil {
+		plan := *info.ExecutionPlan
+		clone.ExecutionPlan = &plan
+	}
+	return &clone
+}
+
+func NormalizeTargetScenarioInfo(info *TargetScenarioInfo) (*TargetScenarioInfo, error) {
+	if info == nil {
+		return nil, nil
+	}
+	normalized := CloneTargetScenarioInfo(info)
+	if normalized.SchemaVersion == "" {
+		normalized.SchemaVersion = TargetScenarioSchemaVersion
+	}
+	if normalized.SchemaVersion != TargetScenarioSchemaVersion {
+		return nil, fmt.Errorf("unsupported target scenario schema %q", normalized.SchemaVersion)
+	}
+	normalized.TaskID = strings.TrimSpace(normalized.TaskID)
+	if normalized.TaskID == "" {
+		return nil, fmt.Errorf("target scenario task_id is required")
+	}
+	normalized.ScenarioID = strings.TrimSpace(normalized.ScenarioID)
+	if normalized.ScenarioID == "" {
+		normalized.ScenarioID = normalized.TaskID
+	}
+
+	requiredKinds := targetScenarioRequiredComponentKinds(normalized)
+	components := make([]TargetScenarioComponent, 0, len(normalized.Components)+len(requiredKinds))
+	roleKinds := make(map[TargetScenarioComponentRole]map[string]struct{})
+	componentIDs := make(map[string]struct{})
+	for _, component := range normalized.Components {
+		component.Role = TargetScenarioComponentRole(strings.TrimSpace(string(component.Role)))
+		if !validTargetScenarioComponentRole(component.Role) {
+			return nil, fmt.Errorf("target scenario %q has unsupported component role %q", normalized.ScenarioID, component.Role)
+		}
+		component.KindID = strings.TrimSpace(component.KindID)
+		if component.KindID == "" {
+			component.KindID = targetScenarioDefaultComponentKind(normalized, component.Role)
+		}
+		if component.KindID == "" {
+			component.KindID = string(component.Role)
+		}
+		component.ComponentID = strings.TrimSpace(component.ComponentID)
+		if component.ComponentID == "" {
+			component.ComponentID = targetScenarioUniqueComponentID(component.Role, component.KindID, componentIDs)
+		}
+		if _, exists := componentIDs[component.ComponentID]; exists {
+			return nil, fmt.Errorf("target scenario %q has duplicate component_id %q", normalized.ScenarioID, component.ComponentID)
+		}
+		componentIDs[component.ComponentID] = struct{}{}
+		if roleKinds[component.Role] == nil {
+			roleKinds[component.Role] = make(map[string]struct{})
+		}
+		roleKinds[component.Role][component.KindID] = struct{}{}
+		components = append(components, component)
+	}
+	for _, required := range requiredKinds {
+		if _, exists := roleKinds[required.role][required.kindID]; exists {
+			continue
+		}
+		component := TargetScenarioComponent{
+			Role:    required.role,
+			KindID:  required.kindID,
+			Summary: required.summary,
+		}
+		component.ComponentID = targetScenarioUniqueComponentID(component.Role, component.KindID, componentIDs)
+		componentIDs[component.ComponentID] = struct{}{}
+		if roleKinds[component.Role] == nil {
+			roleKinds[component.Role] = make(map[string]struct{})
+		}
+		roleKinds[component.Role][component.KindID] = struct{}{}
+		components = append(components, component)
+	}
+	normalized.Components = components
+	return normalized, ValidateTargetScenarioInfo(normalized)
+}
+
+func ValidateTargetScenarioInfo(info *TargetScenarioInfo) error {
+	if info == nil {
+		return nil
+	}
+	if info.SchemaVersion != TargetScenarioSchemaVersion {
+		return fmt.Errorf("target scenario %q must use schema %q", info.ScenarioID, TargetScenarioSchemaVersion)
+	}
+	if strings.TrimSpace(info.ScenarioID) == "" || strings.TrimSpace(info.TaskID) == "" {
+		return fmt.Errorf("target scenario identity requires scenario_id and task_id")
+	}
+	componentIDs := make(map[string]struct{}, len(info.Components))
+	roleKinds := make(map[TargetScenarioComponentRole]map[string]struct{})
+	for _, component := range info.Components {
+		if !validTargetScenarioComponentRole(component.Role) {
+			return fmt.Errorf("target scenario %q has unsupported component role %q", info.ScenarioID, component.Role)
+		}
+		if strings.TrimSpace(component.ComponentID) == "" || strings.TrimSpace(component.KindID) == "" {
+			return fmt.Errorf("target scenario %q component %q requires component_id and kind_id", info.ScenarioID, component.Role)
+		}
+		if _, exists := componentIDs[component.ComponentID]; exists {
+			return fmt.Errorf("target scenario %q has duplicate component_id %q", info.ScenarioID, component.ComponentID)
+		}
+		componentIDs[component.ComponentID] = struct{}{}
+		if roleKinds[component.Role] == nil {
+			roleKinds[component.Role] = make(map[string]struct{})
+		}
+		roleKinds[component.Role][component.KindID] = struct{}{}
+	}
+	for _, required := range targetScenarioRequiredComponentKinds(info) {
+		if _, exists := roleKinds[required.role][required.kindID]; !exists {
+			return fmt.Errorf("target scenario %q is missing %s component kind %q", info.ScenarioID, required.role, required.kindID)
+		}
+	}
+	return nil
+}
+
+type targetScenarioRequiredComponent struct {
+	role    TargetScenarioComponentRole
+	kindID  string
+	summary string
+}
+
+func targetScenarioRequiredComponentKinds(info *TargetScenarioInfo) []targetScenarioRequiredComponent {
+	required := make([]targetScenarioRequiredComponent, 0, 4)
+	if kindID := strings.TrimSpace(info.PlantPrimitiveID); kindID != "" {
+		required = append(required, targetScenarioRequiredComponent{TargetScenarioComponentPlant, kindID, "execute state primitive " + kindID})
+	}
+	if kindID := targetScenarioDefaultComponentKind(info, TargetScenarioComponentLifecycle); kindID != "" {
+		required = append(required, targetScenarioRequiredComponent{TargetScenarioComponentLifecycle, kindID, "cross lifecycle operation " + kindID})
+	}
+	if kindID := strings.TrimSpace(info.ActivationKindID); kindID != "" {
+		required = append(required, targetScenarioRequiredComponent{TargetScenarioComponentActivation, kindID, "execute activation " + kindID})
+	}
+	if kindID := strings.TrimSpace(info.OracleKindID); kindID != "" {
+		required = append(required, targetScenarioRequiredComponent{TargetScenarioComponentOracle, kindID, "evaluate oracle " + kindID})
+	}
+	return required
+}
+
+func targetScenarioDefaultComponentKind(info *TargetScenarioInfo, role TargetScenarioComponentRole) string {
+	switch role {
+	case TargetScenarioComponentSetup:
+		return "scenario-setup"
+	case TargetScenarioComponentPlant:
+		return strings.TrimSpace(info.PlantPrimitiveID)
+	case TargetScenarioComponentLifecycle:
+		if info.ExecutionPlan != nil && strings.TrimSpace(info.ExecutionPlan.LifecycleOperationID) != "" {
+			return strings.TrimSpace(info.ExecutionPlan.LifecycleOperationID)
+		}
+		return strings.TrimSpace(info.LifecycleEdge)
+	case TargetScenarioComponentActivation:
+		return strings.TrimSpace(info.ActivationKindID)
+	case TargetScenarioComponentFault:
+		return "fault"
+	case TargetScenarioComponentOracle:
+		return strings.TrimSpace(info.OracleKindID)
+	default:
+		return ""
+	}
+}
+
+func targetScenarioUniqueComponentID(role TargetScenarioComponentRole, kindID string, existing map[string]struct{}) string {
+	base := string(role) + "." + kindID
+	componentID := base
+	for suffix := 2; ; suffix++ {
+		if _, exists := existing[componentID]; !exists {
+			return componentID
+		}
+		componentID = fmt.Sprintf("%s.%d", base, suffix)
+	}
+}
+
+func validTargetScenarioComponentRole(role TargetScenarioComponentRole) bool {
+	switch role {
+	case TargetScenarioComponentSetup, TargetScenarioComponentPlant, TargetScenarioComponentLifecycle,
+		TargetScenarioComponentActivation, TargetScenarioComponentFault, TargetScenarioComponentOracle:
+		return true
+	default:
+		return false
+	}
 }
 
 type targetScenarioLifecycle struct {
@@ -113,15 +319,29 @@ func TargetScenarios() []TargetScenarioInfo {
 	scenarios := targetScenarios()
 	out := make([]TargetScenarioInfo, 0, len(scenarios))
 	for _, scenario := range scenarios {
-		info := scenario.Info
-		info.DefaultExpectedFiles = append([]string{}, info.DefaultExpectedFiles...)
-		info.LateExpectedFiles = append([]string{}, info.LateExpectedFiles...)
-		info.Components = append([]TargetScenarioComponent{}, info.Components...)
-		info.Mutations = append([]TargetScenarioMutation{}, info.Mutations...)
+		info := CloneTargetScenarioInfo(&scenario.Info)
 		info.ExecutionPlan = targetScenarioExecutionPlanInfo(scenario.Lifecycle)
-		out = append(out, info)
+		out = append(out, *mustNormalizeTargetScenarioInfo(info))
 	}
 	return out
+}
+
+func TargetScenarioByTaskID(taskID string) (*TargetScenarioInfo, bool) {
+	scenario, ok := targetScenarioByID(taskID)
+	if !ok {
+		return nil, false
+	}
+	info := CloneTargetScenarioInfo(&scenario.Info)
+	info.ExecutionPlan = targetScenarioExecutionPlanInfo(scenario.Lifecycle)
+	return mustNormalizeTargetScenarioInfo(info), true
+}
+
+func mustNormalizeTargetScenarioInfo(info *TargetScenarioInfo) *TargetScenarioInfo {
+	normalized, err := NormalizeTargetScenarioInfo(info)
+	if err != nil {
+		panic(err)
+	}
+	return normalized
 }
 
 func targetScenarioByID(taskID string) (targetScenario, bool) {

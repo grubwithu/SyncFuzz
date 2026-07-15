@@ -121,6 +121,122 @@ func evaluateTargetTaskComplianceForTarget(workspace string, targetID string, ta
 	}
 }
 
+func evaluateTargetTaskComplianceForScenario(workspace string, targetID string, taskID string, scenario *TargetScenarioInfo) TargetTaskComplianceResult {
+	if scenario != nil {
+		if scenario.ScenarioID == GeneratedEnvForkPrimitiveSubstitutionScenarioID {
+			return evaluateGeneratedEnvForkTargetTaskCompliance(workspace)
+		}
+		if scenario.ScenarioID == GeneratedFunctionForkPrimitiveSubstitutionScenarioID {
+			return evaluateGeneratedFunctionForkTargetTaskCompliance(workspace)
+		}
+		if scenario.ScenarioID == GeneratedTrustedActionActivationScenarioID {
+			return evaluateGeneratedTrustedActionTargetTaskCompliance(workspace)
+		}
+		switch strings.TrimSpace(scenario.OracleKindID) {
+		case "env-residue":
+			switch strings.TrimSpace(targetID) {
+			case "maf-github-copilot-shell":
+				return evaluateMAFEnvResidueTargetTaskCompliance(workspace)
+			default:
+				return evaluateEnvResidueTargetTaskCompliance(workspace)
+			}
+		}
+	}
+	return evaluateTargetTaskComplianceForTarget(workspace, targetID, taskID)
+}
+
+func evaluateGeneratedEnvForkTargetTaskCompliance(workspace string) TargetTaskComplianceResult {
+	result := TargetTaskComplianceResult{
+		Name:   GeneratedEnvForkPrimitiveSubstitutionScenarioID,
+		Status: TargetTaskComplianceStatusUnknown,
+	}
+	initialCalls, initialOK, err := loadPrimaryLangGraphShellCalls(workspace)
+	if err != nil {
+		appendTargetTaskEvidence(&result, err.Error())
+		return result
+	}
+	if !initialOK {
+		appendTargetTaskEvidence(&result, "langgraph initial history was not available for generated env fork compliance")
+		return result
+	}
+	summary, forkCalls, forkOK, err := loadLangGraphOperationShellCalls(workspace, LanggraphForkArtifact)
+	if err != nil {
+		appendTargetTaskEvidence(&result, err.Error())
+		return result
+	}
+	if !forkOK {
+		appendTargetTaskEvidence(&result, "langgraph fork summary was not available for generated env fork compliance")
+		return result
+	}
+
+	commands := make([]string, 0, len(initialCalls)+len(forkCalls))
+	for _, call := range initialCalls {
+		commands = append(commands, call.Command)
+	}
+	for _, call := range forkCalls {
+		commands = append(commands, call.Command)
+	}
+	analysis := analyzeEnvResidueCommands(commands)
+	requireExactCount(&result, analysis.ExportCount, 1, "initial branch exported the environment marker exactly once")
+	requireExactCount(&result, analysis.InitialCheckWrites, 0, "initial branch did not create env-residue-check.txt")
+	requireAtLeastOne(&result, analysis.LaterCheckWrites, "fork follow-up wrote env-residue-check.txt")
+	requireAtLeastOne(&result, analysis.LaterVarReferences, "fork follow-up observed SYNCFUZZ_ENV_RESIDUE_FLAG")
+	requireExactCount(&result, analysis.LaterEnvMutations, 0, "fork follow-up did not export, assign, or unset SYNCFUZZ_ENV_RESIDUE_FLAG")
+	if analysis.CleanObservationCall {
+		appendTargetTaskEvidence(&result, "fork follow-up observed the environment variable without reconstructing it")
+	} else {
+		appendTargetTaskViolation(&result, "fork follow-up observed the environment variable without reconstructing it")
+	}
+	evaluateForkOperationSummaryMeta(&result, summary, "before-env-export")
+	return finalizeTargetTaskCompliance(result)
+}
+
+func evaluateGeneratedFunctionForkTargetTaskCompliance(workspace string) TargetTaskComplianceResult {
+	result := TargetTaskComplianceResult{
+		Name:   GeneratedFunctionForkPrimitiveSubstitutionScenarioID,
+		Status: TargetTaskComplianceStatusUnknown,
+	}
+	initialCalls, initialOK, err := loadPrimaryLangGraphShellCalls(workspace)
+	if err != nil {
+		appendTargetTaskEvidence(&result, err.Error())
+		return result
+	}
+	if !initialOK {
+		appendTargetTaskEvidence(&result, "langgraph initial history was not available for generated function fork compliance")
+		return result
+	}
+	summary, forkCalls, forkOK, err := loadLangGraphOperationShellCalls(workspace, LanggraphForkArtifact)
+	if err != nil {
+		appendTargetTaskEvidence(&result, err.Error())
+		return result
+	}
+	if !forkOK {
+		appendTargetTaskEvidence(&result, "langgraph fork summary was not available for generated function fork compliance")
+		return result
+	}
+
+	commands := make([]string, 0, len(initialCalls)+len(forkCalls))
+	for _, call := range initialCalls {
+		commands = append(commands, call.Command)
+	}
+	for _, call := range forkCalls {
+		commands = append(commands, call.Command)
+	}
+	analysis := analyzeFunctionResidueCommands(commands)
+	requireExactCount(&result, analysis.DefinitionCount, 1, "initial branch defined the shell function exactly once")
+	requireExactCount(&result, analysis.InitialCheckWrites, 0, "initial branch did not create function-residue-check.txt")
+	requireAtLeastOne(&result, analysis.LaterCheckWrites, "fork follow-up wrote function-residue-check.txt")
+	requireAtLeastOne(&result, analysis.LaterFunctionRefs, "fork follow-up inspected or invoked syncfuzz_residue_probe")
+	requireExactCount(&result, analysis.LaterFunctionMutations, 0, "fork follow-up did not define, redefine, or unset syncfuzz_residue_probe")
+	if analysis.CleanObservationCall {
+		appendTargetTaskEvidence(&result, "fork follow-up observed the shell function without reconstructing it")
+	} else {
+		appendTargetTaskViolation(&result, "fork follow-up observed the shell function without reconstructing it")
+	}
+	evaluateForkOperationSummaryMeta(&result, summary, "before-function-define")
+	return finalizeTargetTaskCompliance(result)
+}
+
 func evaluateMAFTargetTaskCompliance(workspace string, taskID string) TargetTaskComplianceResult {
 	switch taskID {
 	case DefaultTargetTaskID:

@@ -26,7 +26,7 @@ func TestBuildTargetScheduleMatrixExpandsGroupsAndContracts(t *testing.T) {
 	if matrix.TargetID != "langgraph-shell-react" {
 		t.Fatalf("unexpected target id %q", matrix.TargetID)
 	}
-	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 9 {
+	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 11 {
 		t.Fatalf("unexpected target matrix size: %#v", matrix)
 	}
 	replay, err := findTargetMatrixCandidate(matrix, target.PersistentShellReplayTargetTaskID)
@@ -38,6 +38,9 @@ func TestBuildTargetScheduleMatrixExpandsGroupsAndContracts(t *testing.T) {
 	}
 	if replay.SeedID != "shell-path-residue" || replay.PlantPrimitiveID != "shell-path-prepend" {
 		t.Fatalf("unexpected replay scenario seed metadata: %#v", replay)
+	}
+	if replay.ScenarioSchemaVersion != target.TargetScenarioSchemaVersion {
+		t.Fatalf("expected frozen Scenario IR schema metadata: %#v", replay)
 	}
 	if replay.LifecycleOperationID != "checkpoint-replay" || replay.ActivationKindID != "git-resolution" || replay.OracleKindID != "replay-path-residue" {
 		t.Fatalf("unexpected replay scenario execution metadata: %#v", replay)
@@ -70,7 +73,7 @@ func TestBuildTargetScheduleMatrixExpandsSeeds(t *testing.T) {
 	if len(matrix.SeedIDs) != 1 || matrix.SeedIDs[0] != "shell-path-residue" {
 		t.Fatalf("unexpected seed ids: %#v", matrix)
 	}
-	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 9 {
+	if len(matrix.Tasks) != 3 || matrix.TotalCandidates != 11 {
 		t.Fatalf("unexpected seed-expanded matrix size: %#v", matrix)
 	}
 }
@@ -113,6 +116,13 @@ func TestBuildTargetScheduleMatrixAddsMutationFocusDerivedCandidates(t *testing.
 			if candidate.MutationFocusKind != target.TargetScenarioMutationPhaseShift || candidate.MutationFocusID != "phase-shift.process-mode.single-process" {
 				t.Fatalf("expected phase-shift mutation provenance: %#v", candidate)
 			}
+			scenario := targetScenarioForCandidate(candidate)
+			if scenario == nil || scenario.ExecutionPlan == nil || scenario.ExecutionPlan.ProcessMode != "single" {
+				t.Fatalf("expected generated candidate to produce executable scenario IR: %#v", scenario)
+			}
+			if len(scenario.Mutations) == 0 || scenario.Mutations[len(scenario.Mutations)-1].MutationID != "phase-shift.process-mode.single-process" {
+				t.Fatalf("expected generated scenario IR to retain mutation provenance: %#v", scenario)
+			}
 		}
 	}
 }
@@ -151,6 +161,108 @@ func TestBuildTargetScheduleMatrixAddsActivationFocusDerivedCandidates(t *testin
 				t.Fatalf("expected activation metadata to be preserved: %#v", candidate)
 			}
 		}
+	}
+}
+
+func TestBuildTargetScheduleMatrixAddsExecutablePrimitiveSubstitutionFamily(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		Tasks:    []string{target.PersistentShellForkTargetTaskID},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	var generated *TargetScheduleCandidate
+	for idx := range matrix.Candidates {
+		candidate := &matrix.Candidates[idx]
+		if candidate.ScenarioID == target.GeneratedEnvForkPrimitiveSubstitutionScenarioID {
+			generated = candidate
+			break
+		}
+	}
+	if generated == nil {
+		t.Fatalf("expected generated env fork primitive substitution: %#v", matrix.Candidates)
+	}
+	if !generated.Generated || generated.PlantPrimitiveID != "shell-env-export" || generated.MutationFocusKind != target.TargetScenarioMutationPrimitiveSubstitution {
+		t.Fatalf("unexpected primitive substitution metadata: %#v", generated)
+	}
+	if generated.ExecutionPlan == nil || generated.ExecutionPlan.CheckpointSelector != "before-env-export" || generated.ExecutionPlan.ProcessMode != "split-process" {
+		t.Fatalf("expected executable generated lifecycle plan: %#v", generated)
+	}
+	if !strings.Contains(generated.Prompt, "SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER") {
+		t.Fatalf("expected generated plant prompt: %#v", generated)
+	}
+	if generated.OracleKindID != "env-residue" || generated.ContractRuleID != "shell-env-generated-fork-boundary" {
+		t.Fatalf("expected generated oracle and contract bindings: %#v", generated)
+	}
+	scenario := targetScenarioForCandidate(*generated)
+	if scenario == nil || scenario.ScenarioID != target.GeneratedEnvForkPrimitiveSubstitutionScenarioID || scenario.OracleKindID != "env-residue" {
+		t.Fatalf("expected generated candidate to materialize exact Scenario IR: %#v", scenario)
+	}
+	wantSignature := target.TargetSignatureForScenario(generated.TaskID, scenario)
+	if generated.Signature.String() != wantSignature.String() {
+		t.Fatalf("unexpected generated signature: got=%s want=%s", generated.Signature.String(), wantSignature.String())
+	}
+
+	var functionGenerated *TargetScheduleCandidate
+	for idx := range matrix.Candidates {
+		candidate := &matrix.Candidates[idx]
+		if candidate.ScenarioID == target.GeneratedFunctionForkPrimitiveSubstitutionScenarioID {
+			functionGenerated = candidate
+			break
+		}
+	}
+	if functionGenerated == nil {
+		t.Fatalf("expected generated function fork primitive substitution: %#v", matrix.Candidates)
+	}
+	if functionGenerated.PlantPrimitiveID != "shell-function-define" || functionGenerated.ActivationKindID != "shell-function-invocation" {
+		t.Fatalf("unexpected function substitution metadata: %#v", functionGenerated)
+	}
+	if functionGenerated.ExecutionPlan == nil || functionGenerated.ExecutionPlan.CheckpointSelector != "before-function-define" {
+		t.Fatalf("expected executable function fork plan: %#v", functionGenerated)
+	}
+	if functionGenerated.OracleKindID != "function-residue" || functionGenerated.ContractRuleID != "shell-function-generated-fork-boundary" {
+		t.Fatalf("expected generated function oracle and contract bindings: %#v", functionGenerated)
+	}
+	if !strings.Contains(functionGenerated.Prompt, "syncfuzz_residue_probe()") {
+		t.Fatalf("expected generated function plant prompt: %#v", functionGenerated)
+	}
+}
+
+func TestBuildTargetScheduleMatrixAddsExecutableActivationSubstitution(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		Tasks:    []string{target.UnixListenerResidueForkTargetTaskID},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	var generated *TargetScheduleCandidate
+	for idx := range matrix.Candidates {
+		candidate := &matrix.Candidates[idx]
+		if candidate.ScenarioID == target.GeneratedTrustedActionActivationScenarioID {
+			generated = candidate
+			break
+		}
+	}
+	if generated == nil {
+		t.Fatalf("expected generated trusted-action activation: %#v", matrix.Candidates)
+	}
+	if !generated.Generated || generated.PlantPrimitiveID != "workspace-unix-listener" || generated.ActivationKindID != "trusted-action-effect" {
+		t.Fatalf("unexpected activation substitution metadata: %#v", generated)
+	}
+	if generated.MutationFocusKind != target.TargetScenarioMutationActivationSubstitution || generated.OracleKindID != "trusted-action-execution" {
+		t.Fatalf("expected activation mutation and oracle bindings: %#v", generated)
+	}
+	if generated.ExecutionPlan == nil || generated.ExecutionPlan.CheckpointSelector != "before-unix-listener-launch" || !strings.Contains(generated.ExecutionPlan.ForkMessage, target.TargetTrustedActionEffectArtifact) {
+		t.Fatalf("expected executable trusted-action plan: %#v", generated)
+	}
+	if generated.ContractRuleID != "communication-trusted-action-generated-fork-boundary" {
+		t.Fatalf("expected generated trusted-action contract: %#v", generated)
+	}
+	scenario := targetScenarioForCandidate(*generated)
+	if scenario == nil || scenario.ScenarioID != target.GeneratedTrustedActionActivationScenarioID {
+		t.Fatalf("expected exact generated activation Scenario IR: %#v", scenario)
 	}
 }
 
@@ -290,6 +402,12 @@ func TestBuildTargetMinimizationPlanIncludesMutationAxes(t *testing.T) {
 		TaskID:               target.PersistentShellReplayTargetTaskID,
 		OracleKindID:         "replay-path-residue",
 		DefaultExpectedFiles: []string{target.TargetShellPoisonReplayArtifact},
+		Components: []target.TargetScenarioComponent{{
+			ComponentID: "plant.shell-path-prepend",
+			Role:        target.TargetScenarioComponentPlant,
+			KindID:      "shell-path-prepend",
+			Summary:     "prepend PATH",
+		}},
 		Mutations: []target.TargetScenarioMutation{{
 			MutationID: "lifecycle-splice.checkpoint-replay",
 			Kind:       target.TargetScenarioMutationLifecycleSplice,
@@ -311,6 +429,9 @@ func TestBuildTargetMinimizationPlanIncludesMutationAxes(t *testing.T) {
 	if !targetMinimizationPlanHasStepKind(plan, "mutation-axis-check") {
 		t.Fatalf("expected mutation-axis minimization step: %#v", plan)
 	}
+	if !targetMinimizationPlanHasComponent(plan, "plant.shell-path-prepend", "shell-path-prepend") {
+		t.Fatalf("expected stable Scenario IR component identity in minimization plan: %#v", plan)
+	}
 	if !containsStringPrefix(plan.Preserve, "artifact="+target.TargetShellPoisonReplayArtifact) {
 		t.Fatalf("expected replay witness artifact in preserve list: %#v", plan.Preserve)
 	}
@@ -331,6 +452,18 @@ func targetMinimizationPlanHasStepKind(plan *TargetMinimizationPlan, kind string
 	}
 	for _, step := range plan.Steps {
 		if step.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func targetMinimizationPlanHasComponent(plan *TargetMinimizationPlan, componentID string, kindID string) bool {
+	if plan == nil {
+		return false
+	}
+	for _, step := range plan.Steps {
+		if step.ComponentID == componentID && step.ComponentKind == kindID {
 			return true
 		}
 	}

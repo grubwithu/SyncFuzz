@@ -50,6 +50,99 @@ func TestEvaluateTargetContractInterpretationReplayViolation(t *testing.T) {
 	}
 }
 
+func TestEvaluateTargetContractInterpretationGeneratedEnvForkUsesScenarioRule(t *testing.T) {
+	profile := target.TargetContractProfileFor("langgraph-shell-react")
+	scenario, _, err := target.GeneratedEnvForkPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedEnvForkPrimitiveSubstitution failed: %v", err)
+	}
+	result := target.EvaluateTargetContractInterpretationForScenario(profile, target.PersistentShellForkTargetTaskID, scenario, target.TargetOracleResult{
+		Name:        "env-residue",
+		Status:      target.TargetOracleStatusConfirmed,
+		Confirmed:   true,
+		Attribution: target.TargetOracleAttributionRuntimeResidue,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.EnvResidueTargetTaskID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if result == nil || result.RuleID != "shell-env-generated-fork-boundary" || result.Status != target.TargetContractStatusViolation {
+		t.Fatalf("unexpected generated env fork interpretation: %#v", result)
+	}
+	clean := target.EvaluateTargetContractInterpretationForScenario(profile, target.PersistentShellForkTargetTaskID, scenario, target.TargetOracleResult{
+		Name:        "env-residue",
+		Status:      target.TargetOracleStatusNegative,
+		Attribution: target.TargetOracleAttributionCleanFork,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.GeneratedEnvForkPrimitiveSubstitutionScenarioID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if clean == nil || clean.Status != target.TargetContractStatusConsistent {
+		t.Fatalf("expected clean generated env fork to satisfy reset contract: %#v", clean)
+	}
+}
+
+func TestEvaluateTargetContractInterpretationGeneratedFunctionForkUsesScenarioRule(t *testing.T) {
+	profile := target.TargetContractProfileFor("langgraph-shell-react")
+	scenario, _, err := target.GeneratedFunctionForkPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedFunctionForkPrimitiveSubstitution failed: %v", err)
+	}
+	violation := target.EvaluateTargetContractInterpretationForScenario(profile, target.PersistentShellForkTargetTaskID, scenario, target.TargetOracleResult{
+		Name:        "function-residue",
+		Status:      target.TargetOracleStatusConfirmed,
+		Confirmed:   true,
+		Attribution: target.TargetOracleAttributionRuntimeResidue,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.GeneratedFunctionForkPrimitiveSubstitutionScenarioID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if violation == nil || violation.RuleID != "shell-function-generated-fork-boundary" || violation.Status != target.TargetContractStatusViolation {
+		t.Fatalf("unexpected generated function fork interpretation: %#v", violation)
+	}
+	clean := target.EvaluateTargetContractInterpretationForScenario(profile, target.PersistentShellForkTargetTaskID, scenario, target.TargetOracleResult{
+		Name:        "function-residue",
+		Status:      target.TargetOracleStatusNegative,
+		Attribution: target.TargetOracleAttributionCleanFork,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.GeneratedFunctionForkPrimitiveSubstitutionScenarioID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if clean == nil || clean.Status != target.TargetContractStatusConsistent {
+		t.Fatalf("expected clean generated function fork to satisfy reset contract: %#v", clean)
+	}
+}
+
+func TestEvaluateTargetContractInterpretationGeneratedTrustedActionUsesScenarioRule(t *testing.T) {
+	profile := target.TargetContractProfileFor("langgraph-shell-react")
+	scenario, _, err := target.GeneratedTrustedActionActivationSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedTrustedActionActivationSubstitution failed: %v", err)
+	}
+	violation := target.EvaluateTargetContractInterpretationForScenario(profile, target.UnixListenerResidueForkTargetTaskID, scenario, target.TargetOracleResult{
+		Name:        target.GeneratedTrustedActionActivationScenarioID,
+		Status:      target.TargetOracleStatusConfirmed,
+		Confirmed:   true,
+		Attribution: target.TargetOracleAttributionRuntimeResidue,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.GeneratedTrustedActionActivationScenarioID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if violation == nil || violation.RuleID != "communication-trusted-action-generated-fork-boundary" || violation.Status != target.TargetContractStatusViolation {
+		t.Fatalf("unexpected trusted-action contract interpretation: %#v", violation)
+	}
+	clean := target.EvaluateTargetContractInterpretationForScenario(profile, target.UnixListenerResidueForkTargetTaskID, scenario, target.TargetOracleResult{
+		Name:        target.GeneratedTrustedActionActivationScenarioID,
+		Status:      target.TargetOracleStatusNegative,
+		Attribution: target.TargetOracleAttributionCleanFork,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.GeneratedTrustedActionActivationScenarioID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if clean == nil || clean.Status != target.TargetContractStatusConsistent {
+		t.Fatalf("expected clean trusted-action outcome to satisfy reset contract: %#v", clean)
+	}
+}
+
 func TestEvaluateTargetContractInterpretationWorkspaceRebuildConsistent(t *testing.T) {
 	profile := target.TargetContractProfileFor("langgraph-shell-react")
 	result := target.EvaluateTargetContractInterpretation(profile, target.FileResidueForkTargetTaskID, target.TargetOracleResult{

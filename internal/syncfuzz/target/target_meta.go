@@ -9,24 +9,25 @@ import (
 )
 
 type TargetTaskInfo struct {
-	TaskID               string                       `json:"task_id"`
-	ScenarioID           string                       `json:"scenario_id,omitempty"`
-	SeedID               string                       `json:"seed_id,omitempty"`
-	Description          string                       `json:"description"`
-	Objective            string                       `json:"objective,omitempty"`
-	PlantPrimitiveID     string                       `json:"plant_primitive_id,omitempty"`
-	ActivationKindID     string                       `json:"activation_kind_id,omitempty"`
-	OracleKindID         string                       `json:"oracle_kind_id,omitempty"`
-	DefaultExpectedFiles []string                     `json:"default_expected_files,omitempty"`
-	UsesLateObservation  bool                         `json:"uses_late_observation,omitempty"`
-	StateSurface         string                       `json:"state_surface,omitempty"`
-	LifecycleEdge        string                       `json:"lifecycle_edge,omitempty"`
-	LifecycleOperationID string                       `json:"lifecycle_operation_id,omitempty"`
-	Components           []TargetScenarioComponent    `json:"components,omitempty"`
-	ExecutionPlan        *TargetScenarioExecutionPlan `json:"execution_plan,omitempty"`
-	MutationFocusID      string                       `json:"mutation_focus_id,omitempty"`
-	MutationFocusKind    TargetScenarioMutationKind   `json:"mutation_focus_kind,omitempty"`
-	Mutations            []TargetScenarioMutation     `json:"mutations,omitempty"`
+	TaskID                string                       `json:"task_id"`
+	ScenarioSchemaVersion string                       `json:"scenario_schema_version,omitempty"`
+	ScenarioID            string                       `json:"scenario_id,omitempty"`
+	SeedID                string                       `json:"seed_id,omitempty"`
+	Description           string                       `json:"description"`
+	Objective             string                       `json:"objective,omitempty"`
+	PlantPrimitiveID      string                       `json:"plant_primitive_id,omitempty"`
+	ActivationKindID      string                       `json:"activation_kind_id,omitempty"`
+	OracleKindID          string                       `json:"oracle_kind_id,omitempty"`
+	DefaultExpectedFiles  []string                     `json:"default_expected_files,omitempty"`
+	UsesLateObservation   bool                         `json:"uses_late_observation,omitempty"`
+	StateSurface          string                       `json:"state_surface,omitempty"`
+	LifecycleEdge         string                       `json:"lifecycle_edge,omitempty"`
+	LifecycleOperationID  string                       `json:"lifecycle_operation_id,omitempty"`
+	Components            []TargetScenarioComponent    `json:"components,omitempty"`
+	ExecutionPlan         *TargetScenarioExecutionPlan `json:"execution_plan,omitempty"`
+	MutationFocusID       string                       `json:"mutation_focus_id,omitempty"`
+	MutationFocusKind     TargetScenarioMutationKind   `json:"mutation_focus_kind,omitempty"`
+	Mutations             []TargetScenarioMutation     `json:"mutations,omitempty"`
 }
 
 type TargetTaskGroupInfo struct {
@@ -51,20 +52,21 @@ func TargetTasks() []TargetTaskInfo {
 	for _, scenario := range scenarios {
 		focus, hasFocus := TargetScenarioMutationFocus(scenario.Mutations)
 		tasks = append(tasks, TargetTaskInfo{
-			ScenarioID:           scenario.ScenarioID,
-			TaskID:               scenario.TaskID,
-			SeedID:               scenario.SeedID,
-			Description:          scenario.Description,
-			Objective:            scenario.Objective,
-			PlantPrimitiveID:     scenario.PlantPrimitiveID,
-			ActivationKindID:     scenario.ActivationKindID,
-			OracleKindID:         scenario.OracleKindID,
-			DefaultExpectedFiles: append([]string{}, scenario.DefaultExpectedFiles...),
-			UsesLateObservation:  scenario.UsesLateObservation,
-			StateSurface:         scenario.StateSurface,
-			LifecycleEdge:        scenario.LifecycleEdge,
-			Components:           append([]TargetScenarioComponent{}, scenario.Components...),
-			Mutations:            append([]TargetScenarioMutation{}, scenario.Mutations...),
+			ScenarioSchemaVersion: scenario.SchemaVersion,
+			ScenarioID:            scenario.ScenarioID,
+			TaskID:                scenario.TaskID,
+			SeedID:                scenario.SeedID,
+			Description:           scenario.Description,
+			Objective:             scenario.Objective,
+			PlantPrimitiveID:      scenario.PlantPrimitiveID,
+			ActivationKindID:      scenario.ActivationKindID,
+			OracleKindID:          scenario.OracleKindID,
+			DefaultExpectedFiles:  append([]string{}, scenario.DefaultExpectedFiles...),
+			UsesLateObservation:   scenario.UsesLateObservation,
+			StateSurface:          scenario.StateSurface,
+			LifecycleEdge:         scenario.LifecycleEdge,
+			Components:            append([]TargetScenarioComponent{}, scenario.Components...),
+			Mutations:             append([]TargetScenarioMutation{}, scenario.Mutations...),
 		})
 		if hasFocus {
 			tasks[len(tasks)-1].MutationFocusID = focus.MutationID
@@ -346,6 +348,24 @@ func TargetSignature(taskID string) core.MismatchSignature {
 		Operation:      taskID,
 		Relation:       "observation-only",
 		Impact:         "target-adapter",
+	}
+}
+
+func TargetSignatureForScenario(taskID string, scenario *TargetScenarioInfo) core.MismatchSignature {
+	if scenario == nil || strings.TrimSpace(scenario.ScenarioID) == "" || strings.TrimSpace(scenario.ScenarioID) == strings.TrimSpace(taskID) {
+		return TargetSignature(taskID)
+	}
+	lifecycleEvent := strings.TrimSpace(scenario.LifecycleEdge)
+	if scenario.ExecutionPlan != nil && strings.TrimSpace(scenario.ExecutionPlan.LifecycleOperationID) != "" {
+		lifecycleEvent = strings.TrimSpace(scenario.ExecutionPlan.LifecycleOperationID)
+	}
+	return core.MismatchSignature{
+		LifecycleEvent: lifecycleEvent,
+		FaultPhase:     "target-command",
+		StateClass:     strings.TrimSpace(scenario.StateSurface),
+		Operation:      strings.TrimSpace(scenario.PlantPrimitiveID),
+		Relation:       strings.TrimSpace(scenario.OracleKindID),
+		Impact:         strings.TrimSpace(scenario.ActivationKindID),
 	}
 }
 

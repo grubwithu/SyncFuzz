@@ -300,11 +300,15 @@ observe
 - 在显式开启 `auto_pivot` 后，同一个 stagnation 信号也可以不再直接停机，而是沿着推荐维度自动扩展当前 campaign，并把过程记录到 `pivot_history`。当前实现已经收紧到 conservative single-step pivot：每次只扩一个值，并用 frontier gap / novelty 去解释为什么先走这一步。
 - `corpus analyze` 与 `corpus verify` 已具备 target-heavy corpus 的 outcome taxonomy。
 - `target scenarios` 已提供第一版 executable Scenario IR view：seed、primitive、lifecycle operation、activation、oracle、mutation operator，以及可落到 replay / fork 运行参数的 execution plan。
+- Scenario IR 已冻结第一版 schema：`syncfuzz.target-scenario.v1`。每个 component 现在都有稳定的 `component_id`、`role` 与 `kind_id`，role 集合覆盖 `setup / plant / lifecycle / activation / fault / oracle`；built-in scenario 在进入 matrix、执行与 artifact 前会统一 normalization 和 validation，并自动补齐由 primitive、lifecycle、activation、oracle 元数据要求的结构组件。
 - real-target matrix candidate 的 `execution_plan` 已经从只读 metadata 接入真实执行路径：candidate 可以控制 replay / fork、checkpoint selector、checkpoint backend、process mode 和 fork follow-up，并把实际采用的 plan 固化进 `target-task.json`。candidate 自带的 late-observation timing 也会被 suite 消费，corpus replay / verify 也会恢复该 plan，避免 semantic mutation 在复验时退回 built-in 默认值。
+- matrix / suite 现在会把 candidate 的完整 Scenario IR 直接交给 `target run`，而不是在执行时仅按 `task_id` 重新拼回 built-in metadata。生成 candidate 的 scenario identity、seed、components、mutation provenance 和 execution plan 会一起固化进 `target-task.json`，并被 corpus replay 与 minimization trial 原样恢复。这补上了“generator 产生了新 IR，但 artifact 又退回 task 默认值”的断点，为继续扩展 primitive / activation substitution 与实现 IR component reduction 提供稳定事实来源。
 - 第一条真正改变执行语义的 generator 已落地：所有 split-process checkpoint candidate 会自动派生 `phase-shift-single-process` sibling，在保留 task / activation / oracle 的同时，把 initial 与 resumed phase 从跨进程改成同进程执行。该 candidate 会携带 `phase-shift.process-mode.single-process` mutation provenance，并进入正常 feedback / coverage / campaign 路径。
+- 第一组可执行 `primitive substitution` 已进入 matrix：PATH fork seed 现在会自动派生 `primitive-shell-env-export` 与 `primitive-shell-function-define`，保留 `checkpoint -> fork` lifecycle，同时分别生成 `before-env-export` / `before-function-define` selector、初始 branch prompt 与 fork activation message。每个 candidate 的 oracle、compliance、contract rule 和 mismatch signature 都由生成后的 Scenario IR 决定，不会退回 PATH task 的默认解释。这已经形成一个小型 compatibility-aware family，但尚不能表述为任意 primitive cross-product。
+- 第一条可执行 `activation substitution` 已进入 matrix：`unix-listener-residue-fork` seed 会派生 `activation-trusted-action`，保留初始 branch 的 Unix listener plant 与 `checkpoint -> fork` lifecycle，但把被动 socket reachability 替换为 successor branch 中的固定 trusted policy。follow-up 只按固定响应值决定是否写入本地 action marker，不执行 response text；oracle / compliance 会联合检查 response、effect、check 三个 artifact 与 initial/fork command trace，并把 fork-side listener relaunch 归类为 reconstruction。
 - matrix 会从 Scenario IR mutation metadata 派生 `lifecycle-boundary`、`mutation-focus` 和 `activation-focus` prompt candidate；其中 activation variant 只约束初始 branch 保留后续 trusted activation 所需的状态，不会要求 setup 阶段提前执行 activation。
 - feedback guidance 已从二值 activation reached 扩展为 execution、task compliance、lifecycle、plant、activation、reached 多阶段进度；candidate ranking、coverage gain 和 prompt repair 都会消费该进度。frontier 还能把修复意图标记为 `lifecycle-repair`、`state-plant-repair` 或 `activation-repair`。
-- `target suite` / `target matrix` 的每个 confirmed result 现在会写出 `minimization_plan`，把 Scenario IR component、mutation axis、expected artifact 和 oracle 约束转换成可执行前的 delta-debugging 清单。它还不是自动删减执行器，但已经把“应该删什么、保留什么、如何复验”从人工经验推进成结构化 artifact。
+- `target suite` / `target matrix` 的每个 confirmed result 现在会写出 `minimization_plan`，把 Scenario IR component、mutation axis、expected artifact 和 oracle 约束转换成可执行前的 delta-debugging 清单。component step 已携带稳定 `component_id` 与 `component_kind_id`，后续 reduction runner 可以直接按 IR identity 删除或替换组件，而不必匹配自然语言 summary。它还不是自动 component 删除执行器，但已经把“应该删什么、保留什么、如何复验”从人工经验推进成结构化 artifact。
 - `target minimize --from ...` 已经可以从 suite / matrix 结果中抽取 `target-minimization-plan.json` batch，为下一步自动 reduction runner 提供稳定输入。
 - `target minimize --execute` 已接上自动 reduction runner：它从 source run 的 `target-task.json` 恢复真实命令，在新 workspace 中先做有上限的 prompt line deletion，再逐项尝试清除 process mode、checkpoint backend、checkpoint selector、fork follow-up 与 replay。只有在 completion、oracle status、attribution、mismatch signature、task compliance 与 contract interpretation 全部保持时才接受删减。结果写入 `syncfuzz.target-minimization-result.v1`，同时保存 original/minimized execution plan 与 accepted step。当前尚未执行 component / primitive / activation-command / cross-seed reduction。
 - LangGraph lifecycle trace 已进入 oracle / compliance 路径，用于识别 fork-side relaunch、workspace reconstruction 和 task drift。
@@ -316,7 +320,7 @@ observe
 ## 下一步
 
 1. 让 Scenario IR 成为 testcase 的主事实来源，而不是继续扩大手写 task catalog。
-2. 优先实现 `primitive substitution`、`activation substitution`、`lifecycle splice`、`fault-phase / phase-shift mutation` 四类 semantic mutation。
+2. 继续扩展 compatibility-aware `primitive substitution` 与 `activation substitution` family，并实现 `lifecycle splice`、`fault-phase / phase-shift mutation`。
 3. 让 `MAF` 消费至少一个与 LangGraph 共享的 portable scenario，并进入相同的 campaign / replay / verify / minimize。
 4. 把 minimizer 从 prompt / execution-plan reduction 扩展到 Scenario IR component reduction，并增加 `Semantic Fidelity` 模式。
 5. 对 feedback-guided campaign 做小预算对照实验，证明它比 random / fixed enumeration 更快到达高价值 activation。
@@ -328,8 +332,8 @@ observe
 
 - 冻结 Scenario IR schema；
 - 把 `3 - 5` 个现有 LangGraph testcase 从 task-centric 表达迁移到纯 IR；
-- 实现 `primitive substitution`；
-- 实现 `activation substitution`；
+- 把当前 `PATH -> env/function` fork substitutions 扩展到更多兼容 primitive pair；
+- 把当前 Unix-listener trusted-action substitution 扩展到更多 activation / consequence pair；
 - 让 `MAF` 至少消费一个完全相同的 portable IR。
 
 ### 第二周

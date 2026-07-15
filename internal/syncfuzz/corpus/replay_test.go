@@ -2,6 +2,7 @@ package corpus_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,7 +86,13 @@ func TestReplayTargetCorpusEntryPreservesStoredExecutionPlan(t *testing.T) {
 		Environment:    "local",
 		ExpectedFiles:  []string{"late-effect"},
 		Scenario: &target.TargetScenarioInfo{
-			TaskID: target.DefaultTargetTaskID,
+			ScenarioID: "mutated-replay-scenario",
+			TaskID:     target.DefaultTargetTaskID,
+			SeedID:     "mutated-replay-seed",
+			Mutations: []target.TargetScenarioMutation{{
+				MutationID: "phase-shift.mutated-mode",
+				Kind:       target.TargetScenarioMutationPhaseShift,
+			}},
 			ExecutionPlan: &target.TargetScenarioExecutionPlan{
 				ProcessMode: "mutated-mode",
 			},
@@ -124,6 +131,20 @@ func TestReplayTargetCorpusEntryPreservesStoredExecutionPlan(t *testing.T) {
 	}
 	if string(witness) != "mutated-mode" {
 		t.Fatalf("expected stored execution plan during replay, got %q", witness)
+	}
+	raw, err := os.ReadFile(filepath.Join(result.RunArtifactDir, target.TargetTaskArtifact))
+	if err != nil {
+		t.Fatalf("read replay target task: %v", err)
+	}
+	var replayTask target.TargetTask
+	if err := json.Unmarshal(raw, &replayTask); err != nil {
+		t.Fatalf("decode replay target task: %v", err)
+	}
+	if replayTask.Scenario == nil || replayTask.Scenario.ScenarioID != "mutated-replay-scenario" || replayTask.Scenario.SeedID != "mutated-replay-seed" {
+		t.Fatalf("expected replay to preserve stored scenario identity: %#v", replayTask.Scenario)
+	}
+	if len(replayTask.Scenario.Mutations) != 1 || replayTask.Scenario.Mutations[0].MutationID != "phase-shift.mutated-mode" {
+		t.Fatalf("expected replay to preserve mutation provenance: %#v", replayTask.Scenario)
 	}
 }
 

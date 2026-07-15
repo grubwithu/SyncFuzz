@@ -269,6 +269,7 @@ func runTargetMinimizationTrial(ctx context.Context, outDir string, task target.
 		TargetID:         task.TargetID,
 		TaskID:           task.TaskID,
 		Objective:        task.Objective,
+		Scenario:         target.CloneTargetScenarioInfo(task.Scenario),
 		ExecutionPlan:    cloneTargetExecutionPlan(executionPlan),
 		PromptProfileID:  task.PromptProfileID,
 		PromptVariantID:  task.PromptVariantID,

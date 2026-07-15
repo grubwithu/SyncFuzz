@@ -20,6 +20,7 @@ type TargetMatrixOptions struct {
 type TargetScheduleCandidate struct {
 	CandidateID              string                              `json:"candidate_id"`
 	TargetID                 string                              `json:"target_id"`
+	ScenarioSchemaVersion    string                              `json:"scenario_schema_version,omitempty"`
 	ScenarioID               string                              `json:"scenario_id,omitempty"`
 	SeedID                   string                              `json:"seed_id,omitempty"`
 	TaskID                   string                              `json:"task_id"`
@@ -27,6 +28,7 @@ type TargetScheduleCandidate struct {
 	PromptProfileDescription string                              `json:"prompt_profile_description,omitempty"`
 	PromptVariantID          string                              `json:"prompt_variant_id,omitempty"`
 	PromptVariantDescription string                              `json:"prompt_variant_description,omitempty"`
+	Prompt                   string                              `json:"prompt,omitempty"`
 	Generated                bool                                `json:"generated,omitempty"`
 	Description              string                              `json:"description,omitempty"`
 	Objective                string                              `json:"objective,omitempty"`
@@ -106,6 +108,7 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 				Signature:                target.TargetSignature(taskID),
 			}
 			if ok {
+				candidate.ScenarioSchemaVersion = taskInfo.ScenarioSchemaVersion
 				candidate.ScenarioID = taskInfo.ScenarioID
 				candidate.SeedID = taskInfo.SeedID
 				candidate.Description = taskInfo.Description
@@ -156,6 +159,16 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 			}
 			if derived, ok := targetDerivedProcessModePhaseShiftCandidate(candidate); ok {
 				candidates = append(candidates, derived)
+			}
+			if derived, err := targetDerivedForkPrimitiveSubstitutionCandidates(candidate); err != nil {
+				return nil, err
+			} else {
+				candidates = append(candidates, derived...)
+			}
+			if derived, err := targetDerivedForkActivationSubstitutionCandidates(candidate); err != nil {
+				return nil, err
+			} else {
+				candidates = append(candidates, derived...)
 			}
 		}
 	}
@@ -309,6 +322,92 @@ func targetDerivedProcessModePhaseShiftCandidate(base TargetScheduleCandidate) (
 	})
 	derived.CandidateID = base.CandidateID + "/phase-shift-single-process"
 	return derived, true
+}
+
+func targetDerivedForkPrimitiveSubstitutionCandidates(base TargetScheduleCandidate) ([]TargetScheduleCandidate, error) {
+	if base.TargetID != "langgraph-shell-react" || base.TaskID != target.PersistentShellForkTargetTaskID {
+		return nil, nil
+	}
+	if target.NormalizeTargetPromptProfileID(base.PromptProfileID) != target.TargetPromptProfileBaselineID ||
+		target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID {
+		return nil, nil
+	}
+	generated, err := target.GeneratedPersistentShellForkPrimitiveSubstitutions()
+	if err != nil {
+		return nil, err
+	}
+	derived := make([]TargetScheduleCandidate, 0, len(generated))
+	for _, generatedCandidate := range generated {
+		if generatedCandidate.Scenario == nil || generatedCandidate.CandidateSuffix == "" {
+			continue
+		}
+		derived = append(derived, targetDerivedGeneratedScenarioCandidate(base, generatedCandidate))
+	}
+	return derived, nil
+}
+
+func targetDerivedForkActivationSubstitutionCandidates(base TargetScheduleCandidate) ([]TargetScheduleCandidate, error) {
+	if base.TargetID != "langgraph-shell-react" || base.TaskID != target.UnixListenerResidueForkTargetTaskID {
+		return nil, nil
+	}
+	if target.NormalizeTargetPromptProfileID(base.PromptProfileID) != target.TargetPromptProfileBaselineID ||
+		target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID {
+		return nil, nil
+	}
+	generated, err := target.GeneratedUnixListenerForkActivationSubstitutions()
+	if err != nil {
+		return nil, err
+	}
+	derived := make([]TargetScheduleCandidate, 0, len(generated))
+	for _, generatedCandidate := range generated {
+		if generatedCandidate.Scenario == nil || generatedCandidate.CandidateSuffix == "" {
+			continue
+		}
+		derived = append(derived, targetDerivedGeneratedScenarioCandidate(base, generatedCandidate))
+	}
+	return derived, nil
+}
+
+func targetDerivedGeneratedScenarioCandidate(base TargetScheduleCandidate, generated target.GeneratedTargetScenarioCandidate) TargetScheduleCandidate {
+	scenario := generated.Scenario
+	derived := base
+	derived.CandidateID = base.CandidateID + "/" + generated.CandidateSuffix
+	derived.Generated = true
+	derived.Prompt = generated.Prompt
+	derived.ScenarioSchemaVersion = scenario.SchemaVersion
+	derived.ScenarioID = scenario.ScenarioID
+	derived.SeedID = scenario.SeedID
+	derived.Description = scenario.Description
+	derived.Objective = scenario.Objective
+	derived.DefaultExpectedFiles = append([]string{}, scenario.DefaultExpectedFiles...)
+	derived.UsesLateObservation = scenario.UsesLateObservation
+	derived.DefaultLateObserveDelay = scenario.LateObserveDelayMs
+	derived.StateSurface = scenario.StateSurface
+	derived.LifecycleEdge = scenario.LifecycleEdge
+	derived.Components = append([]target.TargetScenarioComponent{}, scenario.Components...)
+	derived.ExecutionPlan = cloneTargetExecutionPlan(scenario.ExecutionPlan)
+	derived.PlantPrimitiveID = scenario.PlantPrimitiveID
+	derived.ActivationKindID = scenario.ActivationKindID
+	derived.OracleKindID = scenario.OracleKindID
+	derived.Mutations = append([]target.TargetScenarioMutation{}, scenario.Mutations...)
+	if focus, ok := target.TargetScenarioMutationFocus(derived.Mutations); ok {
+		derived.MutationFocusID = focus.MutationID
+		derived.MutationFocusKind = focus.Kind
+	}
+	derived.Signature = target.TargetSignatureForScenario(derived.TaskID, scenario)
+	derived.ContractProfileID = ""
+	derived.ContractRuleID = ""
+	derived.ContractExpectation = ""
+	derived.ContractSourceStrength = ""
+	if profile := target.TargetContractProfileFor(base.TargetID); profile != nil {
+		if rule, ok := target.TargetContractRuleForScenario(profile, base.TaskID, scenario); ok {
+			derived.ContractProfileID = profile.ProfileID
+			derived.ContractRuleID = rule.RuleID
+			derived.ContractExpectation = rule.Expectation
+			derived.ContractSourceStrength = rule.SourceStrength
+		}
+	}
+	return derived
 }
 
 func findTargetMatrixCandidate(matrix *TargetScheduleMatrix, taskID string) (TargetScheduleCandidate, error) {

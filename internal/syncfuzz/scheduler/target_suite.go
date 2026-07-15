@@ -457,14 +457,19 @@ func runTargetSuiteTask(
 	startedRun := time.Now()
 	runPrompt := opts.Prompt
 	runPromptFile := opts.PromptFile
-	if runPrompt == "" && runPromptFile == "" && target.NormalizeTargetPromptVariantID(candidate.PromptVariantID) != target.TargetPromptVariantBaseID {
-		runPrompt = target.DefaultTargetPromptVariantWithProfile(taskID, candidate.PromptProfileID, candidate.PromptVariantID)
+	if runPrompt == "" && runPromptFile == "" {
+		if candidate.Prompt != "" {
+			runPrompt = candidate.Prompt
+		} else if target.NormalizeTargetPromptVariantID(candidate.PromptVariantID) != target.TargetPromptVariantBaseID {
+			runPrompt = target.DefaultTargetPromptVariantWithProfile(taskID, candidate.PromptProfileID, candidate.PromptVariantID)
+		}
 	}
 	runResult, err := target.RunTarget(ctx, target.TargetRunOptions{
 		AdapterID:        opts.AdapterID,
 		TargetID:         opts.TargetID,
 		TaskID:           taskID,
 		Objective:        opts.Objective,
+		Scenario:         targetScenarioForCandidate(candidate),
 		ExecutionPlan:    cloneTargetExecutionPlan(candidate.ExecutionPlan),
 		PromptProfileID:  candidate.PromptProfileID,
 		PromptVariantID:  candidate.PromptVariantID,
@@ -538,6 +543,60 @@ func cloneTargetExecutionPlan(plan *target.TargetScenarioExecutionPlan) *target.
 	return &copyPlan
 }
 
+func targetScenarioForCandidate(candidate TargetScheduleCandidate) *target.TargetScenarioInfo {
+	scenario, ok := target.TargetScenarioByTaskID(candidate.TaskID)
+	if !ok {
+		return nil
+	}
+	if candidate.ScenarioID != "" {
+		scenario.ScenarioID = candidate.ScenarioID
+	}
+	if candidate.ScenarioSchemaVersion != "" {
+		scenario.SchemaVersion = candidate.ScenarioSchemaVersion
+	}
+	if candidate.SeedID != "" {
+		scenario.SeedID = candidate.SeedID
+	}
+	if candidate.Description != "" {
+		scenario.Description = candidate.Description
+	}
+	if candidate.Objective != "" {
+		scenario.Objective = candidate.Objective
+	}
+	if candidate.StateSurface != "" {
+		scenario.StateSurface = candidate.StateSurface
+	}
+	if candidate.LifecycleEdge != "" {
+		scenario.LifecycleEdge = candidate.LifecycleEdge
+	}
+	if candidate.PlantPrimitiveID != "" {
+		scenario.PlantPrimitiveID = candidate.PlantPrimitiveID
+	}
+	if candidate.ActivationKindID != "" {
+		scenario.ActivationKindID = candidate.ActivationKindID
+	}
+	if candidate.OracleKindID != "" {
+		scenario.OracleKindID = candidate.OracleKindID
+	}
+	if candidate.DefaultExpectedFiles != nil {
+		scenario.DefaultExpectedFiles = append([]string{}, candidate.DefaultExpectedFiles...)
+	}
+	scenario.UsesLateObservation = candidate.UsesLateObservation
+	if candidate.DefaultLateObserveDelay > 0 {
+		scenario.LateObserveDelayMs = candidate.DefaultLateObserveDelay
+	}
+	if candidate.Components != nil {
+		scenario.Components = append([]target.TargetScenarioComponent{}, candidate.Components...)
+	}
+	if candidate.Mutations != nil {
+		scenario.Mutations = append([]target.TargetScenarioMutation{}, candidate.Mutations...)
+	}
+	if candidate.ExecutionPlan != nil {
+		scenario.ExecutionPlan = cloneTargetExecutionPlan(candidate.ExecutionPlan)
+	}
+	return scenario
+}
+
 func targetScheduledTaskCandidate(targetID string, taskID string, promptProfileID string, candidateID string) TargetScheduleCandidate {
 	item := TargetScheduleCandidate{
 		CandidateID:             candidateID,
@@ -551,6 +610,7 @@ func targetScheduledTaskCandidate(targetID string, taskID string, promptProfileI
 		Signature:               target.TargetSignature(taskID),
 	}
 	if taskInfo, ok := targetTaskInfoByID(taskID); ok {
+		item.ScenarioSchemaVersion = taskInfo.ScenarioSchemaVersion
 		item.ScenarioID = taskInfo.ScenarioID
 		item.SeedID = taskInfo.SeedID
 		item.Description = taskInfo.Description

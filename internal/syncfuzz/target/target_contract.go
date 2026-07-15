@@ -35,6 +35,7 @@ type TargetContractProfile struct {
 type TargetContractRule struct {
 	RuleID         string                       `json:"rule_id"`
 	TaskID         string                       `json:"task_id"`
+	ScenarioID     string                       `json:"scenario_id,omitempty"`
 	StateSurface   string                       `json:"state_surface"`
 	LifecycleEdge  string                       `json:"lifecycle_edge"`
 	Expectation    TargetContractExpectation    `json:"expectation"`
@@ -103,6 +104,28 @@ func TargetContractProfileFor(targetID string) *TargetContractProfile {
 				SourceStrength: TargetContractSourceStrengthImplicit,
 				EvidenceSource: "syncfuzz-wrapper",
 				Description:    "Fork from before the PATH export should not preserve later shell-session PATH mutations across the selected checkpoint boundary.",
+			},
+			{
+				RuleID:         "shell-env-generated-fork-boundary",
+				TaskID:         PersistentShellForkTargetTaskID,
+				ScenarioID:     GeneratedEnvForkPrimitiveSubstitutionScenarioID,
+				StateSurface:   "shell-session.env",
+				LifecycleEdge:  "checkpoint->fork",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Fork from before the environment export should not preserve the discarded branch variable across the selected checkpoint boundary.",
+			},
+			{
+				RuleID:         "shell-function-generated-fork-boundary",
+				TaskID:         PersistentShellForkTargetTaskID,
+				ScenarioID:     GeneratedFunctionForkPrimitiveSubstitutionScenarioID,
+				StateSurface:   "shell-session.function",
+				LifecycleEdge:  "checkpoint->fork",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Fork from before the shell-function definition should not preserve the discarded branch function across the selected checkpoint boundary.",
 			},
 			{
 				RuleID:         "workspace-file-fork-boundary",
@@ -235,6 +258,17 @@ func TargetContractProfileFor(targetID string) *TargetContractProfile {
 				Description:    "Fork from before the branch-local Unix listener launch should not let the successor branch connect to the discarded branch listener.",
 			},
 			{
+				RuleID:         "communication-trusted-action-generated-fork-boundary",
+				TaskID:         UnixListenerResidueForkTargetTaskID,
+				ScenarioID:     GeneratedTrustedActionActivationScenarioID,
+				StateSurface:   "communication.trusted-action",
+				LifecycleEdge:  "checkpoint->fork",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Fork from before the listener launch should not let a discarded branch response influence a successor-branch trusted action.",
+			},
+			{
 				RuleID:         "communication-trusted-client-fork-boundary",
 				TaskID:         DiscardedServerTrustedClientTargetTaskID,
 				StateSurface:   "communication.trusted-client-output",
@@ -300,8 +334,34 @@ func TargetContractRuleFor(profile *TargetContractProfile, taskID string) (Targe
 	return TargetContractRule{}, false
 }
 
+func TargetContractRuleForScenario(profile *TargetContractProfile, taskID string, scenario *TargetScenarioInfo) (TargetContractRule, bool) {
+	if profile == nil {
+		return TargetContractRule{}, false
+	}
+	if scenario != nil && scenario.ScenarioID != "" {
+		for _, rule := range profile.Rules {
+			if rule.ScenarioID == scenario.ScenarioID {
+				return rule, true
+			}
+		}
+		if scenario.ScenarioID != taskID {
+			return TargetContractRule{}, false
+		}
+	}
+	return TargetContractRuleFor(profile, taskID)
+}
+
 func EvaluateTargetContractInterpretation(profile *TargetContractProfile, taskID string, oracle TargetOracleResult, compliance TargetTaskComplianceResult) *TargetContractInterpretation {
 	rule, ok := TargetContractRuleFor(profile, taskID)
+	return evaluateTargetContractInterpretationRule(profile, rule, ok, oracle, compliance)
+}
+
+func EvaluateTargetContractInterpretationForScenario(profile *TargetContractProfile, taskID string, scenario *TargetScenarioInfo, oracle TargetOracleResult, compliance TargetTaskComplianceResult) *TargetContractInterpretation {
+	rule, ok := TargetContractRuleForScenario(profile, taskID, scenario)
+	return evaluateTargetContractInterpretationRule(profile, rule, ok, oracle, compliance)
+}
+
+func evaluateTargetContractInterpretationRule(profile *TargetContractProfile, rule TargetContractRule, ok bool, oracle TargetOracleResult, compliance TargetTaskComplianceResult) *TargetContractInterpretation {
 	if !ok {
 		return nil
 	}
@@ -335,7 +395,7 @@ func EvaluateTargetContractInterpretation(profile *TargetContractProfile, taskID
 		return result
 	}
 
-	outcome, detail, ok := targetContractObservedOutcomeForTask(taskID, oracle)
+	outcome, detail, ok := targetContractObservedOutcomeForRule(rule, oracle)
 	if !ok {
 		result.Summary = "the observed oracle outcome did not map cleanly onto the current contract rule"
 		return result
@@ -354,6 +414,19 @@ func EvaluateTargetContractInterpretation(profile *TargetContractProfile, taskID
 		result.Caveats = append(result.Caveats, "this rule is inferred from the integrated target and SyncFuzz wrapper semantics rather than from a maintainer-stated guarantee")
 	}
 	return result
+}
+
+func targetContractObservedOutcomeForRule(rule TargetContractRule, oracle TargetOracleResult) (targetContractObservedOutcome, string, bool) {
+	if rule.ScenarioID == GeneratedEnvForkPrimitiveSubstitutionScenarioID {
+		return targetContractObservedWorkspaceForkOutcome("environment-variable residue", oracle)
+	}
+	if rule.ScenarioID == GeneratedFunctionForkPrimitiveSubstitutionScenarioID {
+		return targetContractObservedWorkspaceForkOutcome("shell-function residue", oracle)
+	}
+	if rule.ScenarioID == GeneratedTrustedActionActivationScenarioID {
+		return targetContractObservedWorkspaceForkOutcome("trusted-action influence", oracle)
+	}
+	return targetContractObservedOutcomeForTask(rule.TaskID, oracle)
 }
 
 func targetContractObservedOutcomeForTask(taskID string, oracle TargetOracleResult) (targetContractObservedOutcome, string, bool) {

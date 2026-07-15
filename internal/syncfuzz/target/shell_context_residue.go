@@ -230,6 +230,22 @@ func evaluateShellContextUmaskTaskCompliance(workspace string, targetID string) 
 }
 
 func evaluateEnvResidueTargetOracle(workspace string, targetID string, completed bool, immediateMissing []string) TargetOracleResult {
+	return evaluateEnvResidueTargetOracleWithTrace(workspace, completed, immediateMissing, func() (shellCommandTrace, error) {
+		return loadShellCommandTrace(workspace, targetID)
+	})
+}
+
+func evaluateGeneratedEnvForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := evaluateEnvResidueTargetOracleWithTrace(workspace, completed, immediateMissing, func() (shellCommandTrace, error) {
+		return loadGeneratedEnvForkCommandTrace(workspace)
+	})
+	if oracle.Status == TargetOracleStatusNegative && oracle.Attribution == TargetOracleAttributionUnknown {
+		oracle.Attribution = TargetOracleAttributionCleanFork
+	}
+	return oracle
+}
+
+func evaluateEnvResidueTargetOracleWithTrace(workspace string, completed bool, immediateMissing []string, loadTrace func() (shellCommandTrace, error)) TargetOracleResult {
 	oracle := newTargetOracleResult("env-residue")
 	oracle.Attribution = TargetOracleAttributionUnknown
 	if !completed {
@@ -269,7 +285,7 @@ func evaluateEnvResidueTargetOracle(workspace string, targetID string, completed
 		markTargetOracleInconclusive(&oracle, "witness contained a recognizable env residue marker")
 	}
 
-	trace, err := loadShellCommandTrace(workspace, targetID)
+	trace, err := loadTrace()
 	if err != nil {
 		oracle.Evidence = append(oracle.Evidence, err.Error())
 		markTargetOracleInconclusive(&oracle, "shell command trace proved the later witness came from observing the environment variable without mutating it again")
@@ -315,6 +331,22 @@ func evaluateEnvResidueTargetOracle(workspace string, targetID string, completed
 }
 
 func evaluateFunctionResidueTargetOracle(workspace string, targetID string, completed bool, immediateMissing []string) TargetOracleResult {
+	return evaluateFunctionResidueTargetOracleWithTrace(workspace, completed, immediateMissing, func() (shellCommandTrace, error) {
+		return loadShellCommandTrace(workspace, targetID)
+	})
+}
+
+func evaluateGeneratedFunctionForkTargetOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := evaluateFunctionResidueTargetOracleWithTrace(workspace, completed, immediateMissing, func() (shellCommandTrace, error) {
+		return loadGeneratedForkCommandTrace(workspace, "langgraph generated function fork")
+	})
+	if oracle.Status == TargetOracleStatusNegative && oracle.Attribution == TargetOracleAttributionUnknown {
+		oracle.Attribution = TargetOracleAttributionCleanFork
+	}
+	return oracle
+}
+
+func evaluateFunctionResidueTargetOracleWithTrace(workspace string, completed bool, immediateMissing []string, loadTrace func() (shellCommandTrace, error)) TargetOracleResult {
 	oracle := newTargetOracleResult("function-residue")
 	oracle.Attribution = TargetOracleAttributionUnknown
 	if !completed {
@@ -358,7 +390,7 @@ func evaluateFunctionResidueTargetOracle(workspace string, targetID string, comp
 		markTargetOracleInconclusive(&oracle, "witness contained a recognizable function residue marker")
 	}
 
-	trace, err := loadShellCommandTrace(workspace, targetID)
+	trace, err := loadTrace()
 	if err != nil {
 		oracle.Evidence = append(oracle.Evidence, err.Error())
 		markTargetOracleInconclusive(&oracle, "shell command trace proved the later witness came from observing the shell function without redefining it")
@@ -636,6 +668,32 @@ func loadShellCommandTrace(workspace string, targetID string) (shellCommandTrace
 		}
 		return shellCommandTrace{Source: "langgraph history", Available: true, Commands: commands}, nil
 	}
+}
+
+func loadGeneratedEnvForkCommandTrace(workspace string) (shellCommandTrace, error) {
+	return loadGeneratedForkCommandTrace(workspace, "langgraph generated env fork")
+}
+
+func loadGeneratedForkCommandTrace(workspace string, source string) (shellCommandTrace, error) {
+	initialCalls, initialOK, err := loadPrimaryLangGraphShellCalls(workspace)
+	if err != nil {
+		return shellCommandTrace{Source: source}, err
+	}
+	_, forkCalls, forkOK, err := loadLangGraphOperationShellCalls(workspace, LanggraphForkArtifact)
+	if err != nil {
+		return shellCommandTrace{Source: source}, err
+	}
+	if !initialOK || !forkOK {
+		return shellCommandTrace{Source: source}, nil
+	}
+	commands := make([]string, 0, len(initialCalls)+len(forkCalls))
+	for _, call := range initialCalls {
+		commands = append(commands, call.Command)
+	}
+	for _, call := range forkCalls {
+		commands = append(commands, call.Command)
+	}
+	return shellCommandTrace{Source: source, Available: true, Commands: commands}, nil
 }
 
 func analyzeEnvResidueCommands(commands []string) envResidueCommandAnalysis {

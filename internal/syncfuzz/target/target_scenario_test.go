@@ -5,9 +5,276 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestTargetScenariosConformToScenarioIRV1(t *testing.T) {
+	scenarios := TargetScenarios()
+	if len(scenarios) == 0 {
+		t.Fatalf("expected built-in target scenarios")
+	}
+	for _, scenario := range scenarios {
+		if scenario.SchemaVersion != TargetScenarioSchemaVersion {
+			t.Fatalf("scenario %q has unexpected schema version %q", scenario.ScenarioID, scenario.SchemaVersion)
+		}
+		if err := ValidateTargetScenarioInfo(&scenario); err != nil {
+			t.Fatalf("scenario %q failed Scenario IR validation: %v", scenario.ScenarioID, err)
+		}
+		seen := make(map[string]struct{}, len(scenario.Components))
+		for _, component := range scenario.Components {
+			if component.ComponentID == "" || component.KindID == "" {
+				t.Fatalf("scenario %q has incomplete component identity: %#v", scenario.ScenarioID, component)
+			}
+			if _, exists := seen[component.ComponentID]; exists {
+				t.Fatalf("scenario %q has duplicate component identity %q", scenario.ScenarioID, component.ComponentID)
+			}
+			seen[component.ComponentID] = struct{}{}
+		}
+		for role, kindID := range map[TargetScenarioComponentRole]string{
+			TargetScenarioComponentPlant:      scenario.PlantPrimitiveID,
+			TargetScenarioComponentActivation: scenario.ActivationKindID,
+			TargetScenarioComponentOracle:     scenario.OracleKindID,
+		} {
+			if kindID != "" && !scenarioHasComponentKind(scenario, role, kindID) {
+				t.Fatalf("scenario %q is missing %s component %q", scenario.ScenarioID, role, kindID)
+			}
+		}
+		if scenario.ExecutionPlan != nil && scenario.ExecutionPlan.LifecycleOperationID != "" &&
+			!scenarioHasComponentKind(scenario, TargetScenarioComponentLifecycle, scenario.ExecutionPlan.LifecycleOperationID) {
+			t.Fatalf("scenario %q is missing lifecycle component %q", scenario.ScenarioID, scenario.ExecutionPlan.LifecycleOperationID)
+		}
+	}
+}
+
+func TestNormalizeTargetScenarioInfoRejectsDuplicateComponentIDs(t *testing.T) {
+	_, err := NormalizeTargetScenarioInfo(&TargetScenarioInfo{
+		TaskID:     "duplicate-components",
+		ScenarioID: "duplicate-components",
+		Components: []TargetScenarioComponent{
+			{ComponentID: "plant.same", Role: TargetScenarioComponentPlant, KindID: "first"},
+			{ComponentID: "plant.same", Role: TargetScenarioComponentPlant, KindID: "second"},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected duplicate component IDs to be rejected")
+	}
+}
+
+func TestGeneratedEnvForkPrimitiveSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedEnvForkPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedEnvForkPrimitiveSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedEnvForkPrimitiveSubstitutionScenarioID {
+		t.Fatalf("unexpected generated scenario: %#v", scenario)
+	}
+	if scenario.TaskID != PersistentShellForkTargetTaskID || scenario.PlantPrimitiveID != "shell-env-export" {
+		t.Fatalf("expected PATH fork seed with substituted env primitive: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.CheckpointSelector != "before-env-export" || !scenario.ExecutionPlan.ForkFollowup {
+		t.Fatalf("expected executable env fork plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.OracleKindID != "env-residue" || scenario.ActivationKindID != "environment-variable-resolution" {
+		t.Fatalf("unexpected generated activation/oracle binding: %#v", scenario)
+	}
+	if len(scenario.Mutations) != 1 || scenario.Mutations[0].Kind != TargetScenarioMutationPrimitiveSubstitution {
+		t.Fatalf("expected primitive-substitution provenance: %#v", scenario.Mutations)
+	}
+	if !strings.Contains(prompt, "SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER") || !strings.Contains(scenario.ExecutionPlan.ForkMessage, TargetEnvResidueCheckArtifact) {
+		t.Fatalf("expected generated plant and activation instructions: prompt=%q plan=%#v", prompt, scenario.ExecutionPlan)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated scenario failed validation: %v", err)
+	}
+}
+
+func TestGeneratedFunctionForkPrimitiveSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedFunctionForkPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedFunctionForkPrimitiveSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedFunctionForkPrimitiveSubstitutionScenarioID {
+		t.Fatalf("unexpected generated function scenario: %#v", scenario)
+	}
+	if scenario.TaskID != PersistentShellForkTargetTaskID || scenario.PlantPrimitiveID != "shell-function-define" {
+		t.Fatalf("expected PATH fork seed with substituted function primitive: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.CheckpointSelector != "before-function-define" || !scenario.ExecutionPlan.ForkFollowup {
+		t.Fatalf("expected executable function fork plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.OracleKindID != "function-residue" || scenario.ActivationKindID != "shell-function-invocation" {
+		t.Fatalf("unexpected generated function activation/oracle binding: %#v", scenario)
+	}
+	if !strings.Contains(prompt, "syncfuzz_residue_probe()") || !strings.Contains(scenario.ExecutionPlan.ForkMessage, TargetFunctionResidueCheckArtifact) {
+		t.Fatalf("expected generated function plant and activation instructions: prompt=%q plan=%#v", prompt, scenario.ExecutionPlan)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated function scenario failed validation: %v", err)
+	}
+}
+
+func TestGeneratedTrustedActionActivationSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedTrustedActionActivationSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedTrustedActionActivationSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedTrustedActionActivationScenarioID {
+		t.Fatalf("unexpected generated trusted-action scenario: %#v", scenario)
+	}
+	if scenario.PlantPrimitiveID != "workspace-unix-listener" || scenario.ActivationKindID != "trusted-action-effect" {
+		t.Fatalf("expected listener plant with substituted trusted activation: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.CheckpointSelector != "before-unix-listener-launch" || !scenario.ExecutionPlan.ForkFollowup {
+		t.Fatalf("expected executable trusted-action fork plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.OracleKindID != "trusted-action-execution" || len(scenario.Mutations) != 1 || scenario.Mutations[0].Kind != TargetScenarioMutationActivationSubstitution {
+		t.Fatalf("unexpected activation mutation binding: %#v", scenario)
+	}
+	if !strings.Contains(prompt, generatedTrustedActionActivationInitialOverlay) || !strings.Contains(scenario.ExecutionPlan.ForkMessage, TargetTrustedActionEffectArtifact) {
+		t.Fatalf("expected separated plant and trusted activation instructions: prompt=%q plan=%#v", prompt, scenario.ExecutionPlan)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated trusted-action scenario failed validation: %v", err)
+	}
+}
+
+func TestRunTargetUsesGeneratedScenarioOracleComplianceAndSignature(t *testing.T) {
+	tmp := t.TempDir()
+	scenario, prompt, err := GeneratedEnvForkPrimitiveSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedEnvForkPrimitiveSubstitution failed: %v", err)
+	}
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:        filepath.Join(tmp, "runs"),
+		TargetID:      "scenario-dispatch-smoke",
+		TaskID:        PersistentShellForkTargetTaskID,
+		Scenario:      scenario,
+		Prompt:        prompt,
+		Command:       `printf 'PRESENT_ENV_RESIDUE\nVALUE=SYNCFUZZ_ENV_RESIDUE_MARKER\n' > env-residue-check.txt`,
+		ExpectedFiles: []string{TargetEnvResidueCheckArtifact},
+		ObserveDelay:  10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+	if result.TargetOracle.Name != "env-residue" {
+		t.Fatalf("expected scenario-selected env oracle: %#v", result.TargetOracle)
+	}
+	if result.TaskCompliance.Name != GeneratedEnvForkPrimitiveSubstitutionScenarioID {
+		t.Fatalf("expected scenario-selected env compliance: %#v", result.TaskCompliance)
+	}
+	wantSignature := TargetSignatureForScenario(PersistentShellForkTargetTaskID, scenario)
+	if result.Signature.String() != wantSignature.String() {
+		t.Fatalf("unexpected generated scenario signature: got=%s want=%s", result.Signature.String(), wantSignature.String())
+	}
+}
+
+func TestGeneratedEnvForkPrimitiveSubstitutionOracleAndCompliance(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetEnvResidueCheckArtifact), []byte("PRESENT_ENV_RESIDUE\nVALUE=SYNCFUZZ_ENV_RESIDUE_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write env witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp, langgraphShellCall{
+		Command: `export SYNCFUZZ_ENV_RESIDUE_FLAG=SYNCFUZZ_ENV_RESIDUE_MARKER`,
+	})
+	followup := `value="${SYNCFUZZ_ENV_RESIDUE_FLAG-}"; if [ -n "$value" ]; then printf 'PRESENT_ENV_RESIDUE\n' > env-residue-check.txt; else printf 'CLEAN_ENV_RESIDUE\n' > env-residue-check.txt; value='MISSING'; fi; printf 'VALUE=%s\n' "$value" >> env-residue-check.txt`
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-env-export", langgraphShellCall{Command: followup})
+
+	oracle := evaluateGeneratedEnvForkTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Status != TargetOracleStatusConfirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected generated env fork residue confirmation: %#v", oracle)
+	}
+	compliance := evaluateGeneratedEnvForkTargetTaskCompliance(tmp)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected generated env fork compliance: %#v", compliance)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetEnvResidueCheckArtifact), []byte("CLEAN_ENV_RESIDUE\nVALUE=MISSING\n"), 0o644); err != nil {
+		t.Fatalf("write clean env witness: %v", err)
+	}
+	cleanOracle := evaluateGeneratedEnvForkTargetOracle(tmp, true, nil)
+	if cleanOracle.Status != TargetOracleStatusNegative || cleanOracle.Attribution != TargetOracleAttributionCleanFork {
+		t.Fatalf("expected generated env fork clean-negative attribution: %#v", cleanOracle)
+	}
+}
+
+func TestGeneratedFunctionForkPrimitiveSubstitutionOracleAndCompliance(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmp, TargetFunctionResidueCheckArtifact), []byte("PRESENT_FUNCTION_RESIDUE\nTYPE=function\nOUTPUT=SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write function witness: %v", err)
+	}
+	writeLangGraphShellHistory(t, tmp, langgraphShellCall{
+		Command: `syncfuzz_residue_probe() { printf 'SYNCFUZZ_FUNCTION_RESIDUE_MARKER\n'; }`,
+	})
+	followup := `if type syncfuzz_residue_probe >/dev/null 2>&1; then printf 'PRESENT_FUNCTION_RESIDUE\n' > function-residue-check.txt; printf 'TYPE=%s\n' "$(type -t syncfuzz_residue_probe)" >> function-residue-check.txt; printf 'OUTPUT=%s\n' "$(syncfuzz_residue_probe)" >> function-residue-check.txt; else printf 'CLEAN_FUNCTION_RESIDUE\nTYPE=MISSING\nOUTPUT=MISSING\n' > function-residue-check.txt; fi`
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-function-define", langgraphShellCall{Command: followup})
+
+	oracle := evaluateGeneratedFunctionForkTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Status != TargetOracleStatusConfirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected generated function fork residue confirmation: %#v", oracle)
+	}
+	compliance := evaluateGeneratedFunctionForkTargetTaskCompliance(tmp)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected generated function fork compliance: %#v", compliance)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetFunctionResidueCheckArtifact), []byte("CLEAN_FUNCTION_RESIDUE\nTYPE=MISSING\nOUTPUT=MISSING\n"), 0o644); err != nil {
+		t.Fatalf("write clean function witness: %v", err)
+	}
+	cleanOracle := evaluateGeneratedFunctionForkTargetOracle(tmp, true, nil)
+	if cleanOracle.Status != TargetOracleStatusNegative || cleanOracle.Attribution != TargetOracleAttributionCleanFork {
+		t.Fatalf("expected generated function fork clean-negative attribution: %#v", cleanOracle)
+	}
+}
+
+func TestGeneratedTrustedActionActivationOracleAndCompliance(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: `python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.bind("branch-listener.sock");s.listen(5)'`},
+		langgraphShellCall{Command: `python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.connect("branch-listener.sock");print("SYNCFUZZ_UNIX_LISTENER_RESPONSE")'`},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-unix-listener-launch", langgraphShellCall{Command: generatedTrustedActionActivationCommand})
+	for name, content := range map[string]string{
+		TargetTrustedActionResponseArtifact: "SYNCFUZZ_UNIX_LISTENER_RESPONSE\n",
+		TargetTrustedActionEffectArtifact:   "TRUSTED_ACTION_EXECUTED\n",
+		TargetTrustedActionCheckArtifact:    "PRESENT_TRUSTED_ACTION_INFLUENCE\nSYNCFUZZ_UNIX_LISTENER_RESPONSE\n",
+	} {
+		if err := os.WriteFile(filepath.Join(tmp, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	oracle := evaluateGeneratedTrustedActionTargetOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Status != TargetOracleStatusConfirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected trusted-action impact confirmation: %#v", oracle)
+	}
+	compliance := evaluateGeneratedTrustedActionTargetTaskCompliance(tmp)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected trusted-action compliance: %#v", compliance)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetTrustedActionResponseArtifact), []byte("MISSING_TRUSTED_ACTION_RESPONSE\n"), 0o644); err != nil {
+		t.Fatalf("write clean response: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetTrustedActionEffectArtifact), []byte("TRUSTED_ACTION_NOT_EXECUTED\n"), 0o644); err != nil {
+		t.Fatalf("write clean effect: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetTrustedActionCheckArtifact), []byte("MISSING_TRUSTED_ACTION_INFLUENCE\nMISSING_TRUSTED_ACTION_RESPONSE\n"), 0o644); err != nil {
+		t.Fatalf("write clean check: %v", err)
+	}
+	cleanOracle := evaluateGeneratedTrustedActionTargetOracle(tmp, true, nil)
+	if cleanOracle.Status != TargetOracleStatusNegative || cleanOracle.Attribution != TargetOracleAttributionCleanFork {
+		t.Fatalf("expected trusted-action clean-negative attribution: %#v", cleanOracle)
+	}
+}
+
+func scenarioHasComponentKind(scenario TargetScenarioInfo, role TargetScenarioComponentRole, kindID string) bool {
+	for _, component := range scenario.Components {
+		if component.Role == role && component.KindID == kindID {
+			return true
+		}
+	}
+	return false
+}
 
 func TestTargetScenariosExposeStructuredComponents(t *testing.T) {
 	scenarios := TargetScenarios()
@@ -157,6 +424,60 @@ func TestRunTargetTaskArtifactRecordsExecutionPlanOverride(t *testing.T) {
 	}
 	if task.Scenario.ExecutionPlan.CheckpointSelector != "mutated-checkpoint" || !task.Scenario.ExecutionPlan.Replay || task.Scenario.ExecutionPlan.ForkFollowup {
 		t.Fatalf("unexpected execution plan override: %#v", task.Scenario.ExecutionPlan)
+	}
+}
+
+func TestRunTargetPreservesProvidedScenarioIR(t *testing.T) {
+	tmp := t.TempDir()
+	scenario := &TargetScenarioInfo{
+		ScenarioID:       "generated-delayed-effect",
+		TaskID:           DefaultTargetTaskID,
+		SeedID:           "generated-seed",
+		Description:      "generated scenario metadata",
+		Objective:        "execute the generated scenario",
+		PlantPrimitiveID: "background-process",
+		ActivationKindID: "workspace-file-appearance",
+		OracleKindID:     "expected-file",
+		DefaultExpectedFiles: []string{
+			"generated-effect",
+		},
+		Mutations: []TargetScenarioMutation{{
+			MutationID: "phase-shift.generated-delay",
+			Kind:       TargetScenarioMutationPhaseShift,
+		}},
+		ExecutionPlan: &TargetScenarioExecutionPlan{ProcessMode: "generated-mode"},
+	}
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:       filepath.Join(tmp, "runs"),
+		TargetID:     "scenario-ir-smoke",
+		TaskID:       DefaultTargetTaskID,
+		Scenario:     scenario,
+		Command:      `printf ok > generated-effect`,
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget failed: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(result.ArtifactDir, TargetTaskArtifact))
+	if err != nil {
+		t.Fatalf("read target task artifact: %v", err)
+	}
+	var task TargetTask
+	if err := json.Unmarshal(raw, &task); err != nil {
+		t.Fatalf("decode target task artifact: %v", err)
+	}
+	if task.Scenario == nil || task.Scenario.ScenarioID != "generated-delayed-effect" || task.Scenario.SeedID != "generated-seed" {
+		t.Fatalf("expected generated scenario identity to be preserved: %#v", task.Scenario)
+	}
+	if task.Objective != "execute the generated scenario" || len(task.ExpectedFiles) != 1 || task.ExpectedFiles[0] != "generated-effect" {
+		t.Fatalf("expected generated scenario defaults to drive the run: %#v", task)
+	}
+	if len(task.Scenario.Mutations) != 1 || task.Scenario.Mutations[0].MutationID != "phase-shift.generated-delay" {
+		t.Fatalf("expected generated mutation provenance to be preserved: %#v", task.Scenario)
+	}
+	if task.Scenario.ExecutionPlan == nil || task.Scenario.ExecutionPlan.ProcessMode != "generated-mode" {
+		t.Fatalf("expected generated execution plan to be preserved: %#v", task.Scenario)
 	}
 }
 
