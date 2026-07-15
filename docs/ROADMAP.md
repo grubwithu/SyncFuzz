@@ -179,6 +179,8 @@ Phase 4 当前短板：
 - novelty 仍主要围绕 candidate / task / rule / surface，而不是跨层状态转换；
 - 自动 minimization 还没有真正形成闭环。
 
+当前最需要补的不是更多字段，而是实验性证据：必须尽快验证 feedback-guided campaign 是否真的比 `uniform random` 或固定枚举更快到达高价值 activation。建议先在一个受控 IR 空间里，用相同预算比较 `random / fixed enumeration / feedback-guided / full SyncFuzz` 的 `plant rate`、`survive rate`、`activation rate`、`time-to-first-impact` 和 `unique mismatch signature`。
+
 Phase 4 之后：
 
 - 把 real-target 与 synthetic candidate 都逐步重构到可组合的 Scenario IR，而不是继续累积越来越多的手写 testcase 名称；
@@ -200,6 +202,7 @@ Phase 4 之后：
 - LangGraph 实验已经证明：真实 runtime 中确实存在可稳定观测的 shell / workspace / process residue；
 - 但 residue 的存在不自动等于漏洞，它可能是既定持久化语义、contract violation，或仅仅是尚未激活的风险状态；
 - 因此，Phase 5B 的重心从“继续证明 residue 存在”转向“把 residue 放回 target 的恢复契约里解释，并让真实 target 开始消费 fuzz candidate”。
+- 当前最大的风险不再是“框架能力不够”，而是“功能继续增加，但自动发现新缺陷的证据没有同步增强”。后续路线必须围绕 Scenario IR、semantic mutation、portable multi-target 和 minimization 收敛。
 
 详细设计见 [PHASE5B_STRATEGY.md](PHASE5B_STRATEGY.md)。
 
@@ -268,49 +271,43 @@ Phase 5A 冻结内容：
 
 Phase 5B 主线：
 
-- 为 LangGraph 写出第一份 `Recovery Contract Profile`，明确 graph state、workspace、shell session、child process、external / authority state 在 replay / fork / discard / resume 上预期是 `preserve`、`reset` 还是 `unspecified`；
-- 在 target oracle 之上增加 contract interpretation 层，把结果区分为 residue observation、contract-consistent、contract-violation 和 contract-unknown；
-- 继续保留少量 activation 验证实验，但不把 exploit generation 变成框架主目标；
+- 让 `Scenario IR` 成为 testcase 的主事实来源，而不是继续扩大手写 task catalog；
+- 为 LangGraph 写出第一份 `Recovery Contract Profile`，并把 target 结果稳定拆成 residue observation、contract interpretation、activation consequence 三层；
+- 已把 target run 接入 real-target matrix / suite / campaign，且 `execution_plan` 已进入真实执行路径；后续重点是围绕它实现 `primitive substitution`、`activation substitution`、`lifecycle splice`、`fault-phase / phase-shift mutation`；
 - 把 `targets/langgraph_shell_react/` 从“单进程内 durable checkpointer”继续推进到“跨进程恢复可消费的 durable checkpointer”；
-- 启动 MAF 三阶段接入：官方 shell sample、session restore、最小 Workflow + `CheckpointStorage`；
-- 把第二个真实 target 的重点放到 superstep/checkpoint 边界，而不是重复 LangGraph 的 persistent shell residue；
-- 已把 target run 接入 real-target matrix / suite / campaign：`syncfuzz target matrix`、`target suite --matrix`、`target campaign` 已可对 `target/task` candidate 做 feedback-ranked exploration；
-- target candidate 的 Scenario IR `execution_plan` 已接入真实运行环境，matrix/campaign 中保存的 replay/fork、checkpoint selector、backend、process mode 和 follow-up 不再只是描述性字段；matrix 已据此自动派生第一条 `phase-shift-single-process` semantic mutation，用同一 task / oracle 比较 split-process 与 single-process checkpoint execution；
-- 已增加第一条 deterministic wording 维度：真实 target candidate 现在可以扩成 `target/task/prompt-profile`，用少量稳定 prompt profile 比较“同一语义任务、不同操作表述”对 runtime residue 的影响；
-- feedback guidance 已开始消费多阶段 activation progress，并按 lifecycle / plant / activation stall 定向选择结构化 prompt variant；frontier 会记录对应 repair mode，campaign coverage gain 也会奖励尚未到达最终 oracle 的前向进展；
-- minimization 已从计划 artifact 推进到可执行 runner：`target minimize --execute` 会在受限 trial budget 内删除 prompt 行并逐项收紧 execution plan，用 oracle、attribution、signature、compliance 和 contract 复验每次删减；后续继续扩展到 Scenario IR component、primitive 与 activation reduction；
-- 把 replay / verify 的失败原因细化成 taxonomy，而不再只停留在 failed / unconfirmed / error。
+- 让 `MAF` 消费与 LangGraph 共享的 portable scenario，并进入同一套 `campaign / replay / verify / minimize`；
+- minimization 从 prompt / execution-plan reduction 升级到 `Scenario IR component reduction`，并逐步支持 `Semantic Fidelity`；
+- 把 replay / verify 的失败原因细化成 taxonomy，同时尽快通过对照实验验证 feedback 的方法贡献。
 
 Phase 5B 优先级重排：
 
 - 当前 workspace residue family 已经足够丰富，后续不再以“补齐更多 Unix 对象类型”为主目标；
-- 新增 testcase 的组织方式从 `file / directory / symlink / hardlink / FIFO` 逐步转向 **按能力分类**：storage capability、execution context、active execution、resource access、communication、authority、external effect、isolation topology；
-- `cwd` 与 `umask` 仍然值得做，但定位为 shell execution context 的低成本补充项，而不是下一阶段的核心突破；
-- 下一阶段真正优先的是那些不会完整落到普通 workspace diff 中、却仍携带访问能力、执行能力、通信能力或授权能力的状态面。
-
-下一轮建议顺序：
-
-1. `umask-residue-fork`、`cwd-residue-fork`
-   快速补齐 shell context family。
-2. 稳定 `unix-listener-residue-fork`，然后推进 `discarded-server-trusted-client`、`socket-response-poisoning`
-   把 residue 从可连接 IPC endpoint 推进到 trusted-client consumption 和响应污染。
-3. `ssh-agent-key-residue`、`discarded-branch-authority-use`
-   把 synthetic authority resurrection 推到真实 target。
+- 新增 testcase 的组织方式从对象类型逐步转向 **按能力分类**：storage capability、execution context、active execution、resource access、communication、authority、external effect、isolation topology；
+- `cwd` 与 `umask` 仍然值得做，但定位为低成本补充项，而不是核心突破；
+- 接下来两周的核心顺序是：
+  1. 冻结 `Scenario IR` schema，并把 `3 - 5` 个 LangGraph testcase 迁移到纯 IR；
+  2. 实现 `primitive substitution` 与 `activation substitution`；
+  3. 让 `MAF` 消费至少一个完全相同的 portable scenario；
+  4. 实现一次 `lifecycle splice` 或 `cross-seed crossover`；
+  5. 把 minimizer 扩展到 `IR component reduction`；
+  6. 运行 `random / fixed enumeration / feedback-guided / full SyncFuzz` 四组小预算实验；
+  7. 尝试自动合成一个 `Unix socket / FD / process` 的 trusted-activation 场景。
 
 其中 process 线也要升级：`orphan-process-long-delay` 后续不只证明“命令返回后子进程仍存活”，还要推进到 discarded branch 中残留执行主体能够等待并操纵 future trusted state 的实验。
 
 Phase 5B 退出标准：
 
-- LangGraph contract profile 已成文；
-- target result / suite / corpus 能区分 observation 与 contract interpretation；
-- verify failure taxonomy 稳定；
-- 至少一个真实 target 可以消费 matrix/campaign；
-- 至少形成一个非手写真实 target discovery，或一个可重复的强负结论；
-- 第二个真实 target adapter 启动，并完成 MAF-1 smoke path。
+1. `Scenario IR` 成为 testcase 的主事实来源；
+2. 至少形成四类 semantic mutation：`primitive substitution`、`activation substitution`、`lifecycle splice`、`fault-phase / phase-shift mutation`；
+3. 至少支持一次 `cross-seed crossover`；
+4. minimizer 可以删除 `IR component`，而不只删除 prompt 行或 `ExecutionPlan` 字段；
+5. `LangGraph` 和 `MAF` 都能消费同一 portable scenario；
+6. 两个 target 都能进入 `campaign / replay / verify / minimize`；
+7. 至少一个 finding 满足：初始 seed 没有直接编码最终场景、由 mutation 或 crossover 自动生成、被 feedback 保留、经 oracle 确认、被 minimizer 缩减，并产生 trusted activation 后果。
 
 完成标准：
 
-> 同一个 seed 能在至少两个 runtime 上运行并比较状态语义差异，同时真实 target 结果已经从“看见 residue”推进到“知道它是否违反恢复契约”。
+> 同一个 portable scenario 能在至少两个 runtime 上运行并比较状态语义差异，同时真实 target 结果已经从“看见 residue”推进到“知道它是否违反恢复契约，并能否被后续 trusted execution 激活”。
 
 ## Phase 6：漏洞确认与论文评估
 
@@ -318,8 +315,8 @@ Phase 5B 退出标准：
 
 实验：
 
-- baseline：random timing、tool-boundary-only、syscall novelty、manual replay；
-- metrics：unique vulnerabilities、time-to-first-vuln、false positive rate、reproducibility、PoC size、overhead；
+- baseline：`uniform random`、`fixed enumeration`、`feedback-guided`、`full SyncFuzz`，以及 `tool-boundary-only` / `manual replay` 对照；
+- metrics：`plant rate`、`survive rate`、`activation rate`、`unique mismatch signature`、`time-to-first-impact`、`false positive rate`、`reproducibility`、`PoC size`、`overhead`；
 - ablation：去掉 scheduler、去掉 state probe、去掉 feedback；
 - real report：向维护者提交可复现 PoC。
 
