@@ -24,6 +24,7 @@ type TargetMinimizationStep struct {
 	ComponentID   string                             `json:"component_id,omitempty"`
 	ComponentKind string                             `json:"component_kind_id,omitempty"`
 	ComponentRole target.TargetScenarioComponentRole `json:"component_role,omitempty"`
+	MutationID    string                             `json:"mutation_id,omitempty"`
 	MutationKind  target.TargetScenarioMutationKind  `json:"mutation_kind,omitempty"`
 	Summary       string                             `json:"summary"`
 	Rationale     string                             `json:"rationale,omitempty"`
@@ -116,6 +117,7 @@ func buildTargetMinimizationPlan(candidate TargetScheduleCandidate, item TargetS
 			summary = mutation.MutationID
 		}
 		addStep("mutation-axis-check", "", mutation.Kind, "toggle mutation axis "+mutation.MutationID+": "+summary, "tests whether this mutation is necessary for the mismatch signature")
+		plan.Steps[len(plan.Steps)-1].MutationID = mutation.MutationID
 	}
 	addStep("artifact-replay-check", "", "", "rerun the minimized task through corpus verify or target suite repeat=2", "confirms the minimized case remains reproducible")
 	return plan

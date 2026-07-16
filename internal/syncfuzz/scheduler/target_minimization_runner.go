@@ -54,14 +54,20 @@ type TargetMinimizationExecutionResult struct {
 	TaskID                       string                              `json:"task_id"`
 	OriginalPromptLines          int                                 `json:"original_prompt_lines"`
 	MinimizedPromptLines         int                                 `json:"minimized_prompt_lines"`
+	OriginalCommandLines         int                                 `json:"original_command_lines,omitempty"`
+	MinimizedCommandLines        int                                 `json:"minimized_command_lines,omitempty"`
 	OriginalComponents           int                                 `json:"original_components,omitempty"`
 	MinimizedComponents          int                                 `json:"minimized_components,omitempty"`
+	OriginalMutations            int                                 `json:"original_mutations,omitempty"`
+	MinimizedMutations           int                                 `json:"minimized_mutations,omitempty"`
 	OriginalExecutionPlan        *target.TargetScenarioExecutionPlan `json:"original_execution_plan,omitempty"`
 	MinimizedExecutionPlan       *target.TargetScenarioExecutionPlan `json:"minimized_execution_plan,omitempty"`
 	Trials                       int                                 `json:"trials"`
 	AcceptedReductions           int                                 `json:"accepted_reductions"`
 	AcceptedPromptReductions     int                                 `json:"accepted_prompt_reductions,omitempty"`
+	AcceptedCommandReductions    int                                 `json:"accepted_command_reductions,omitempty"`
 	AcceptedComponentReductions  int                                 `json:"accepted_component_reductions,omitempty"`
+	AcceptedMutationReductions   int                                 `json:"accepted_mutation_reductions,omitempty"`
 	AcceptedActivationReductions int                                 `json:"accepted_activation_reductions,omitempty"`
 	AcceptedExecutionReductions  int                                 `json:"accepted_execution_reductions,omitempty"`
 	AcceptedSteps                []string                            `json:"accepted_steps,omitempty"`
@@ -77,6 +83,11 @@ type targetExecutionPlanReducer struct {
 }
 
 type targetScenarioComponentReducer struct {
+	stepID string
+	apply  func(*target.TargetScenarioInfo, *target.TargetScenarioExecutionPlan) bool
+}
+
+type targetScenarioMutationReducer struct {
 	stepID string
 	apply  func(*target.TargetScenarioInfo) bool
 }
@@ -184,8 +195,12 @@ func runTargetPromptMinimization(ctx context.Context, outDir string, source Targ
 	}
 
 	current := append([]string{}, lines...)
+	commandLines := targetPromptReductionLines(task.Command)
+	currentCommand := append([]string{}, commandLines...)
+	item.OriginalCommandLines = len(commandLines)
 	currentScenario := target.CloneTargetScenarioInfo(task.Scenario)
 	item.OriginalComponents = targetScenarioComponentCount(currentScenario)
+	item.OriginalMutations = targetScenarioMutationCount(currentScenario)
 	currentPlan := targetExecutionPlanForMinimization(task)
 	item.OriginalExecutionPlan = cloneTargetExecutionPlan(currentPlan)
 	var lastAccepted *target.TargetRunResult
@@ -197,7 +212,7 @@ func runTargetPromptMinimization(ctx context.Context, outDir string, source Targ
 		}
 		trialLines := append([]string{}, current[:index]...)
 		trialLines = append(trialLines, current[index+1:]...)
-		trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(trialLines, "\n"), currentScenario, currentPlan)
+		trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(trialLines, "\n"), strings.Join(currentCommand, "\n"), currentScenario, currentPlan)
 		item.Trials++
 		completedTrials, lastTrialError = recordTargetMinimizationTrialOutcome(completedTrials, lastTrialError, trial, err)
 		if err == nil && targetMinimizationPreserved(source, trial, fidelity) {
@@ -214,8 +229,57 @@ func runTargetPromptMinimization(ctx context.Context, outDir string, source Targ
 		}
 		index++
 	}
+	for index := 0; index < len(currentCommand) && item.Trials < maxTrials; {
+		if len(currentCommand) == 1 {
+			break
+		}
+		trialCommand := append([]string{}, currentCommand[:index]...)
+		trialCommand = append(trialCommand, currentCommand[index+1:]...)
+		trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(current, "\n"), strings.Join(trialCommand, "\n"), currentScenario, currentPlan)
+		item.Trials++
+		completedTrials, lastTrialError = recordTargetMinimizationTrialOutcome(completedTrials, lastTrialError, trial, err)
+		if err == nil && targetMinimizationPreserved(source, trial, fidelity) {
+			currentCommand = trialCommand
+			lastAccepted = trial
+			item.AcceptedReductions++
+			item.AcceptedCommandReductions++
+			item.AcceptedSteps = append(item.AcceptedSteps, fmt.Sprintf("command-line-delete:%d", index+1))
+			continue
+		}
+		if ctx.Err() != nil {
+			item.Error = ctx.Err().Error()
+			return item
+		}
+		index++
+	}
 	plan := targetMinimizationPlanForResult(source)
 	for _, reducer := range targetScenarioComponentReducers(plan, currentScenario, fidelity) {
+		if item.Trials >= maxTrials || currentScenario == nil {
+			break
+		}
+		trialScenario := target.CloneTargetScenarioInfo(currentScenario)
+		trialPlan := cloneTargetExecutionPlan(currentPlan)
+		if !reducer.apply(trialScenario, trialPlan) {
+			continue
+		}
+		trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(current, "\n"), strings.Join(currentCommand, "\n"), trialScenario, trialPlan)
+		item.Trials++
+		completedTrials, lastTrialError = recordTargetMinimizationTrialOutcome(completedTrials, lastTrialError, trial, err)
+		if err == nil && targetMinimizationPreserved(source, trial, fidelity) {
+			currentScenario = trialScenario
+			currentPlan = trialPlan
+			lastAccepted = trial
+			item.AcceptedReductions++
+			item.AcceptedComponentReductions++
+			item.AcceptedSteps = append(item.AcceptedSteps, reducer.stepID)
+			continue
+		}
+		if ctx.Err() != nil {
+			item.Error = ctx.Err().Error()
+			return item
+		}
+	}
+	for _, reducer := range targetScenarioMutationReducers(plan, currentScenario) {
 		if item.Trials >= maxTrials || currentScenario == nil {
 			break
 		}
@@ -223,14 +287,14 @@ func runTargetPromptMinimization(ctx context.Context, outDir string, source Targ
 		if !reducer.apply(trialScenario) {
 			continue
 		}
-		trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(current, "\n"), trialScenario, currentPlan)
+		trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(current, "\n"), strings.Join(currentCommand, "\n"), trialScenario, currentPlan)
 		item.Trials++
 		completedTrials, lastTrialError = recordTargetMinimizationTrialOutcome(completedTrials, lastTrialError, trial, err)
 		if err == nil && targetMinimizationPreserved(source, trial, fidelity) {
 			currentScenario = trialScenario
 			lastAccepted = trial
 			item.AcceptedReductions++
-			item.AcceptedComponentReductions++
+			item.AcceptedMutationReductions++
 			item.AcceptedSteps = append(item.AcceptedSteps, reducer.stepID)
 			continue
 		}
@@ -247,7 +311,7 @@ func runTargetPromptMinimization(ctx context.Context, outDir string, source Targ
 		if !reducer.apply(trialPlan) {
 			continue
 		}
-		trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(current, "\n"), currentScenario, trialPlan)
+		trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(current, "\n"), strings.Join(currentCommand, "\n"), currentScenario, trialPlan)
 		item.Trials++
 		completedTrials, lastTrialError = recordTargetMinimizationTrialOutcome(completedTrials, lastTrialError, trial, err)
 		if err == nil && targetMinimizationPreserved(source, trial, fidelity) {
@@ -271,7 +335,7 @@ func runTargetPromptMinimization(ctx context.Context, outDir string, source Targ
 		if !reducer.apply(trialPlan) {
 			continue
 		}
-		trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(current, "\n"), currentScenario, trialPlan)
+		trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(current, "\n"), strings.Join(currentCommand, "\n"), currentScenario, trialPlan)
 		item.Trials++
 		completedTrials, lastTrialError = recordTargetMinimizationTrialOutcome(completedTrials, lastTrialError, trial, err)
 		if err == nil && targetMinimizationPreserved(source, trial, fidelity) {
@@ -288,7 +352,9 @@ func runTargetPromptMinimization(ctx context.Context, outDir string, source Targ
 		}
 	}
 	item.MinimizedPromptLines = len(current)
+	item.MinimizedCommandLines = len(currentCommand)
 	item.MinimizedComponents = targetScenarioComponentCount(currentScenario)
+	item.MinimizedMutations = targetScenarioMutationCount(currentScenario)
 	item.MinimizedExecutionPlan = cloneTargetExecutionPlan(currentPlan)
 	if lastAccepted != nil {
 		item.Preserved = true
@@ -310,7 +376,7 @@ func runTargetPromptMinimization(ctx context.Context, outDir string, source Targ
 		return item
 	}
 
-	trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(current, "\n"), currentScenario, currentPlan)
+	trial, err := runTargetMinimizationTrial(ctx, outDir, task, strings.Join(current, "\n"), strings.Join(currentCommand, "\n"), currentScenario, currentPlan)
 	item.Trials++
 	if err != nil {
 		item.Error = err.Error()
@@ -357,7 +423,7 @@ func readTargetTaskForMinimization(artifactDir string) (target.TargetTask, error
 	return task, nil
 }
 
-func runTargetMinimizationTrial(ctx context.Context, outDir string, task target.TargetTask, prompt string, scenario *target.TargetScenarioInfo, executionPlan *target.TargetScenarioExecutionPlan) (*target.TargetRunResult, error) {
+func runTargetMinimizationTrial(ctx context.Context, outDir string, task target.TargetTask, prompt string, command string, scenario *target.TargetScenarioInfo, executionPlan *target.TargetScenarioExecutionPlan) (*target.TargetRunResult, error) {
 	return target.RunTarget(ctx, target.TargetRunOptions{
 		AdapterID:        task.AdapterID,
 		TargetID:         task.TargetID,
@@ -368,7 +434,7 @@ func runTargetMinimizationTrial(ctx context.Context, outDir string, task target.
 		PromptProfileID:  task.PromptProfileID,
 		PromptVariantID:  task.PromptVariantID,
 		Prompt:           prompt,
-		Command:          task.Command,
+		Command:          command,
 		OutDir:           outDir,
 		Timeout:          time.Duration(task.TimeoutMillis) * time.Millisecond,
 		ObserveDelay:     time.Duration(task.ObserveDelayMs) * time.Millisecond,
@@ -487,6 +553,64 @@ func targetExecutionPlanDeleteForkMessageLine(plan *target.TargetScenarioExecuti
 	return true
 }
 
+func targetScenarioMutationReducers(plan TargetMinimizationPlan, scenario *target.TargetScenarioInfo) []targetScenarioMutationReducer {
+	if scenario == nil || len(scenario.Mutations) == 0 {
+		return nil
+	}
+	mutationsByID := make(map[string]target.TargetScenarioMutation, len(scenario.Mutations))
+	for _, mutation := range scenario.Mutations {
+		mutationsByID[mutation.MutationID] = mutation
+	}
+	reducers := []targetScenarioMutationReducer{}
+	seen := make(map[string]struct{})
+	for _, step := range plan.Steps {
+		if step.Kind != "mutation-axis-check" {
+			continue
+		}
+		mutation, ok := targetScenarioMutationForStep(step, scenario, mutationsByID, seen)
+		if !ok {
+			continue
+		}
+		mutationID := strings.TrimSpace(mutation.MutationID)
+		seen[mutationID] = struct{}{}
+		reducers = append(reducers, targetScenarioMutationReducer{
+			stepID: "mutation-delete:" + mutationID,
+			apply: func(scenario *target.TargetScenarioInfo) bool {
+				return targetScenarioDeleteMutation(scenario, mutationID)
+			},
+		})
+	}
+	return reducers
+}
+
+func targetScenarioMutationForStep(step TargetMinimizationStep, scenario *target.TargetScenarioInfo, mutationsByID map[string]target.TargetScenarioMutation, seen map[string]struct{}) (target.TargetScenarioMutation, bool) {
+	mutationID := strings.TrimSpace(step.MutationID)
+	if mutationID != "" {
+		mutation, ok := mutationsByID[mutationID]
+		if !ok {
+			return target.TargetScenarioMutation{}, false
+		}
+		if _, exists := seen[mutationID]; exists {
+			return target.TargetScenarioMutation{}, false
+		}
+		return mutation, true
+	}
+	for _, mutation := range scenario.Mutations {
+		id := strings.TrimSpace(mutation.MutationID)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		if step.MutationKind != "" && mutation.Kind != step.MutationKind {
+			continue
+		}
+		return mutation, true
+	}
+	return target.TargetScenarioMutation{}, false
+}
+
 func targetScenarioComponentReducers(plan TargetMinimizationPlan, scenario *target.TargetScenarioInfo, fidelity TargetMinimizationFidelity) []targetScenarioComponentReducer {
 	if scenario == nil || len(scenario.Components) == 0 {
 		return nil
@@ -500,49 +624,65 @@ func targetScenarioComponentReducers(plan TargetMinimizationPlan, scenario *targ
 		componentsByID[component.ComponentID] = component
 	}
 	reducers := []targetScenarioComponentReducer{}
-	seen := make(map[string]struct{})
 	for _, step := range plan.Steps {
 		componentID := strings.TrimSpace(step.ComponentID)
 		if componentID == "" {
-			continue
-		}
-		if _, exists := seen[componentID]; exists {
 			continue
 		}
 		component, ok := componentsByID[componentID]
 		if !ok {
 			continue
 		}
-		reducer, ok := targetScenarioComponentReducerForStep(step, component, scenario, normalizedFidelity)
-		if !ok {
-			continue
-		}
-		seen[componentID] = struct{}{}
-		reducers = append(reducers, reducer)
+		reducers = append(reducers, targetScenarioComponentReducersForStep(step, component, scenario, normalizedFidelity)...)
 	}
 	return reducers
 }
 
-func targetScenarioComponentReducerForStep(step TargetMinimizationStep, component target.TargetScenarioComponent, scenario *target.TargetScenarioInfo, fidelity TargetMinimizationFidelity) (targetScenarioComponentReducer, bool) {
+func targetScenarioComponentReducersForStep(step TargetMinimizationStep, component target.TargetScenarioComponent, scenario *target.TargetScenarioInfo, fidelity TargetMinimizationFidelity) []targetScenarioComponentReducer {
 	componentID := strings.TrimSpace(component.ComponentID)
+	reducers := []targetScenarioComponentReducer{}
 	switch {
 	case step.Kind == "component-deletion" && targetScenarioOptionalComponentDeletionAllowed(component):
-		return targetScenarioComponentReducer{
+		reducers = append(reducers, targetScenarioComponentReducer{
 			stepID: "component-delete:" + componentID,
-			apply: func(scenario *target.TargetScenarioInfo) bool {
+			apply: func(scenario *target.TargetScenarioInfo, _ *target.TargetScenarioExecutionPlan) bool {
 				return targetScenarioDeleteComponent(scenario, componentID)
 			},
-		}, true
+		})
 	case step.Kind == "primitive-minimization" && targetScenarioPlantMetadataReductionAllowed(component, scenario, fidelity):
 		kindID := strings.TrimSpace(component.KindID)
-		return targetScenarioComponentReducer{
+		reducers = append(reducers, targetScenarioComponentReducer{
 			stepID: "component-clear-plant-metadata:" + componentID,
-			apply: func(scenario *target.TargetScenarioInfo) bool {
+			apply: func(scenario *target.TargetScenarioInfo, _ *target.TargetScenarioExecutionPlan) bool {
 				return targetScenarioClearPlantMetadata(scenario, componentID, kindID)
 			},
-		}, true
+		})
+	case step.Kind == "lifecycle-tightening" && targetScenarioLifecycleMetadataReductionAllowed(component, scenario, fidelity):
+		kindID := strings.TrimSpace(component.KindID)
+		reducers = append(reducers, targetScenarioComponentReducer{
+			stepID: "component-clear-lifecycle-metadata:" + componentID,
+			apply: func(scenario *target.TargetScenarioInfo, plan *target.TargetScenarioExecutionPlan) bool {
+				return targetScenarioClearLifecycleMetadata(scenario, plan, componentID, kindID)
+			},
+		})
+	case step.Kind == "oracle-preservation" && targetScenarioOracleMetadataReductionAllowed(component, scenario, fidelity):
+		kindID := strings.TrimSpace(component.KindID)
+		reducers = append(reducers, targetScenarioComponentReducer{
+			stepID: "component-clear-oracle-metadata:" + componentID,
+			apply: func(scenario *target.TargetScenarioInfo, _ *target.TargetScenarioExecutionPlan) bool {
+				return targetScenarioClearOracleMetadata(scenario, componentID, kindID)
+			},
+		})
 	}
-	return targetScenarioComponentReducer{}, false
+	if targetScenarioComponentSummaryReductionAllowed(component) {
+		reducers = append(reducers, targetScenarioComponentReducer{
+			stepID: "component-clear-summary:" + componentID,
+			apply: func(scenario *target.TargetScenarioInfo, _ *target.TargetScenarioExecutionPlan) bool {
+				return targetScenarioClearComponentSummary(scenario, componentID)
+			},
+		})
+	}
+	return reducers
 }
 
 func targetScenarioOptionalComponentDeletionAllowed(component target.TargetScenarioComponent) bool {
@@ -558,6 +698,32 @@ func targetScenarioPlantMetadataReductionAllowed(component target.TargetScenario
 	}
 	plantID := strings.TrimSpace(scenario.PlantPrimitiveID)
 	return plantID != "" && plantID == strings.TrimSpace(component.KindID)
+}
+
+func targetScenarioLifecycleMetadataReductionAllowed(component target.TargetScenarioComponent, scenario *target.TargetScenarioInfo, fidelity TargetMinimizationFidelity) bool {
+	if scenario == nil || component.Role != target.TargetScenarioComponentLifecycle {
+		return false
+	}
+	if fidelity != TargetMinimizationFidelityImpact {
+		return false
+	}
+	lifecycleID := targetScenarioLifecycleMetadataID(scenario, nil)
+	return lifecycleID != "" && lifecycleID == strings.TrimSpace(component.KindID)
+}
+
+func targetScenarioOracleMetadataReductionAllowed(component target.TargetScenarioComponent, scenario *target.TargetScenarioInfo, fidelity TargetMinimizationFidelity) bool {
+	if scenario == nil || component.Role != target.TargetScenarioComponentOracle {
+		return false
+	}
+	if fidelity != TargetMinimizationFidelityImpact {
+		return false
+	}
+	oracleID := strings.TrimSpace(scenario.OracleKindID)
+	return oracleID != "" && oracleID == strings.TrimSpace(component.KindID)
+}
+
+func targetScenarioComponentSummaryReductionAllowed(component target.TargetScenarioComponent) bool {
+	return strings.TrimSpace(component.Summary) != ""
 }
 
 func targetScenarioDeleteComponent(scenario *target.TargetScenarioInfo, componentID string) bool {
@@ -591,11 +757,103 @@ func targetScenarioClearPlantMetadata(scenario *target.TargetScenarioInfo, compo
 	return true
 }
 
+func targetScenarioClearLifecycleMetadata(scenario *target.TargetScenarioInfo, plan *target.TargetScenarioExecutionPlan, componentID string, kindID string) bool {
+	if scenario == nil {
+		return false
+	}
+	lifecycleID := targetScenarioLifecycleMetadataID(scenario, plan)
+	if lifecycleID == "" {
+		return false
+	}
+	if strings.TrimSpace(kindID) != "" && lifecycleID != strings.TrimSpace(kindID) {
+		return false
+	}
+	if !targetScenarioDeleteComponent(scenario, componentID) {
+		return false
+	}
+	scenario.LifecycleEdge = ""
+	if scenario.ExecutionPlan != nil {
+		scenario.ExecutionPlan.LifecycleOperationID = ""
+	}
+	if plan != nil {
+		plan.LifecycleOperationID = ""
+	}
+	return true
+}
+
+func targetScenarioClearOracleMetadata(scenario *target.TargetScenarioInfo, componentID string, kindID string) bool {
+	if scenario == nil || strings.TrimSpace(scenario.OracleKindID) == "" {
+		return false
+	}
+	if strings.TrimSpace(kindID) != "" && strings.TrimSpace(scenario.OracleKindID) != strings.TrimSpace(kindID) {
+		return false
+	}
+	if !targetScenarioDeleteComponent(scenario, componentID) {
+		return false
+	}
+	scenario.OracleKindID = ""
+	return true
+}
+
+func targetScenarioClearComponentSummary(scenario *target.TargetScenarioInfo, componentID string) bool {
+	if scenario == nil || strings.TrimSpace(componentID) == "" {
+		return false
+	}
+	for index := range scenario.Components {
+		if scenario.Components[index].ComponentID != componentID {
+			continue
+		}
+		if strings.TrimSpace(scenario.Components[index].Summary) == "" {
+			return false
+		}
+		scenario.Components[index].Summary = ""
+		return true
+	}
+	return false
+}
+
+func targetScenarioDeleteMutation(scenario *target.TargetScenarioInfo, mutationID string) bool {
+	if scenario == nil || strings.TrimSpace(mutationID) == "" || len(scenario.Mutations) == 0 {
+		return false
+	}
+	mutations := scenario.Mutations[:0]
+	deleted := false
+	for _, mutation := range scenario.Mutations {
+		if mutation.MutationID == mutationID {
+			deleted = true
+			continue
+		}
+		mutations = append(mutations, mutation)
+	}
+	scenario.Mutations = mutations
+	return deleted
+}
+
+func targetScenarioLifecycleMetadataID(scenario *target.TargetScenarioInfo, plan *target.TargetScenarioExecutionPlan) string {
+	if plan != nil && strings.TrimSpace(plan.LifecycleOperationID) != "" {
+		return strings.TrimSpace(plan.LifecycleOperationID)
+	}
+	if scenario != nil && scenario.ExecutionPlan != nil && strings.TrimSpace(scenario.ExecutionPlan.LifecycleOperationID) != "" {
+		return strings.TrimSpace(scenario.ExecutionPlan.LifecycleOperationID)
+	}
+	if scenario != nil {
+		return strings.TrimSpace(scenario.LifecycleEdge)
+	}
+	return ""
+}
+
 func targetScenarioComponentCount(scenario *target.TargetScenarioInfo) int {
 	if scenario == nil {
 		return 0
 	}
 	return len(scenario.Components)
+}
+
+func targetScenarioMutationCount(scenario *target.TargetScenarioInfo) int {
+	if scenario == nil {
+		return 0
+	}
+	return len(scenario.Mutations)
 }
 
 func targetPromptReductionLines(prompt string) []string {

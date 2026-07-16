@@ -653,7 +653,7 @@ func targetMinimize(args []string) {
 	fs := flag.NewFlagSet("target minimize", flag.ExitOnError)
 	sourcePath := fs.String("from", "", "target-suite-result.json or target-matrix-result.json to turn into a minimization batch")
 	outDir := fs.String("out", "runs", "directory for target minimization artifacts")
-	execute := fs.Bool("execute", false, "execute conservative prompt, Scenario IR component, and execution-plan trials while preserving the source oracle constraints")
+	execute := fs.Bool("execute", false, "execute conservative prompt, command, Scenario IR, and execution-plan trials while preserving the source oracle constraints")
 	candidateLimit := fs.Int("candidate-limit", 1, "maximum applicable candidates to execute when --execute is set; 0 means all")
 	maxTrials := fs.Int("max-trials", 32, "maximum minimization trials per candidate when --execute is set")
 	fidelity := fs.String("fidelity", string(scheduler.TargetMinimizationFidelityExact), "minimization fidelity mode: exact, semantic, or impact")
@@ -680,18 +680,24 @@ func targetMinimize(args []string) {
 		fmt.Printf("total_trials: %d\n", result.TotalTrials)
 		fmt.Printf("accepted_reductions: %d\n", result.AcceptedReductions)
 		for index, candidate := range result.Candidates {
-			fmt.Printf("candidate_%d: task=%s preserved=%t prompt_lines=%d->%d components=%d->%d trials=%d accepted=%d prompt_accepted=%d component_accepted=%d activation_accepted=%d execution_accepted=%d",
+			fmt.Printf("candidate_%d: task=%s preserved=%t prompt_lines=%d->%d command_lines=%d->%d components=%d->%d mutations=%d->%d trials=%d accepted=%d prompt_accepted=%d command_accepted=%d component_accepted=%d mutation_accepted=%d activation_accepted=%d execution_accepted=%d",
 				index+1,
 				candidate.TaskID,
 				candidate.Preserved,
 				candidate.OriginalPromptLines,
 				candidate.MinimizedPromptLines,
+				candidate.OriginalCommandLines,
+				candidate.MinimizedCommandLines,
 				candidate.OriginalComponents,
 				candidate.MinimizedComponents,
+				candidate.OriginalMutations,
+				candidate.MinimizedMutations,
 				candidate.Trials,
 				candidate.AcceptedReductions,
 				candidate.AcceptedPromptReductions,
+				candidate.AcceptedCommandReductions,
 				candidate.AcceptedComponentReductions,
+				candidate.AcceptedMutationReductions,
 				candidate.AcceptedActivationReductions,
 				candidate.AcceptedExecutionReductions,
 			)

@@ -650,6 +650,9 @@ func TestBuildTargetMinimizationPlanIncludesMutationAxes(t *testing.T) {
 	if !targetMinimizationPlanHasStepKind(plan, "mutation-axis-check") {
 		t.Fatalf("expected mutation-axis minimization step: %#v", plan)
 	}
+	if !targetMinimizationPlanHasMutation(plan, "lifecycle-splice.checkpoint-replay") {
+		t.Fatalf("expected stable Scenario IR mutation identity in minimization plan: %#v", plan)
+	}
 	if !targetMinimizationPlanHasComponent(plan, "plant.shell-path-prepend", "shell-path-prepend") {
 		t.Fatalf("expected stable Scenario IR component identity in minimization plan: %#v", plan)
 	}
@@ -685,6 +688,18 @@ func targetMinimizationPlanHasComponent(plan *TargetMinimizationPlan, componentI
 	}
 	for _, step := range plan.Steps {
 		if step.ComponentID == componentID && step.ComponentKind == kindID {
+			return true
+		}
+	}
+	return false
+}
+
+func targetMinimizationPlanHasMutation(plan *TargetMinimizationPlan, mutationID string) bool {
+	if plan == nil {
+		return false
+	}
+	for _, step := range plan.Steps {
+		if step.MutationID == mutationID {
 			return true
 		}
 	}

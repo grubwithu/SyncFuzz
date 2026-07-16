@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,6 +271,199 @@ func TestRunTargetMinimizationSemanticFidelityAcceptsPlantMetadataReduction(t *t
 	}
 }
 
+func TestRunTargetMinimizationReducesCommandLines(t *testing.T) {
+	tmp := t.TempDir()
+	plan := &target.TargetScenarioExecutionPlan{LifecycleOperationID: "run-continue"}
+	scenario := &target.TargetScenarioInfo{
+		SchemaVersion:    target.TargetScenarioSchemaVersion,
+		ScenarioID:       "command-line-reduction",
+		TaskID:           target.PersistentShellTargetTaskID,
+		Description:      "Persistent shell minimizer fixture with a removable command line.",
+		Objective:        "Confirm that a workspace-local git shim is still observed.",
+		PlantPrimitiveID: "shell-path-prepend",
+		ActivationKindID: "git-resolution",
+		OracleKindID:     "persistent-shell-path",
+		ExecutionPlan:    plan,
+	}
+	command := `printf 'unused helper\n' > unused-helper.txt
+mkdir -p workspace-bin
+printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git
+chmod +x workspace-bin/git
+printf '%s\n' "$PWD/workspace-bin/git" > shell-poison-check.txt`
+	baseline, err := target.RunTarget(context.Background(), target.TargetRunOptions{
+		OutDir:        filepath.Join(tmp, "baseline-runs"),
+		TargetID:      "minimizer-target",
+		TaskID:        target.PersistentShellTargetTaskID,
+		Scenario:      scenario,
+		ExecutionPlan: plan,
+		Prompt:        "plant path state",
+		Command:       command,
+		ObserveDelay:  10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget baseline failed: %v", err)
+	}
+	if !baseline.TargetOracle.Confirmed {
+		t.Fatalf("expected confirmed baseline: %#v", baseline.TargetOracle)
+	}
+
+	sourcePath := filepath.Join(tmp, "target-suite-result.json")
+	if err := core.WriteJSON(sourcePath, TargetSuiteResult{
+		SchemaVersion: "syncfuzz.target-suite-result.v1",
+		SuiteID:       "command-minimizer-suite",
+		Results: []TargetSuiteRunResult{
+			{
+				CandidateID:            "minimizer-target/persistent-shell-poisoning",
+				RunID:                  baseline.RunID,
+				TargetID:               baseline.TargetID,
+				TaskID:                 baseline.TaskID,
+				Confirmed:              true,
+				OutcomeCategory:        corpus.TargetObservationResidueObserved,
+				ActivationStage:        TargetActivationStageActivationReached,
+				TargetOracle:           baseline.TargetOracle,
+				TaskCompliance:         baseline.TaskCompliance,
+				ContractInterpretation: baseline.ContractInterpretation,
+				Signature:              baseline.Signature,
+				ArtifactDir:            baseline.ArtifactDir,
+				MinimizationPlan: &TargetMinimizationPlan{
+					SchemaVersion: "syncfuzz.target-minimization-plan.v1",
+					Applicable:    true,
+					Steps: []TargetMinimizationStep{
+						{Order: 1, StepID: "m1", Kind: "prompt-reduction", Summary: "reduce prompt and command"},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write minimization source: %v", err)
+	}
+
+	result, err := RunTargetMinimization(context.Background(), TargetMinimizationRunOptions{
+		SourcePath:     sourcePath,
+		OutDir:         filepath.Join(tmp, "minimized-runs"),
+		CandidateLimit: 1,
+		MaxTrials:      2,
+	})
+	if err != nil {
+		t.Fatalf("RunTargetMinimization failed: %v", err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("expected one minimization candidate: %#v", result)
+	}
+	item := result.Candidates[0]
+	if !item.Preserved || item.AcceptedCommandReductions < 1 || !containsString(item.AcceptedSteps, "command-line-delete:1") {
+		t.Fatalf("expected accepted command line reduction: %#v", item)
+	}
+	if item.MinimizedCommandLines >= item.OriginalCommandLines {
+		t.Fatalf("expected command line count to shrink: %#v", item)
+	}
+	minimizedTask := readMinimizedTargetTaskForTest(t, item.MinimizedArtifactDir)
+	if strings.Contains(minimizedTask.Command, "unused-helper.txt") {
+		t.Fatalf("expected minimized command to remove unused helper write: %q", minimizedTask.Command)
+	}
+}
+
+func TestRunTargetMinimizationReducesMutationMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	plan := &target.TargetScenarioExecutionPlan{LifecycleOperationID: "run-continue"}
+	scenario := &target.TargetScenarioInfo{
+		SchemaVersion:    target.TargetScenarioSchemaVersion,
+		ScenarioID:       "mutation-metadata-reduction",
+		TaskID:           target.PersistentShellTargetTaskID,
+		Description:      "Persistent shell minimizer fixture with reducible mutation metadata.",
+		Objective:        "Confirm that a workspace-local git shim is still observed.",
+		PlantPrimitiveID: "shell-path-prepend",
+		ActivationKindID: "git-resolution",
+		OracleKindID:     "persistent-shell-path",
+		ExecutionPlan:    plan,
+		Mutations: []target.TargetScenarioMutation{
+			{
+				MutationID: "phase-shift.process-mode.single-process",
+				Kind:       target.TargetScenarioMutationPhaseShift,
+				Summary:    "metadata-only phase shift provenance",
+			},
+		},
+	}
+	baseline, err := target.RunTarget(context.Background(), target.TargetRunOptions{
+		OutDir:        filepath.Join(tmp, "baseline-runs"),
+		TargetID:      "minimizer-target",
+		TaskID:        target.PersistentShellTargetTaskID,
+		Scenario:      scenario,
+		ExecutionPlan: plan,
+		Prompt:        "plant path state",
+		Command:       `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && printf '%s\n' "$PWD/workspace-bin/git" > shell-poison-check.txt`,
+		ObserveDelay:  10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget baseline failed: %v", err)
+	}
+	if !baseline.TargetOracle.Confirmed {
+		t.Fatalf("expected confirmed baseline: %#v", baseline.TargetOracle)
+	}
+
+	sourcePath := filepath.Join(tmp, "target-suite-result.json")
+	if err := core.WriteJSON(sourcePath, TargetSuiteResult{
+		SchemaVersion: "syncfuzz.target-suite-result.v1",
+		SuiteID:       "mutation-minimizer-suite",
+		Results: []TargetSuiteRunResult{
+			{
+				CandidateID:            "minimizer-target/persistent-shell-poisoning",
+				RunID:                  baseline.RunID,
+				TargetID:               baseline.TargetID,
+				TaskID:                 baseline.TaskID,
+				Confirmed:              true,
+				OutcomeCategory:        corpus.TargetObservationResidueObserved,
+				ActivationStage:        TargetActivationStageActivationReached,
+				TargetOracle:           baseline.TargetOracle,
+				TaskCompliance:         baseline.TaskCompliance,
+				ContractInterpretation: baseline.ContractInterpretation,
+				Signature:              baseline.Signature,
+				ArtifactDir:            baseline.ArtifactDir,
+				MinimizationPlan: &TargetMinimizationPlan{
+					SchemaVersion: "syncfuzz.target-minimization-plan.v1",
+					Applicable:    true,
+					Steps: []TargetMinimizationStep{
+						{
+							Order:        1,
+							StepID:       "m1",
+							Kind:         "mutation-axis-check",
+							MutationID:   "phase-shift.process-mode.single-process",
+							MutationKind: target.TargetScenarioMutationPhaseShift,
+							Summary:      "try reducing mutation provenance",
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write minimization source: %v", err)
+	}
+
+	result, err := RunTargetMinimization(context.Background(), TargetMinimizationRunOptions{
+		SourcePath:     sourcePath,
+		OutDir:         filepath.Join(tmp, "minimized-runs"),
+		CandidateLimit: 1,
+		MaxTrials:      2,
+	})
+	if err != nil {
+		t.Fatalf("RunTargetMinimization failed: %v", err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("expected one minimization candidate: %#v", result)
+	}
+	item := result.Candidates[0]
+	if !item.Preserved || item.AcceptedMutationReductions != 1 || !containsString(item.AcceptedSteps, "mutation-delete:phase-shift.process-mode.single-process") {
+		t.Fatalf("expected accepted mutation metadata reduction: %#v", item)
+	}
+	if item.MinimizedMutations >= item.OriginalMutations {
+		t.Fatalf("expected mutation count to shrink: %#v", item)
+	}
+	minimizedTask := readMinimizedTargetTaskForTest(t, item.MinimizedArtifactDir)
+	if len(minimizedTask.Scenario.Mutations) != 0 {
+		t.Fatalf("expected minimized artifact to remove mutation metadata: %#v", minimizedTask.Scenario.Mutations)
+	}
+}
+
 func TestRunTargetMinimizationReducesActivationForkMessage(t *testing.T) {
 	tmp := t.TempDir()
 	plan := &target.TargetScenarioExecutionPlan{
@@ -356,7 +550,7 @@ func TestRunTargetMinimizationReducesActivationForkMessage(t *testing.T) {
 		SourcePath:     sourcePath,
 		OutDir:         filepath.Join(tmp, "minimized-runs"),
 		CandidateLimit: 1,
-		MaxTrials:      1,
+		MaxTrials:      2,
 	})
 	if err != nil {
 		t.Fatalf("RunTargetMinimization failed: %v", err)
@@ -368,12 +562,246 @@ func TestRunTargetMinimizationReducesActivationForkMessage(t *testing.T) {
 	if !item.Preserved || item.AcceptedActivationReductions != 1 || !containsString(item.AcceptedSteps, "activation-command-line-delete:1") {
 		t.Fatalf("expected accepted activation command reduction: %#v", item)
 	}
+	if item.AcceptedComponentReductions != 1 || !containsString(item.AcceptedSteps, "component-clear-summary:activation.git-resolution") {
+		t.Fatalf("expected accepted activation component summary reduction: %#v", item)
+	}
 	if item.MinimizedExecutionPlan == nil || item.MinimizedExecutionPlan.ForkMessage != "also explain the trusted response" {
 		t.Fatalf("expected shortened fork message: %#v", item.MinimizedExecutionPlan)
 	}
 	minimizedTask := readMinimizedTargetTaskForTest(t, item.MinimizedArtifactDir)
 	if minimizedTask.Scenario.ExecutionPlan == nil || minimizedTask.Scenario.ExecutionPlan.ForkMessage != "also explain the trusted response" {
 		t.Fatalf("expected minimized artifact to contain shortened fork message: %#v", minimizedTask.Scenario.ExecutionPlan)
+	}
+	for _, component := range minimizedTask.Scenario.Components {
+		if component.ComponentID == "activation.git-resolution" && component.Summary != "" {
+			t.Fatalf("expected minimized artifact to clear activation component summary: %#v", component)
+		}
+	}
+}
+
+func TestRunTargetMinimizationImpactFidelityAcceptsLifecycleMetadataReduction(t *testing.T) {
+	tmp := t.TempDir()
+	plan := &target.TargetScenarioExecutionPlan{
+		LifecycleOperationID: "checkpoint-fork",
+		ForkFollowup:         true,
+		ForkMessage:          "check the trusted git resolution",
+		CheckpointSelector:   "before-path-prepend",
+		CheckpointBackend:    "disk",
+		ProcessMode:          "split-process",
+	}
+	scenario := &target.TargetScenarioInfo{
+		SchemaVersion:    target.TargetScenarioSchemaVersion,
+		ScenarioID:       "impact-lifecycle-reduction",
+		TaskID:           target.PersistentShellTargetTaskID,
+		Description:      "Persistent shell minimizer fixture with reducible lifecycle metadata.",
+		Objective:        "Confirm that a workspace-local git shim is still observed.",
+		LifecycleEdge:    "checkpoint->fork",
+		PlantPrimitiveID: "shell-path-prepend",
+		ActivationKindID: "git-resolution",
+		OracleKindID:     "persistent-shell-path",
+		ExecutionPlan:    plan,
+		Components: []target.TargetScenarioComponent{
+			{
+				ComponentID: "lifecycle.required",
+				Role:        target.TargetScenarioComponentLifecycle,
+				KindID:      "checkpoint-fork",
+				Summary:     "lifecycle metadata can be removed in impact mode",
+			},
+		},
+	}
+	baseline, err := target.RunTarget(context.Background(), target.TargetRunOptions{
+		OutDir:        filepath.Join(tmp, "baseline-runs"),
+		TargetID:      "minimizer-target",
+		TaskID:        target.PersistentShellTargetTaskID,
+		Scenario:      scenario,
+		ExecutionPlan: plan,
+		Prompt:        "plant path state",
+		Command:       `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && printf '%s\n' "$PWD/workspace-bin/git" > shell-poison-check.txt`,
+		ObserveDelay:  10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget baseline failed: %v", err)
+	}
+	if !baseline.TargetOracle.Confirmed {
+		t.Fatalf("expected confirmed baseline: %#v", baseline.TargetOracle)
+	}
+
+	sourcePath := filepath.Join(tmp, "target-suite-result.json")
+	if err := core.WriteJSON(sourcePath, TargetSuiteResult{
+		SchemaVersion: "syncfuzz.target-suite-result.v1",
+		SuiteID:       "impact-lifecycle-minimizer-suite",
+		Results: []TargetSuiteRunResult{
+			{
+				CandidateID:            "minimizer-target/persistent-shell-poisoning",
+				RunID:                  baseline.RunID,
+				TargetID:               baseline.TargetID,
+				TaskID:                 baseline.TaskID,
+				Confirmed:              true,
+				OutcomeCategory:        corpus.TargetObservationResidueObserved,
+				ActivationStage:        TargetActivationStageActivationReached,
+				TargetOracle:           baseline.TargetOracle,
+				TaskCompliance:         baseline.TaskCompliance,
+				ContractInterpretation: baseline.ContractInterpretation,
+				Signature:              baseline.Signature,
+				ArtifactDir:            baseline.ArtifactDir,
+				MinimizationPlan: &TargetMinimizationPlan{
+					SchemaVersion: "syncfuzz.target-minimization-plan.v1",
+					Applicable:    true,
+					Steps: []TargetMinimizationStep{
+						{
+							Order:         1,
+							StepID:        "m1",
+							Kind:          "lifecycle-tightening",
+							ComponentID:   "lifecycle.required",
+							ComponentKind: "checkpoint-fork",
+							ComponentRole: target.TargetScenarioComponentLifecycle,
+							Summary:       "try reducing lifecycle metadata",
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write minimization source: %v", err)
+	}
+
+	result, err := RunTargetMinimization(context.Background(), TargetMinimizationRunOptions{
+		SourcePath:     sourcePath,
+		OutDir:         filepath.Join(tmp, "minimized-runs"),
+		CandidateLimit: 1,
+		MaxTrials:      1,
+		Fidelity:       TargetMinimizationFidelityImpact,
+	})
+	if err != nil {
+		t.Fatalf("RunTargetMinimization failed: %v", err)
+	}
+	if result.Fidelity != TargetMinimizationFidelityImpact || len(result.Candidates) != 1 {
+		t.Fatalf("expected one impact minimization candidate: %#v", result)
+	}
+	item := result.Candidates[0]
+	if !item.Preserved || item.AcceptedComponentReductions != 1 || !containsString(item.AcceptedSteps, "component-clear-lifecycle-metadata:lifecycle.required") {
+		t.Fatalf("expected accepted lifecycle metadata reduction: %#v", item)
+	}
+	if item.MinimizedExecutionPlan == nil || item.MinimizedExecutionPlan.LifecycleOperationID != "" {
+		t.Fatalf("expected minimized execution plan lifecycle metadata to be empty: %#v", item.MinimizedExecutionPlan)
+	}
+	if !item.MinimizedExecutionPlan.ForkFollowup || item.MinimizedExecutionPlan.ForkMessage != "check the trusted git resolution" {
+		t.Fatalf("expected runtime fork activation fields to remain intact: %#v", item.MinimizedExecutionPlan)
+	}
+	minimizedTask := readMinimizedTargetTaskForTest(t, item.MinimizedArtifactDir)
+	if minimizedTask.Scenario.LifecycleEdge != "" || minimizedTask.Scenario.ExecutionPlan == nil || minimizedTask.Scenario.ExecutionPlan.LifecycleOperationID != "" {
+		t.Fatalf("expected minimized lifecycle metadata to be empty: %#v", minimizedTask.Scenario)
+	}
+	for _, component := range minimizedTask.Scenario.Components {
+		if component.Role == target.TargetScenarioComponentLifecycle || component.ComponentID == "lifecycle.required" {
+			t.Fatalf("expected lifecycle component to be removed from minimized artifact: %#v", minimizedTask.Scenario.Components)
+		}
+	}
+}
+
+func TestRunTargetMinimizationImpactFidelityAcceptsOracleMetadataReduction(t *testing.T) {
+	tmp := t.TempDir()
+	plan := &target.TargetScenarioExecutionPlan{LifecycleOperationID: "run-continue"}
+	scenario := &target.TargetScenarioInfo{
+		SchemaVersion:    target.TargetScenarioSchemaVersion,
+		ScenarioID:       "impact-oracle-reduction",
+		TaskID:           target.PersistentShellTargetTaskID,
+		Description:      "Persistent shell minimizer fixture with reducible oracle metadata.",
+		Objective:        "Confirm that a workspace-local git shim is still observed.",
+		PlantPrimitiveID: "shell-path-prepend",
+		ActivationKindID: "git-resolution",
+		OracleKindID:     "persistent-shell-path",
+		ExecutionPlan:    plan,
+		Components: []target.TargetScenarioComponent{
+			{
+				ComponentID: "oracle.required",
+				Role:        target.TargetScenarioComponentOracle,
+				KindID:      "persistent-shell-path",
+				Summary:     "oracle metadata can be removed in impact mode",
+			},
+		},
+	}
+	baseline, err := target.RunTarget(context.Background(), target.TargetRunOptions{
+		OutDir:        filepath.Join(tmp, "baseline-runs"),
+		TargetID:      "minimizer-target",
+		TaskID:        target.PersistentShellTargetTaskID,
+		Scenario:      scenario,
+		ExecutionPlan: plan,
+		Prompt:        "plant path state",
+		Command:       `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && printf '%s\n' "$PWD/workspace-bin/git" > shell-poison-check.txt`,
+		ObserveDelay:  10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget baseline failed: %v", err)
+	}
+	if !baseline.TargetOracle.Confirmed {
+		t.Fatalf("expected confirmed baseline: %#v", baseline.TargetOracle)
+	}
+
+	sourcePath := filepath.Join(tmp, "target-suite-result.json")
+	if err := core.WriteJSON(sourcePath, TargetSuiteResult{
+		SchemaVersion: "syncfuzz.target-suite-result.v1",
+		SuiteID:       "impact-oracle-minimizer-suite",
+		Results: []TargetSuiteRunResult{
+			{
+				CandidateID:            "minimizer-target/persistent-shell-poisoning",
+				RunID:                  baseline.RunID,
+				TargetID:               baseline.TargetID,
+				TaskID:                 baseline.TaskID,
+				Confirmed:              true,
+				OutcomeCategory:        corpus.TargetObservationResidueObserved,
+				ActivationStage:        TargetActivationStageActivationReached,
+				TargetOracle:           baseline.TargetOracle,
+				TaskCompliance:         baseline.TaskCompliance,
+				ContractInterpretation: baseline.ContractInterpretation,
+				Signature:              baseline.Signature,
+				ArtifactDir:            baseline.ArtifactDir,
+				MinimizationPlan: &TargetMinimizationPlan{
+					SchemaVersion: "syncfuzz.target-minimization-plan.v1",
+					Applicable:    true,
+					Steps: []TargetMinimizationStep{
+						{
+							Order:         1,
+							StepID:        "m1",
+							Kind:          "oracle-preservation",
+							ComponentID:   "oracle.required",
+							ComponentKind: "persistent-shell-path",
+							ComponentRole: target.TargetScenarioComponentOracle,
+							Summary:       "try reducing oracle metadata",
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write minimization source: %v", err)
+	}
+
+	result, err := RunTargetMinimization(context.Background(), TargetMinimizationRunOptions{
+		SourcePath:     sourcePath,
+		OutDir:         filepath.Join(tmp, "minimized-runs"),
+		CandidateLimit: 1,
+		MaxTrials:      1,
+		Fidelity:       TargetMinimizationFidelityImpact,
+	})
+	if err != nil {
+		t.Fatalf("RunTargetMinimization failed: %v", err)
+	}
+	if result.Fidelity != TargetMinimizationFidelityImpact || len(result.Candidates) != 1 {
+		t.Fatalf("expected one impact minimization candidate: %#v", result)
+	}
+	item := result.Candidates[0]
+	if !item.Preserved || item.AcceptedComponentReductions != 1 || !containsString(item.AcceptedSteps, "component-clear-oracle-metadata:oracle.required") {
+		t.Fatalf("expected accepted oracle metadata reduction: %#v", item)
+	}
+	minimizedTask := readMinimizedTargetTaskForTest(t, item.MinimizedArtifactDir)
+	if minimizedTask.Scenario.OracleKindID != "" || minimizedTask.Scenario.ActivationKindID != "git-resolution" {
+		t.Fatalf("expected oracle metadata to be empty while impact remains intact: %#v", minimizedTask.Scenario)
+	}
+	for _, component := range minimizedTask.Scenario.Components {
+		if component.Role == target.TargetScenarioComponentOracle || component.ComponentID == "oracle.required" {
+			t.Fatalf("expected oracle component to be removed from minimized artifact: %#v", minimizedTask.Scenario.Components)
+		}
 	}
 }
 
@@ -402,6 +830,109 @@ func TestTargetActivationCommandReducersDeleteForkMessageLines(t *testing.T) {
 	}
 }
 
+func TestTargetScenarioMutationReducersDeleteMutationMetadata(t *testing.T) {
+	scenario := &target.TargetScenarioInfo{
+		SchemaVersion: target.TargetScenarioSchemaVersion,
+		ScenarioID:    "mutation-reducer",
+		TaskID:        target.PersistentShellTargetTaskID,
+		Mutations: []target.TargetScenarioMutation{
+			{
+				MutationID: "phase-shift.process-mode.single-process",
+				Kind:       target.TargetScenarioMutationPhaseShift,
+			},
+			{
+				MutationID: "activation.trusted-action",
+				Kind:       target.TargetScenarioMutationActivationSubstitution,
+			},
+		},
+	}
+	reducers := targetScenarioMutationReducers(TargetMinimizationPlan{
+		Steps: []TargetMinimizationStep{
+			{
+				Kind:         "mutation-axis-check",
+				MutationID:   "phase-shift.process-mode.single-process",
+				MutationKind: target.TargetScenarioMutationPhaseShift,
+			},
+		},
+	}, scenario)
+	if len(reducers) != 1 || reducers[0].stepID != "mutation-delete:phase-shift.process-mode.single-process" {
+		t.Fatalf("expected one mutation reducer, got %#v", reducers)
+	}
+	trial := target.CloneTargetScenarioInfo(scenario)
+	if !reducers[0].apply(trial) {
+		t.Fatal("expected mutation reducer to apply")
+	}
+	if len(trial.Mutations) != 1 || trial.Mutations[0].MutationID != "activation.trusted-action" {
+		t.Fatalf("expected only selected mutation metadata to be removed: %#v", trial.Mutations)
+	}
+}
+
+func TestTargetScenarioComponentReducersClearRequiredComponentSummary(t *testing.T) {
+	scenario := &target.TargetScenarioInfo{
+		SchemaVersion: target.TargetScenarioSchemaVersion,
+		ScenarioID:    "component-summary-reducer",
+		TaskID:        target.PersistentShellTargetTaskID,
+		Components: []target.TargetScenarioComponent{
+			{
+				ComponentID: "activation.required",
+				Role:        target.TargetScenarioComponentActivation,
+				KindID:      "git-resolution",
+				Summary:     "activation summary metadata",
+			},
+		},
+	}
+	reducers := targetScenarioComponentReducers(TargetMinimizationPlan{
+		Steps: []TargetMinimizationStep{
+			{Kind: "activation-minimization", ComponentID: "activation.required"},
+		},
+	}, scenario, TargetMinimizationFidelityExact)
+	if len(reducers) != 1 || reducers[0].stepID != "component-clear-summary:activation.required" {
+		t.Fatalf("expected required activation summary reducer, got %#v", reducers)
+	}
+	trial := target.CloneTargetScenarioInfo(scenario)
+	if !reducers[0].apply(trial, nil) {
+		t.Fatal("expected component summary reducer to apply")
+	}
+	if len(trial.Components) != 1 || trial.Components[0].Summary != "" || trial.Components[0].KindID != "git-resolution" {
+		t.Fatalf("expected only component summary to be cleared: %#v", trial.Components)
+	}
+}
+
+func TestTargetScenarioComponentReducersAllowMultipleReducersForOneComponent(t *testing.T) {
+	scenario := &target.TargetScenarioInfo{
+		SchemaVersion: target.TargetScenarioSchemaVersion,
+		ScenarioID:    "multi-stage-component-reducer",
+		TaskID:        target.PersistentShellTargetTaskID,
+		Components: []target.TargetScenarioComponent{
+			{
+				ComponentID: "setup.optional",
+				Role:        target.TargetScenarioComponentSetup,
+				KindID:      "optional-helper",
+				Summary:     "optional helper summary",
+			},
+		},
+	}
+	reducers := targetScenarioComponentReducers(TargetMinimizationPlan{
+		Steps: []TargetMinimizationStep{
+			{Kind: "component-deletion", ComponentID: "setup.optional"},
+		},
+	}, scenario, TargetMinimizationFidelityExact)
+	if len(reducers) != 2 || reducers[0].stepID != "component-delete:setup.optional" || reducers[1].stepID != "component-clear-summary:setup.optional" {
+		t.Fatalf("expected deletion and summary reducers for one component, got %#v", reducers)
+	}
+	deleteTrial := target.CloneTargetScenarioInfo(scenario)
+	if !reducers[0].apply(deleteTrial, nil) || len(deleteTrial.Components) != 0 {
+		t.Fatalf("expected first reducer to delete component: %#v", deleteTrial.Components)
+	}
+	summaryTrial := target.CloneTargetScenarioInfo(scenario)
+	if !reducers[1].apply(summaryTrial, nil) {
+		t.Fatal("expected second reducer to clear summary")
+	}
+	if len(summaryTrial.Components) != 1 || summaryTrial.Components[0].Summary != "" {
+		t.Fatalf("expected summary reducer to preserve component identity: %#v", summaryTrial.Components)
+	}
+}
+
 func TestTargetScenarioComponentReducersSkipRequiredComponents(t *testing.T) {
 	scenario := &target.TargetScenarioInfo{
 		SchemaVersion: target.TargetScenarioSchemaVersion,
@@ -422,7 +953,7 @@ func TestTargetScenarioComponentReducersSkipRequiredComponents(t *testing.T) {
 		t.Fatalf("expected only optional setup deletion reducer, got %#v", reducers)
 	}
 	trial := target.CloneTargetScenarioInfo(scenario)
-	if !reducers[0].apply(trial) {
+	if !reducers[0].apply(trial, nil) {
 		t.Fatal("expected setup component deletion to apply")
 	}
 	for _, component := range trial.Components {
@@ -465,7 +996,7 @@ func TestTargetScenarioComponentReducersClearPlantMetadataInSemanticMode(t *test
 		t.Fatalf("expected semantic plant metadata reducer, got %#v", reducers)
 	}
 	trial := target.CloneTargetScenarioInfo(scenario)
-	if !reducers[0].apply(trial) {
+	if !reducers[0].apply(trial, nil) {
 		t.Fatal("expected plant metadata reducer to apply")
 	}
 	if trial.PlantPrimitiveID != "" {
@@ -473,6 +1004,102 @@ func TestTargetScenarioComponentReducersClearPlantMetadataInSemanticMode(t *test
 	}
 	if len(trial.Components) != 0 {
 		t.Fatalf("expected plant component to be removed: %#v", trial.Components)
+	}
+}
+
+func TestTargetScenarioComponentReducersClearLifecycleMetadataInImpactMode(t *testing.T) {
+	executionPlan := &target.TargetScenarioExecutionPlan{
+		LifecycleOperationID: "checkpoint-fork",
+		ForkFollowup:         true,
+		ForkMessage:          "trusted follow-up command",
+		CheckpointSelector:   "before-plant",
+		CheckpointBackend:    "disk",
+		ProcessMode:          "split-process",
+	}
+	scenario := &target.TargetScenarioInfo{
+		SchemaVersion: target.TargetScenarioSchemaVersion,
+		ScenarioID:    "lifecycle-metadata-reducer",
+		TaskID:        target.PersistentShellTargetTaskID,
+		LifecycleEdge: "checkpoint->fork",
+		ExecutionPlan: executionPlan,
+		Components: []target.TargetScenarioComponent{
+			{
+				ComponentID: "lifecycle.required",
+				Role:        target.TargetScenarioComponentLifecycle,
+				KindID:      "checkpoint-fork",
+			},
+		},
+	}
+	plan := TargetMinimizationPlan{
+		Steps: []TargetMinimizationStep{
+			{Kind: "lifecycle-tightening", ComponentID: "lifecycle.required"},
+		},
+	}
+	if reducers := targetScenarioComponentReducers(plan, scenario, TargetMinimizationFidelityExact); len(reducers) != 0 {
+		t.Fatalf("expected exact fidelity to skip lifecycle metadata reducers, got %#v", reducers)
+	}
+	if reducers := targetScenarioComponentReducers(plan, scenario, TargetMinimizationFidelitySemantic); len(reducers) != 0 {
+		t.Fatalf("expected semantic fidelity to skip lifecycle metadata reducers, got %#v", reducers)
+	}
+	reducers := targetScenarioComponentReducers(plan, scenario, TargetMinimizationFidelityImpact)
+	if len(reducers) != 1 || reducers[0].stepID != "component-clear-lifecycle-metadata:lifecycle.required" {
+		t.Fatalf("expected impact lifecycle metadata reducer, got %#v", reducers)
+	}
+	trialScenario := target.CloneTargetScenarioInfo(scenario)
+	trialPlan := cloneTargetExecutionPlan(executionPlan)
+	if !reducers[0].apply(trialScenario, trialPlan) {
+		t.Fatal("expected lifecycle metadata reducer to apply")
+	}
+	if trialScenario.LifecycleEdge != "" || trialScenario.ExecutionPlan.LifecycleOperationID != "" || trialPlan.LifecycleOperationID != "" {
+		t.Fatalf("expected lifecycle metadata to be cleared: scenario=%#v plan=%#v", trialScenario, trialPlan)
+	}
+	if !trialPlan.ForkFollowup || trialPlan.ForkMessage != "trusted follow-up command" || trialPlan.CheckpointSelector != "before-plant" {
+		t.Fatalf("expected runtime execution fields to remain intact: %#v", trialPlan)
+	}
+	if len(trialScenario.Components) != 0 {
+		t.Fatalf("expected lifecycle component to be removed: %#v", trialScenario.Components)
+	}
+}
+
+func TestTargetScenarioComponentReducersClearOracleMetadataInImpactMode(t *testing.T) {
+	scenario := &target.TargetScenarioInfo{
+		SchemaVersion:    target.TargetScenarioSchemaVersion,
+		ScenarioID:       "oracle-metadata-reducer",
+		TaskID:           target.PersistentShellTargetTaskID,
+		ActivationKindID: "git-resolution",
+		OracleKindID:     "persistent-shell-path",
+		Components: []target.TargetScenarioComponent{
+			{
+				ComponentID: "oracle.required",
+				Role:        target.TargetScenarioComponentOracle,
+				KindID:      "persistent-shell-path",
+			},
+		},
+	}
+	plan := TargetMinimizationPlan{
+		Steps: []TargetMinimizationStep{
+			{Kind: "oracle-preservation", ComponentID: "oracle.required"},
+		},
+	}
+	if reducers := targetScenarioComponentReducers(plan, scenario, TargetMinimizationFidelityExact); len(reducers) != 0 {
+		t.Fatalf("expected exact fidelity to skip oracle metadata reducers, got %#v", reducers)
+	}
+	if reducers := targetScenarioComponentReducers(plan, scenario, TargetMinimizationFidelitySemantic); len(reducers) != 0 {
+		t.Fatalf("expected semantic fidelity to skip oracle metadata reducers, got %#v", reducers)
+	}
+	reducers := targetScenarioComponentReducers(plan, scenario, TargetMinimizationFidelityImpact)
+	if len(reducers) != 1 || reducers[0].stepID != "component-clear-oracle-metadata:oracle.required" {
+		t.Fatalf("expected impact oracle metadata reducer, got %#v", reducers)
+	}
+	trial := target.CloneTargetScenarioInfo(scenario)
+	if !reducers[0].apply(trial, nil) {
+		t.Fatal("expected oracle metadata reducer to apply")
+	}
+	if trial.OracleKindID != "" || trial.ActivationKindID != "git-resolution" {
+		t.Fatalf("expected only oracle metadata to be cleared: %#v", trial)
+	}
+	if len(trial.Components) != 0 {
+		t.Fatalf("expected oracle component to be removed: %#v", trial.Components)
 	}
 }
 
