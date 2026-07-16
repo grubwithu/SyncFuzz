@@ -33,6 +33,7 @@ type TargetScheduleCandidate struct {
 	Description              string                              `json:"description,omitempty"`
 	Objective                string                              `json:"objective,omitempty"`
 	DefaultExpectedFiles     []string                            `json:"default_expected_files,omitempty"`
+	LateExpectedFiles        []string                            `json:"late_expected_files,omitempty"`
 	UsesLateObservation      bool                                `json:"uses_late_observation,omitempty"`
 	DefaultLateObserveDelay  int64                               `json:"default_late_observe_delay_ms,omitempty"`
 	Signature                core.MismatchSignature              `json:"signature"`
@@ -176,6 +177,11 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 				candidates = append(candidates, derived...)
 			}
 			if derived, err := targetDerivedContinuationActivationSubstitutionCandidates(candidate); err != nil {
+				return nil, err
+			} else {
+				candidates = append(candidates, derived...)
+			}
+			if derived, err := targetDerivedProcessTrustedActionCandidates(candidate); err != nil {
 				return nil, err
 			} else {
 				candidates = append(candidates, derived...)
@@ -473,6 +479,28 @@ func targetDerivedContinuationActivationSubstitutionCandidates(base TargetSchedu
 	return derived, nil
 }
 
+func targetDerivedProcessTrustedActionCandidates(base TargetScheduleCandidate) ([]TargetScheduleCandidate, error) {
+	if base.TargetID != "langgraph-shell-react" || base.TaskID != target.LongDelayTargetTaskID {
+		return nil, nil
+	}
+	if target.NormalizeTargetPromptProfileID(base.PromptProfileID) != target.TargetPromptProfileBaselineID ||
+		target.NormalizeTargetPromptVariantID(base.PromptVariantID) != target.TargetPromptVariantBaseID {
+		return nil, nil
+	}
+	generated, err := target.GeneratedProcessTrustedActivationSubstitutions()
+	if err != nil {
+		return nil, err
+	}
+	derived := make([]TargetScheduleCandidate, 0, len(generated))
+	for _, generatedCandidate := range generated {
+		if generatedCandidate.Scenario == nil || generatedCandidate.CandidateSuffix == "" {
+			continue
+		}
+		derived = append(derived, targetDerivedGeneratedScenarioCandidate(base, generatedCandidate))
+	}
+	return derived, nil
+}
+
 func targetDerivedForkActivationSubstitutionCandidates(base TargetScheduleCandidate) ([]TargetScheduleCandidate, error) {
 	if base.TargetID != "langgraph-shell-react" {
 		return nil, nil
@@ -488,6 +516,8 @@ func targetDerivedForkActivationSubstitutionCandidates(base TargetScheduleCandid
 	switch base.TaskID {
 	case target.UnixListenerResidueForkTargetTaskID:
 		generated, err = target.GeneratedUnixListenerForkActivationSubstitutions()
+	case target.OpenFDResidueForkTargetTaskID:
+		generated, err = target.GeneratedOpenFDForkActivationSubstitutions()
 	case target.DeletedOpenFDForkTargetTaskID:
 		generated, err = target.GeneratedDeletedOpenFDForkActivationSubstitutions()
 	case target.InheritedFDLeakTargetTaskID:
@@ -520,6 +550,7 @@ func targetDerivedGeneratedScenarioCandidate(base TargetScheduleCandidate, gener
 	derived.Description = scenario.Description
 	derived.Objective = scenario.Objective
 	derived.DefaultExpectedFiles = append([]string{}, scenario.DefaultExpectedFiles...)
+	derived.LateExpectedFiles = append([]string{}, scenario.LateExpectedFiles...)
 	derived.UsesLateObservation = scenario.UsesLateObservation
 	derived.DefaultLateObserveDelay = scenario.LateObserveDelayMs
 	derived.StateSurface = scenario.StateSurface

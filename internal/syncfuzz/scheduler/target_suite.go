@@ -581,6 +581,9 @@ func targetScenarioForCandidate(candidate TargetScheduleCandidate) *target.Targe
 	if candidate.DefaultExpectedFiles != nil {
 		scenario.DefaultExpectedFiles = append([]string{}, candidate.DefaultExpectedFiles...)
 	}
+	if candidate.LateExpectedFiles != nil {
+		scenario.LateExpectedFiles = append([]string{}, candidate.LateExpectedFiles...)
+	}
 	scenario.UsesLateObservation = candidate.UsesLateObservation
 	if candidate.DefaultLateObserveDelay > 0 {
 		scenario.LateObserveDelayMs = candidate.DefaultLateObserveDelay

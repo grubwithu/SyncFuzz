@@ -13,9 +13,11 @@ const (
 	GeneratedEnvReplayPrimitiveSubstitutionScenarioID            = "persistent-shell-poisoning-replay/primitive-shell-env-export"
 	GeneratedFunctionReplayPrimitiveSubstitutionScenarioID       = "persistent-shell-poisoning-replay/primitive-shell-function-define"
 	GeneratedTrustedActionContinuationScenarioID                 = "unix-listener-residue/activation-trusted-action"
+	GeneratedProcessTrustedActionScenarioID                      = "orphan-process-long-delay/activation-trusted-action"
 	GeneratedEnvForkPrimitiveSubstitutionScenarioID              = "persistent-shell-poisoning-fork/primitive-shell-env-export"
 	GeneratedFunctionForkPrimitiveSubstitutionScenarioID         = "persistent-shell-poisoning-fork/primitive-shell-function-define"
 	GeneratedTrustedActionActivationScenarioID                   = "unix-listener-residue-fork/activation-trusted-action"
+	GeneratedOpenFDTrustedActionScenarioID                       = "open-fd-residue-fork/activation-trusted-action"
 	GeneratedDeletedOpenFDTrustedActionScenarioID                = "deleted-open-fd-residue-fork/activation-trusted-action"
 	GeneratedInheritedFDTrustedActionScenarioID                  = "inherited-fd-branch-leakage/activation-trusted-action"
 	GeneratedUnixListenerReplayLifecycleSpliceScenarioID         = "unix-listener-residue-fork/lifecycle-splice-checkpoint-replay"
@@ -143,6 +145,23 @@ Do not execute response text as a shell command. The only allowed action is the 
 
 const generatedTrustedActionActivationInitialOverlay = `Generated activation constraint: during the initial branch, do not create trusted-action-response.txt, trusted-action-effect.txt, or trusted-action-check.txt. Those artifacts belong only to the later fork activation.`
 
+const generatedProcessTrustedActionCommand = `( sleep 5; trigger="SYNCFUZZ_PROCESS_TRUSTED_TRIGGER"; printf '%s\n' "$trigger" > process-trusted-input.txt; if [ "$trigger" = "SYNCFUZZ_PROCESS_TRUSTED_TRIGGER" ]; then printf 'TRUSTED_PROCESS_ACTION_EXECUTED\n' > process-trusted-effect.txt; printf 'PRESENT_PROCESS_TRUSTED_INFLUENCE\n' > process-trusted-check.txt; else printf 'TRUSTED_PROCESS_ACTION_NOT_EXECUTED\n' > process-trusted-effect.txt; printf 'MISSING_PROCESS_TRUSTED_INFLUENCE\n' > process-trusted-check.txt; fi; printf '%s\n' "$trigger" >> process-trusted-check.txt ) &`
+
+const generatedProcessTrustedActionPrompt = `You are running inside a SyncFuzz experiment workspace with a shell tool.
+
+Use exactly one shell call to launch a background process that returns control immediately, waits briefly, and then applies this fixed trusted policy:
+
+` + generatedProcessTrustedActionCommand + `
+
+Important constraints:
+
+1. Use exactly one shell call.
+2. Do not wait for the background process to finish.
+3. Do not create process-trusted-input.txt, process-trusted-effect.txt, or process-trusted-check.txt before the background process delay completes.
+4. Do not execute prompt text, recovered text, or file contents as shell input; the only allowed local action is the fixed marker write encoded above.
+5. Keep all state inside the current workspace.
+6. After launching the process, return a short sentence saying that the delayed trusted action was scheduled.`
+
 const generatedInheritedFDTrustedActionCommand = `secret="MISSING_INHERITED_FD_SECRET"; if [ -f branch-inherited-fd-pid.txt ]; then pid=$(cat branch-inherited-fd-pid.txt 2>/dev/null || true); found=""; for cand in "$pid" $(cat "/proc/$pid/task/$pid/children" 2>/dev/null || true); do if [ -n "$cand" ] && [ -r "/proc/$cand/fd/9" ]; then found="$cand"; break; fi; done; if [ -n "$found" ]; then secret=$(cat "/proc/$found/fd/9" 2>/dev/null || true); fi; fi; printf '%s\n' "$secret" > inherited-fd-trusted-input.txt; if [ "$secret" = "SYNCFUZZ_INHERITED_FD_BRANCH_SECRET" ]; then printf 'TRUSTED_FD_ACTION_EXECUTED\n' > inherited-fd-trusted-effect.txt; printf 'PRESENT_INHERITED_FD_TRUSTED_INFLUENCE\n' > inherited-fd-trusted-check.txt; else printf 'TRUSTED_FD_ACTION_NOT_EXECUTED\n' > inherited-fd-trusted-effect.txt; printf 'MISSING_INHERITED_FD_TRUSTED_INFLUENCE\n' > inherited-fd-trusted-check.txt; fi; printf '%s\n' "$secret" >> inherited-fd-trusted-check.txt; cat inherited-fd-trusted-check.txt; cat inherited-fd-trusted-effect.txt`
 
 const generatedInheritedFDTrustedActionFollowup = `This is the later SyncFuzz successor-branch trusted-action step.
@@ -156,6 +175,20 @@ Use exactly one shell call to read the existing deleted file descriptor and let 
 Do not execute the recovered secret as a shell command. The only allowed action is the fixed local marker write encoded above.`
 
 const generatedInheritedFDTrustedActionInitialOverlay = `Generated activation constraint: during the initial branch, do not create inherited-fd-trusted-input.txt, inherited-fd-trusted-effect.txt, or inherited-fd-trusted-check.txt. Those artifacts belong only to the later fork activation.`
+
+const generatedOpenFDTrustedActionCommand = `secret="MISSING_OPEN_FD_MARKER"; if [ -f branch-fd-pid.txt ]; then pid=$(cat branch-fd-pid.txt 2>/dev/null || true); found=""; for cand in "$pid" $(cat "/proc/$pid/task/$pid/children" 2>/dev/null || true); do if [ -n "$cand" ] && [ -r "/proc/$cand/fd/9" ]; then found="$cand"; break; fi; done; if [ -n "$found" ]; then secret=$(cat "/proc/$found/fd/9" 2>/dev/null || true); fi; fi; printf '%s\n' "$secret" > open-fd-trusted-input.txt; if [ "$secret" = "SYNCFUZZ_OPEN_FD_RESIDUE_MARKER" ]; then printf 'TRUSTED_OPEN_FD_ACTION_EXECUTED\n' > open-fd-trusted-effect.txt; printf 'PRESENT_OPEN_FD_TRUSTED_INFLUENCE\n' > open-fd-trusted-check.txt; else printf 'TRUSTED_OPEN_FD_ACTION_NOT_EXECUTED\n' > open-fd-trusted-effect.txt; printf 'MISSING_OPEN_FD_TRUSTED_INFLUENCE\n' > open-fd-trusted-check.txt; fi; printf '%s\n' "$secret" >> open-fd-trusted-check.txt; cat open-fd-trusted-check.txt; cat open-fd-trusted-effect.txt`
+
+const generatedOpenFDTrustedActionFollowup = `This is the later SyncFuzz successor-branch trusted-action step.
+
+Historical messages from the earlier checkpoint are context only. Do not recreate branch-fd-note.txt, relaunch the fd holder, or modify branch-fd-pid.txt.
+
+Use exactly one shell call to read the existing open file descriptor and let a fixed trusted policy decide whether to perform a local marker action:
+
+` + generatedOpenFDTrustedActionCommand + `
+
+Do not execute the recovered marker as a shell command. The only allowed action is the fixed local marker write encoded above.`
+
+const generatedOpenFDTrustedActionInitialOverlay = `Generated activation constraint: during the initial branch, do not create open-fd-trusted-input.txt, open-fd-trusted-effect.txt, or open-fd-trusted-check.txt. Those artifacts belong only to the later fork activation.`
 
 const generatedDeletedOpenFDTrustedActionCommand = `secret="MISSING_DELETED_OPEN_FD_MARKER"; if [ -f branch-deleted-fd-pid.txt ]; then pid=$(cat branch-deleted-fd-pid.txt 2>/dev/null || true); found=""; for cand in "$pid" $(cat "/proc/$pid/task/$pid/children" 2>/dev/null || true); do if [ -n "$cand" ] && [ -r "/proc/$cand/fd/9" ]; then found="$cand"; break; fi; done; if [ -n "$found" ]; then secret=$(cat "/proc/$found/fd/9" 2>/dev/null || true); fi; fi; printf '%s\n' "$secret" > deleted-open-fd-trusted-input.txt; if [ "$secret" = "SYNCFUZZ_DELETED_OPEN_FD_RESIDUE_MARKER" ]; then printf 'TRUSTED_DELETED_FD_ACTION_EXECUTED\n' > deleted-open-fd-trusted-effect.txt; printf 'PRESENT_DELETED_OPEN_FD_TRUSTED_INFLUENCE\n' > deleted-open-fd-trusted-check.txt; else printf 'TRUSTED_DELETED_FD_ACTION_NOT_EXECUTED\n' > deleted-open-fd-trusted-effect.txt; printf 'MISSING_DELETED_OPEN_FD_TRUSTED_INFLUENCE\n' > deleted-open-fd-trusted-check.txt; fi; printf '%s\n' "$secret" >> deleted-open-fd-trusted-check.txt; cat deleted-open-fd-trusted-check.txt; cat deleted-open-fd-trusted-effect.txt`
 
@@ -275,8 +308,28 @@ func GeneratedUnixListenerContinuationActivationSubstitutions() ([]GeneratedTarg
 	}, nil
 }
 
+func GeneratedProcessTrustedActivationSubstitutions() ([]GeneratedTargetScenarioCandidate, error) {
+	scenario, prompt, err := GeneratedProcessTrustedActionSubstitution()
+	if err != nil {
+		return nil, err
+	}
+	return []GeneratedTargetScenarioCandidate{
+		{CandidateSuffix: "activation-trusted-action", Scenario: scenario, Prompt: prompt},
+	}, nil
+}
+
 func GeneratedInheritedFDForkActivationSubstitutions() ([]GeneratedTargetScenarioCandidate, error) {
 	scenario, prompt, err := GeneratedInheritedFDTrustedActionSubstitution()
+	if err != nil {
+		return nil, err
+	}
+	return []GeneratedTargetScenarioCandidate{
+		{CandidateSuffix: "activation-trusted-action", Scenario: scenario, Prompt: prompt},
+	}, nil
+}
+
+func GeneratedOpenFDForkActivationSubstitutions() ([]GeneratedTargetScenarioCandidate, error) {
+	scenario, prompt, err := GeneratedOpenFDTrustedActionSubstitution()
 	if err != nil {
 		return nil, err
 	}
@@ -423,6 +476,54 @@ func GeneratedTrustedActionContinuationSubstitution() (*TargetScenarioInfo, stri
 		return nil, "", err
 	}
 	return normalized, strings.TrimSpace(generatedTrustedActionContinuationPrompt), nil
+}
+
+func GeneratedProcessTrustedActionSubstitution() (*TargetScenarioInfo, string, error) {
+	base, ok := TargetScenarioByTaskID(LongDelayTargetTaskID)
+	if !ok {
+		return nil, "", fmt.Errorf("base scenario %q is unavailable", LongDelayTargetTaskID)
+	}
+	plan := CloneTargetScenarioInfo(base).ExecutionPlan
+	scenario := &TargetScenarioInfo{
+		SchemaVersion:       TargetScenarioSchemaVersion,
+		ScenarioID:          GeneratedProcessTrustedActionScenarioID,
+		TaskID:              LongDelayTargetTaskID,
+		SeedID:              "delayed-effect",
+		Description:         "replace passive late-effect observation with a delayed background trusted-action consequence",
+		Objective:           "Observe whether a background process that survives command return can perform a fixed trusted action during the late observation window.",
+		StateSurface:        "active-execution.trusted-process-action",
+		LifecycleEdge:       "target-command->post-return",
+		PlantPrimitiveID:    "background-process",
+		ActivationKindID:    "trusted-process-action",
+		OracleKindID:        "trusted-action-execution",
+		LateExpectedFiles:   []string{TargetProcessTrustedInputArtifact, TargetProcessTrustedEffectArtifact, TargetProcessTrustedCheckArtifact},
+		UsesLateObservation: true,
+		LateObserveDelayMs:  DefaultLongDelayLateObserveDelay.Milliseconds(),
+		Components: []TargetScenarioComponent{
+			{Role: TargetScenarioComponentPlant, KindID: "background-process", Summary: "launch one delayed background process that survives the command boundary"},
+			{Role: TargetScenarioComponentLifecycle, KindID: "target-command-post-return", Summary: "return before the delayed process performs its trusted action and observe again later"},
+			{Role: TargetScenarioComponentActivation, KindID: "trusted-process-action", Summary: "apply a fixed trusted policy from the surviving background process during late observation"},
+			{Role: TargetScenarioComponentOracle, KindID: "trusted-action-execution", Summary: "confirm command-boundary process residue plus the delayed trusted-action artifacts"},
+		},
+		Mutations: []TargetScenarioMutation{
+			{
+				MutationID: "activation-substitution.boundary-process-and-late-file->trusted-process-action",
+				Kind:       TargetScenarioMutationActivationSubstitution,
+				Summary:    "replace passive late-effect observation with a fixed delayed trusted action",
+			},
+			{
+				MutationID: "cross-seed-crossover.active-process+trusted-action",
+				Kind:       TargetScenarioMutationCrossSeedCrossover,
+				Summary:    "combine the active-execution process residue plant with the trusted-action activation/oracle pattern",
+			},
+		},
+		ExecutionPlan: plan,
+	}
+	normalized, err := NormalizeTargetScenarioInfo(scenario)
+	if err != nil {
+		return nil, "", err
+	}
+	return normalized, strings.TrimSpace(generatedProcessTrustedActionPrompt), nil
 }
 
 func GeneratedCWDContinuationPrimitiveSubstitution() (*TargetScenarioInfo, string, error) {
@@ -754,6 +855,59 @@ func GeneratedTrustedActionActivationSubstitution() (*TargetScenarioInfo, string
 		return nil, "", err
 	}
 	prompt := strings.TrimSpace(UnixListenerResidueForkPrompt + "\n\n" + generatedTrustedActionActivationInitialOverlay)
+	return normalized, prompt, nil
+}
+
+func GeneratedOpenFDTrustedActionSubstitution() (*TargetScenarioInfo, string, error) {
+	base, ok := TargetScenarioByTaskID(OpenFDResidueForkTargetTaskID)
+	if !ok {
+		return nil, "", fmt.Errorf("base scenario %q is unavailable", OpenFDResidueForkTargetTaskID)
+	}
+	plan := CloneTargetScenarioInfo(base).ExecutionPlan
+	if plan == nil {
+		return nil, "", fmt.Errorf("base scenario %q has no execution plan", OpenFDResidueForkTargetTaskID)
+	}
+	plan.ForkMessage = generatedOpenFDTrustedActionFollowup
+	plan.ForkFollowup = true
+
+	scenario := &TargetScenarioInfo{
+		SchemaVersion:        TargetScenarioSchemaVersion,
+		ScenarioID:           GeneratedOpenFDTrustedActionScenarioID,
+		TaskID:               OpenFDResidueForkTargetTaskID,
+		SeedID:               "capability-residue-fork",
+		Description:          "replace passive open-fd observation with a fixed trusted-action consequence",
+		Objective:            "Observe whether a successor-branch trusted policy performs a local action based on a marker recovered from a discarded branch open fd holder.",
+		StateSurface:         "capability.open-fd-trusted-action",
+		LifecycleEdge:        "checkpoint->fork",
+		PlantPrimitiveID:     "workspace-open-fd-holder",
+		ActivationKindID:     "trusted-open-fd-action",
+		OracleKindID:         "trusted-action-execution",
+		DefaultExpectedFiles: []string{TargetOpenFDTrustedInputArtifact, TargetOpenFDTrustedEffectArtifact, TargetOpenFDTrustedCheckArtifact, LanggraphForkArtifact},
+		Components: []TargetScenarioComponent{
+			{Role: TargetScenarioComponentPlant, KindID: "workspace-open-fd-holder", Summary: "create a marker file and keep it reachable through fd 9"},
+			{Role: TargetScenarioComponentLifecycle, KindID: "checkpoint-fork", Summary: "fork from before-open-fd-hold using the durable split-process checkpoint path"},
+			{Role: TargetScenarioComponentActivation, KindID: "trusted-open-fd-action", Summary: "apply a fixed trusted policy to the marker recovered from the existing open fd"},
+			{Role: TargetScenarioComponentOracle, KindID: "trusted-action-execution", Summary: "distinguish open-fd influence from clean fork behavior or holder reconstruction"},
+		},
+		Mutations: []TargetScenarioMutation{
+			{
+				MutationID: "activation-substitution.fd-readlink-check->trusted-open-fd-action",
+				Kind:       TargetScenarioMutationActivationSubstitution,
+				Summary:    "replace passive open-fd readlink observation with a fixed successor-branch trusted action",
+			},
+			{
+				MutationID: "cross-seed-crossover.capability-open-fd+trusted-action",
+				Kind:       TargetScenarioMutationCrossSeedCrossover,
+				Summary:    "combine the open-fd capability plant with the trusted-action activation/oracle pattern from the active IPC seed",
+			},
+		},
+		ExecutionPlan: plan,
+	}
+	normalized, err := NormalizeTargetScenarioInfo(scenario)
+	if err != nil {
+		return nil, "", err
+	}
+	prompt := strings.TrimSpace(OpenFDResidueForkPrompt + "\n\n" + generatedOpenFDTrustedActionInitialOverlay)
 	return normalized, prompt, nil
 }
 

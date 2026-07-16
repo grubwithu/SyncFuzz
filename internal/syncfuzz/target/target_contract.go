@@ -357,6 +357,17 @@ func TargetContractProfileFor(targetID string) *TargetContractProfile {
 				Description:    "Fork from before the fd-holder launch should not preserve the later open workspace file descriptor across the selected checkpoint boundary.",
 			},
 			{
+				RuleID:         "capability-open-fd-trusted-action-generated-fork-boundary",
+				TaskID:         OpenFDResidueForkTargetTaskID,
+				ScenarioID:     GeneratedOpenFDTrustedActionScenarioID,
+				StateSurface:   "capability.open-fd-trusted-action",
+				LifecycleEdge:  "checkpoint->fork",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Fork from before the fd-holder launch should not let a discarded open-fd marker influence a successor-branch trusted action.",
+			},
+			{
 				RuleID:         "runtime-deleted-open-fd-fork-boundary",
 				TaskID:         DeletedOpenFDForkTargetTaskID,
 				StateSurface:   "runtime.deleted-open-fd",
@@ -480,6 +491,17 @@ func TargetContractProfileFor(targetID string) *TargetContractProfile {
 				EvidenceSource: "experiment",
 				Description:    "The long-delay orphan-process task is treated as observation-first rather than as a stable recovery-contract check.",
 			},
+			{
+				RuleID:         "process-trusted-action-post-return-boundary",
+				TaskID:         LongDelayTargetTaskID,
+				ScenarioID:     GeneratedProcessTrustedActionScenarioID,
+				StateSurface:   "active-execution.trusted-process-action",
+				LifecycleEdge:  "target-command->post-return",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "A target command boundary should not leave a background process able to perform a future trusted action after the command has returned.",
+			},
 		},
 	}
 }
@@ -594,6 +616,9 @@ func targetContractObservedOutcomeForRule(rule TargetContractRule, oracle Target
 	if rule.ScenarioID == GeneratedTrustedActionContinuationScenarioID {
 		return targetContractObservedWithinRunOutcome("trusted-action influence", oracle)
 	}
+	if rule.ScenarioID == GeneratedProcessTrustedActionScenarioID {
+		return targetContractObservedPostReturnProcessOutcome("process trusted-action influence", oracle)
+	}
 	if rule.ScenarioID == GeneratedEnvReplayPrimitiveSubstitutionScenarioID {
 		return targetContractObservedWorkspaceReplayOutcome("environment-variable residue", oracle)
 	}
@@ -608,6 +633,9 @@ func targetContractObservedOutcomeForRule(rule TargetContractRule, oracle Target
 	}
 	if rule.ScenarioID == GeneratedTrustedActionActivationScenarioID {
 		return targetContractObservedWorkspaceForkOutcome("trusted-action influence", oracle)
+	}
+	if rule.ScenarioID == GeneratedOpenFDTrustedActionScenarioID {
+		return targetContractObservedWorkspaceForkOutcome("open-fd trusted-action influence", oracle)
 	}
 	if rule.ScenarioID == GeneratedDeletedOpenFDTrustedActionScenarioID {
 		return targetContractObservedWorkspaceForkOutcome("deleted-open-fd trusted-action influence", oracle)
@@ -716,6 +744,17 @@ func targetContractObservedWithinRunOutcome(name string, oracle TargetOracleResu
 		return targetContractObservedPreserve, "later shell steps preserved " + name + " within the same persistent shell session", true
 	case TargetOracleStatusNegative:
 		return targetContractObservedReset, "later shell steps did not preserve " + name + " within the same persistent shell session", true
+	default:
+		return "", "", false
+	}
+}
+
+func targetContractObservedPostReturnProcessOutcome(name string, oracle TargetOracleResult) (targetContractObservedOutcome, string, bool) {
+	switch oracle.Status {
+	case TargetOracleStatusConfirmed:
+		return targetContractObservedPreserve, "post-return background process performed " + name, true
+	case TargetOracleStatusNegative:
+		return targetContractObservedReset, "post-return background process did not perform " + name, true
 	default:
 		return "", "", false
 	}

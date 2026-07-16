@@ -273,7 +273,7 @@ Phase 5B 主线：
 
 - 让 `Scenario IR` 成为 testcase 的主事实来源，而不是继续扩大手写 task catalog；
 - 为 LangGraph 写出第一份 `Recovery Contract Profile`，并把 target 结果稳定拆成 residue observation、contract interpretation、activation consequence 三层；
-- 已把完整 Scenario IR 接入 real-target matrix / suite / campaign，并形成第一组 portable same-run primitive-substitution candidate `persistent-shell-poisoning/primitive-shell-env-export` / `persistent-shell-poisoning/primitive-shell-function-define` / `persistent-shell-poisoning/primitive-shell-cwd-change` / `persistent-shell-poisoning/primitive-shell-umask-set`、`PATH replay -> env/function` primitive-substitution pair `persistent-shell-poisoning-replay/primitive-shell-env-export` / `persistent-shell-poisoning-replay/primitive-shell-function-define`、第一条 portable same-run trusted-activation candidate `unix-listener-residue/activation-trusted-action`、`PATH -> env/function` fork primitive-substitution family、Unix-listener / deleted-open-FD / inherited-FD trusted-action activation substitution、deleted-open-FD 与 inherited-FD trusted-action 的显式 `cross-seed-crossover` provenance、`unix-listener-residue-fork/lifecycle-splice-checkpoint-replay`，以及 `phase-shift-single-process`；后续重点是继续扩展 compatibility-aware family，再实现更广的 `lifecycle splice`、cross-seed family 与 `fault-phase / phase-shift mutation`；
+- 已把完整 Scenario IR 接入 real-target matrix / suite / campaign，并形成第一组 portable same-run primitive-substitution candidate `persistent-shell-poisoning/primitive-shell-env-export` / `persistent-shell-poisoning/primitive-shell-function-define` / `persistent-shell-poisoning/primitive-shell-cwd-change` / `persistent-shell-poisoning/primitive-shell-umask-set`、`PATH replay -> env/function` primitive-substitution pair `persistent-shell-poisoning-replay/primitive-shell-env-export` / `persistent-shell-poisoning-replay/primitive-shell-function-define`、第一条 portable same-run trusted-activation candidate `unix-listener-residue/activation-trusted-action`、`orphan-process-long-delay/activation-trusted-action`、`PATH -> env/function` fork primitive-substitution family、Unix-listener / open-FD / deleted-open-FD / inherited-FD trusted-action activation substitution、process / open-FD / deleted-open-FD / inherited-FD trusted-action 的显式 `cross-seed-crossover` provenance、`unix-listener-residue-fork/lifecycle-splice-checkpoint-replay`，以及 `phase-shift-single-process`；后续重点是继续扩展 compatibility-aware family，再实现更广的 `lifecycle splice`、cross-seed family 与 `fault-phase / phase-shift mutation`；
 - 把 `targets/langgraph_shell_react/` 从“单进程内 durable checkpointer”继续推进到“跨进程恢复可消费的 durable checkpointer”；
 - 把当前 `LangGraph` / `MAF` 已共享的 same-run portable scenario 继续扩展到更高价值 family，并让 `MAF` 进入同一套 `campaign / replay / verify / minimize`；
 - minimization 已从 prompt / execution-plan reduction 起步扩展到 concrete command line reduction、optional `Scenario IR component reduction`、component summary reduction、mutation provenance reduction、plant metadata reduction、impact-mode lifecycle / activation / oracle metadata reduction、fork activation message line reduction，并提供 `exact / semantic / impact` 三档 fidelity；下一步继续覆盖 semantic activation-command rewriting 与完整 lifecycle command rewriting；
@@ -291,15 +291,15 @@ Phase 5B 优先级重排：
   4. 把已经出现的 `lifecycle splice` 与 FD trusted-action `cross-seed-crossover` 推广成更广的 generated family；
   5. 把 minimizer 从 concrete command line reduction、optional `IR component reduction`、component summary reduction、mutation provenance reduction、plant / lifecycle / activation / oracle metadata reduction 和 fork activation message reduction 继续扩展到 semantic activation-command rewriting；
   6. 运行 `random / fixed enumeration / feedback-guided / full SyncFuzz` 四组小预算实验；
-  7. 把已生成的 Unix-listener trusted-action 场景扩展到 FD / process residue 与更多 trusted consequence。
+  7. 把已生成的 Unix-listener / process / FD trusted-action 场景扩展到更多 trusted consequence。
 
-其中 process 线也要升级：`orphan-process-long-delay` 后续不只证明“命令返回后子进程仍存活”，还要推进到 discarded branch 中残留执行主体能够等待并操纵 future trusted state 的实验。
+其中 process 线也已经从“命令返回后子进程仍存活”推进到第一条 `orphan-process-long-delay/activation-trusted-action`：残留执行主体会在 late observation window 中写入固定 trusted-action artifact。后续还要把它推进到 discarded branch / checkpoint 边界中的 future trusted state 实验。
 
 Phase 5B 退出标准：
 
 1. `Scenario IR` 成为 testcase 的主事实来源；
 2. 至少形成四类 semantic mutation：`primitive substitution`、`activation substitution`、`lifecycle splice`、`fault-phase / phase-shift mutation`；
-3. 至少支持一次 `cross-seed crossover`；当前已有 deleted-open-FD 与 inherited-FD trusted-action crossover provenance，后续需要扩展到更系统的可枚举 family；
+3. 至少支持一次 `cross-seed crossover`；当前已有 process、open-FD、deleted-open-FD 与 inherited-FD trusted-action crossover provenance，后续需要扩展到更系统的可枚举 family；
 4. minimizer 可以删除 `IR component`，而不只删除 prompt 行或 `ExecutionPlan` 字段；
 5. `LangGraph` 和 `MAF` 都能消费同一 portable scenario；
 6. 两个 target 都能进入 `campaign / replay / verify / minimize`；

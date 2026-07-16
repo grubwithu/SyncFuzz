@@ -376,6 +376,67 @@ func TestEvaluateTargetContractInterpretationGeneratedTrustedActionUsesScenarioR
 	}
 }
 
+func TestEvaluateTargetContractInterpretationGeneratedProcessTrustedActionUsesScenarioRule(t *testing.T) {
+	profile := target.TargetContractProfileFor("langgraph-shell-react")
+	scenario, _, err := target.GeneratedProcessTrustedActionSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedProcessTrustedActionSubstitution failed: %v", err)
+	}
+	violation := target.EvaluateTargetContractInterpretationForScenario(profile, target.LongDelayTargetTaskID, scenario, target.TargetOracleResult{
+		Name:        target.GeneratedProcessTrustedActionScenarioID,
+		Status:      target.TargetOracleStatusConfirmed,
+		Confirmed:   true,
+		Attribution: target.TargetOracleAttributionRuntimeResidue,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.GeneratedProcessTrustedActionScenarioID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if violation == nil || violation.RuleID != "process-trusted-action-post-return-boundary" || violation.Status != target.TargetContractStatusViolation {
+		t.Fatalf("unexpected process trusted-action contract interpretation: %#v", violation)
+	}
+	clean := target.EvaluateTargetContractInterpretationForScenario(profile, target.LongDelayTargetTaskID, scenario, target.TargetOracleResult{
+		Name:   target.GeneratedProcessTrustedActionScenarioID,
+		Status: target.TargetOracleStatusNegative,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.GeneratedProcessTrustedActionScenarioID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if clean == nil || clean.Status != target.TargetContractStatusConsistent {
+		t.Fatalf("expected clean process trusted-action outcome to satisfy reset contract: %#v", clean)
+	}
+}
+
+func TestEvaluateTargetContractInterpretationGeneratedOpenFDTrustedActionUsesScenarioRule(t *testing.T) {
+	profile := target.TargetContractProfileFor("langgraph-shell-react")
+	scenario, _, err := target.GeneratedOpenFDTrustedActionSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedOpenFDTrustedActionSubstitution failed: %v", err)
+	}
+	violation := target.EvaluateTargetContractInterpretationForScenario(profile, target.OpenFDResidueForkTargetTaskID, scenario, target.TargetOracleResult{
+		Name:        target.GeneratedOpenFDTrustedActionScenarioID,
+		Status:      target.TargetOracleStatusConfirmed,
+		Confirmed:   true,
+		Attribution: target.TargetOracleAttributionRuntimeResidue,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.GeneratedOpenFDTrustedActionScenarioID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if violation == nil || violation.RuleID != "capability-open-fd-trusted-action-generated-fork-boundary" || violation.Status != target.TargetContractStatusViolation {
+		t.Fatalf("unexpected open-fd trusted-action contract interpretation: %#v", violation)
+	}
+	clean := target.EvaluateTargetContractInterpretationForScenario(profile, target.OpenFDResidueForkTargetTaskID, scenario, target.TargetOracleResult{
+		Name:        target.GeneratedOpenFDTrustedActionScenarioID,
+		Status:      target.TargetOracleStatusNegative,
+		Attribution: target.TargetOracleAttributionCleanFork,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.GeneratedOpenFDTrustedActionScenarioID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if clean == nil || clean.Status != target.TargetContractStatusConsistent {
+		t.Fatalf("expected clean open-fd trusted-action outcome to satisfy reset contract: %#v", clean)
+	}
+}
+
 func TestEvaluateTargetContractInterpretationGeneratedInheritedFDTrustedActionUsesScenarioRule(t *testing.T) {
 	profile := target.TargetContractProfileFor("langgraph-shell-react")
 	scenario, _, err := target.GeneratedInheritedFDTrustedActionSubstitution()

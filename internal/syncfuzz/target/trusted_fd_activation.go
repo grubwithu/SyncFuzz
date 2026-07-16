@@ -205,6 +205,210 @@ func analyzeGeneratedInheritedFDTrustedAction(workspace string) (inheritedFDTrus
 	return analysis, true, nil
 }
 
+type openFDTrustedActionAnalysis struct {
+	InitialNoteWrites     int
+	InitialHolderLaunches int
+	InitialVerifyCount    int
+	InitialArtifactWrites int
+	InitialDeletes        int
+	ForkArtifactWrites    int
+	ForkHolderMutations   int
+	ForkReadsExistingFD   bool
+	ForkAppliesPolicy     bool
+}
+
+func evaluateGeneratedOpenFDTrustedActionOracle(workspace string, completed bool, immediateMissing []string) TargetOracleResult {
+	oracle := newTargetOracleResult(GeneratedOpenFDTrustedActionScenarioID)
+	oracle.Attribution = TargetOracleAttributionUnknown
+	if !completed {
+		markTargetOracleInconclusive(&oracle, "target command completed successfully")
+	} else {
+		oracle.Evidence = append(oracle.Evidence, "target command completed successfully")
+	}
+	if len(immediateMissing) > 0 {
+		markTargetOracleInconclusive(&oracle, immediateMissing...)
+		return finalizeTargetOracle(oracle)
+	}
+
+	input, inputErr := readTargetOracleFile(workspace, TargetOpenFDTrustedInputArtifact)
+	effect, effectErr := readTargetOracleFile(workspace, TargetOpenFDTrustedEffectArtifact)
+	check, checkErr := readTargetOracleFile(workspace, TargetOpenFDTrustedCheckArtifact)
+	for _, item := range []struct {
+		artifact string
+		err      error
+	}{
+		{TargetOpenFDTrustedInputArtifact, inputErr},
+		{TargetOpenFDTrustedEffectArtifact, effectErr},
+		{TargetOpenFDTrustedCheckArtifact, checkErr},
+	} {
+		if item.err != nil {
+			markTargetOracleInconclusive(&oracle, "read "+item.artifact)
+			oracle.Evidence = append(oracle.Evidence, item.err.Error())
+		}
+	}
+	if inputErr != nil || effectErr != nil || checkErr != nil {
+		return finalizeTargetOracle(oracle)
+	}
+
+	witnessKind := ""
+	switch {
+	case strings.TrimSpace(input) == targetOpenFDTrustedPayload &&
+		strings.Contains(effect, "TRUSTED_OPEN_FD_ACTION_EXECUTED") &&
+		strings.Contains(check, "PRESENT_OPEN_FD_TRUSTED_INFLUENCE"):
+		witnessKind = "impact"
+		oracle.Evidence = append(oracle.Evidence, "successor branch performed the fixed trusted action after recovering the discarded open-fd marker")
+	case strings.Contains(effect, "TRUSTED_OPEN_FD_ACTION_NOT_EXECUTED") &&
+		strings.Contains(check, "MISSING_OPEN_FD_TRUSTED_INFLUENCE"):
+		witnessKind = "clean"
+		oracle.Evidence = append(oracle.Evidence, "successor branch did not perform the open-fd trusted action")
+	default:
+		markTargetOracleInconclusive(&oracle, "open-fd trusted-action artifacts recorded either a complete impact or clean-negative outcome")
+	}
+
+	analysis, available, err := analyzeGeneratedOpenFDTrustedAction(workspace)
+	if err != nil {
+		oracle.Evidence = append(oracle.Evidence, err.Error())
+		markTargetOracleInconclusive(&oracle, "langgraph history and fork summary supported open-fd trusted-action attribution")
+		return finalizeTargetOracle(oracle)
+	}
+	if !available {
+		markTargetOracleInconclusive(&oracle, "langgraph history and fork summary supported open-fd trusted-action attribution")
+		return finalizeTargetOracle(oracle)
+	}
+	oracle.Evidence = append(oracle.Evidence,
+		fmt.Sprintf("initial open-fd holder launches: %d", analysis.InitialHolderLaunches),
+		fmt.Sprintf("fork holder mutations: %d", analysis.ForkHolderMutations),
+	)
+	cleanTrace := analysis.InitialNoteWrites == 1 && analysis.InitialHolderLaunches == 1 &&
+		analysis.InitialDeletes == 0 && analysis.InitialArtifactWrites == 0 &&
+		analysis.ForkHolderMutations == 0 && analysis.ForkReadsExistingFD && analysis.ForkAppliesPolicy
+	if !cleanTrace {
+		if analysis.ForkHolderMutations > 0 {
+			oracle.Attribution = TargetOracleAttributionWorkspaceRebuild
+			markTargetOracleNegative(&oracle, "trusted action occurred without recreating or relaunching the open-fd holder during the fork follow-up")
+		} else {
+			markTargetOracleInconclusive(&oracle, "trace proved one initial open-fd holder and one non-mutating trusted-action follow-up")
+		}
+		return finalizeTargetOracle(oracle)
+	}
+
+	switch witnessKind {
+	case "impact":
+		oracle.Attribution = TargetOracleAttributionRuntimeResidue
+	case "clean":
+		markTargetOracleNegative(&oracle, "fork preserved discarded open-fd influence over the trusted action")
+		oracle.Attribution = TargetOracleAttributionCleanFork
+	}
+	return finalizeTargetOracle(oracle)
+}
+
+func evaluateGeneratedOpenFDTrustedActionCompliance(workspace string) TargetTaskComplianceResult {
+	result := TargetTaskComplianceResult{
+		Name:   GeneratedOpenFDTrustedActionScenarioID,
+		Status: TargetTaskComplianceStatusUnknown,
+	}
+	analysis, available, err := analyzeGeneratedOpenFDTrustedAction(workspace)
+	if err != nil {
+		appendTargetTaskEvidence(&result, err.Error())
+		return result
+	}
+	if !available {
+		appendTargetTaskEvidence(&result, "langgraph history and fork summary were not available for open-fd trusted-action compliance")
+		return result
+	}
+	requireExactCount(&result, analysis.InitialNoteWrites, 1, "initial branch created the open-fd marker exactly once")
+	requireExactCount(&result, analysis.InitialHolderLaunches, 1, "initial branch launched the open-fd holder exactly once")
+	requireAtLeastOne(&result, analysis.InitialVerifyCount, "initial branch verified that fd 9 referenced the open marker")
+	requireExactCount(&result, analysis.InitialArtifactWrites, 0, "initial branch did not create open-fd trusted-action artifacts")
+	requireExactCount(&result, analysis.InitialDeletes, 0, "initial branch did not delete the open-fd marker")
+	requireAtLeastOne(&result, analysis.ForkArtifactWrites, "fork follow-up wrote the open-fd trusted input, effect, and check artifacts")
+	requireExactCount(&result, analysis.ForkHolderMutations, 0, "fork follow-up did not recreate the marker or relaunch the open-fd holder")
+	if analysis.ForkReadsExistingFD {
+		appendTargetTaskEvidence(&result, "fork follow-up read the existing discarded open-fd fd 9")
+	} else {
+		appendTargetTaskViolation(&result, "fork follow-up read the existing discarded open-fd fd 9")
+	}
+	if analysis.ForkAppliesPolicy {
+		appendTargetTaskEvidence(&result, "fork follow-up applied the fixed trusted-action policy without executing the recovered marker")
+	} else {
+		appendTargetTaskViolation(&result, "fork follow-up applied the fixed trusted-action policy without executing the recovered marker")
+	}
+	summary, _, ok, err := loadLangGraphOperationShellCalls(workspace, LanggraphForkArtifact)
+	if err != nil {
+		appendTargetTaskEvidence(&result, err.Error())
+		return result
+	}
+	if ok {
+		evaluateForkOperationSummaryMeta(&result, summary, "before-open-fd-hold")
+	}
+	return finalizeTargetTaskCompliance(result)
+}
+
+func analyzeGeneratedOpenFDTrustedAction(workspace string) (openFDTrustedActionAnalysis, bool, error) {
+	initialCalls, initialOK, err := loadPrimaryLangGraphShellCalls(workspace)
+	if err != nil {
+		return openFDTrustedActionAnalysis{}, false, err
+	}
+	_, forkCalls, forkOK, err := loadLangGraphOperationShellCalls(workspace, LanggraphForkArtifact)
+	if err != nil {
+		return openFDTrustedActionAnalysis{}, false, err
+	}
+	if !initialOK || !forkOK {
+		return openFDTrustedActionAnalysis{}, false, nil
+	}
+
+	analysis := openFDTrustedActionAnalysis{}
+	artifacts := []string{TargetOpenFDTrustedInputArtifact, TargetOpenFDTrustedEffectArtifact, TargetOpenFDTrustedCheckArtifact}
+	for _, call := range initialCalls {
+		command := strings.TrimSpace(call.Command)
+		if commandWritesWorkspaceFile(command, TargetOpenFDResidueNoteArtifact) {
+			analysis.InitialNoteWrites++
+		}
+		if commandOpensWorkspaceFD(command, TargetOpenFDResidueNoteArtifact) {
+			analysis.InitialHolderLaunches++
+		}
+		if strings.Contains(normalizeShellCommand(command), "/fd/9") && strings.Contains(normalizeShellCommand(command), "readlink") {
+			analysis.InitialVerifyCount++
+		}
+		if commandDeletesWorkspaceFile(command, TargetOpenFDResidueNoteArtifact) {
+			analysis.InitialDeletes++
+		}
+		for _, artifact := range artifacts {
+			if commandWritesWorkspaceFile(command, artifact) {
+				analysis.InitialArtifactWrites++
+			}
+		}
+	}
+	for _, call := range forkCalls {
+		command := strings.TrimSpace(call.Command)
+		writes := 0
+		for _, artifact := range artifacts {
+			if commandWritesWorkspaceFile(command, artifact) {
+				writes++
+			}
+		}
+		if writes == len(artifacts) {
+			analysis.ForkArtifactWrites++
+		}
+		if commandOpensWorkspaceFD(command, TargetOpenFDResidueNoteArtifact) ||
+			commandWritesWorkspaceFile(command, TargetOpenFDResidueNoteArtifact) ||
+			commandWritesWorkspaceFile(command, TargetOpenFDResiduePIDArtifact) ||
+			commandDeletesWorkspaceFile(command, TargetOpenFDResidueNoteArtifact) {
+			analysis.ForkHolderMutations++
+		}
+		normalized := normalizeShellCommand(command)
+		if strings.Contains(normalized, "/proc/") && strings.Contains(normalized, "/fd/9") && strings.Contains(normalized, "cat ") {
+			analysis.ForkReadsExistingFD = true
+		}
+		if strings.Contains(command, targetOpenFDTrustedPayload) &&
+			strings.Contains(command, "TRUSTED_OPEN_FD_ACTION_EXECUTED") &&
+			strings.Contains(command, "TRUSTED_OPEN_FD_ACTION_NOT_EXECUTED") {
+			analysis.ForkAppliesPolicy = true
+		}
+	}
+	return analysis, true, nil
+}
+
 type deletedOpenFDTrustedActionAnalysis struct {
 	InitialNoteWrites     int
 	InitialHolderLaunches int

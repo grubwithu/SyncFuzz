@@ -305,7 +305,7 @@ observe
 - matrix / suite 现在会把 candidate 的完整 Scenario IR 直接交给 `target run`，而不是在执行时仅按 `task_id` 重新拼回 built-in metadata。生成 candidate 的 scenario identity、seed、components、mutation provenance 和 execution plan 会一起固化进 `target-task.json`，并被 corpus replay 与 minimization trial 原样恢复。这补上了“generator 产生了新 IR，但 artifact 又退回 task 默认值”的断点，为继续扩展 primitive / activation substitution 与实现 IR component reduction 提供稳定事实来源。
 - 第一条真正改变执行语义的 generator 已落地：所有 split-process checkpoint candidate 会自动派生 `phase-shift-single-process` sibling，在保留 task / activation / oracle 的同时，把 initial 与 resumed phase 从跨进程改成同进程执行。该 candidate 会携带 `phase-shift.process-mode.single-process` mutation provenance，并进入正常 feedback / coverage / campaign 路径。
 - 第一组可执行 `primitive substitution` 已进入 matrix，并开始分成 same-run / replay / fork 三层：PATH same-run seed 现在会自动派生 `persistent-shell-poisoning/primitive-shell-env-export`、`persistent-shell-poisoning/primitive-shell-function-define`、`persistent-shell-poisoning/primitive-shell-cwd-change` 与 `persistent-shell-poisoning/primitive-shell-umask-set`，保留 `run -> continue` lifecycle，并通过通用 `env-residue` / `function-residue` / `cwd-residue` / `umask-residue` oracle 与 compliance dispatch 同时覆盖 LangGraph 和 MAF；LangGraph 还会为这些 generated same-run scenario 分别绑定 `shell-env-generated-within-run`、`shell-function-generated-within-run`、`shell-cwd-generated-within-run` 与 `shell-umask-generated-within-run` contract rule，而不是退回 PATH baseline 解释。PATH replay seed 现在也会自动派生 `persistent-shell-poisoning-replay/primitive-shell-env-export` 与 `persistent-shell-poisoning-replay/primitive-shell-function-define`，保留 `checkpoint -> replay` lifecycle，并分别生成 `before-env-export` / `before-function-define` selector与 replay-safe prompt；它们的 oracle / compliance / contract 会显式区分 direct replay residue、replay-side reexecution 与 final-call reconstruction。PATH fork seed 则继续自动派生 `primitive-shell-env-export` 与 `primitive-shell-function-define`，保留 `checkpoint -> fork` lifecycle，同时分别生成 `before-env-export` / `before-function-define` selector、初始 branch prompt 与 fork activation message。每个 candidate 的 oracle、compliance、contract rule 和 mismatch signature 都由生成后的 Scenario IR 决定，不会退回 PATH task 的默认解释。这已经形成一个小型 compatibility-aware family，但尚不能表述为任意 primitive cross-product。
-- 第一组可执行 `activation substitution` 已进入 matrix，并开始分成 same-run 与 fork 两层：`unix-listener-residue` seed 现在会派生 `unix-listener-residue/activation-trusted-action`，保留 `run -> continue` lifecycle，但把被动 socket reachability 替换为 later shell call 中的固定 trusted policy；同一 generated Scenario IR 已可同时在 LangGraph 和 MAF 上执行。`unix-listener-residue-fork` seed 仍会派生 `activation-trusted-action`，保留初始 branch 的 Unix listener plant 与 `checkpoint -> fork` lifecycle，但把被动 socket reachability 替换为 successor branch 中的固定 trusted policy。`deleted-open-fd-residue-fork` 与 `inherited-fd-branch-leakage` seed 现在也会派生同名后缀的 trusted-action candidate，保留 discarded-branch fd holder 与 fork lifecycle，但把被动 fd observation 替换为固定 trusted policy 与本地 consequence artifact；这两个 FD candidate 现在都显式携带 `cross-seed-crossover` mutation provenance，表示 capability-residue plant 与 active-IPC trusted-action activation/oracle pattern 已经形成一个小型受控组合 family。它们的 follow-up 都只依据固定 policy 决定是否写入本地 marker，不执行 response text、recovered marker 或 recovered secret；oracle / compliance 会联合检查 artifact 与 trace，并把 listener relaunch、fd-holder relaunch 或其他 reconstruction 归类为 reconstruction。
+- 第一组可执行 `activation substitution` 已进入 matrix，并开始分成 same-run、post-return 与 fork 三层：`unix-listener-residue` seed 现在会派生 `unix-listener-residue/activation-trusted-action`，保留 `run -> continue` lifecycle，但把被动 socket reachability 替换为 later shell call 中的固定 trusted policy；同一 generated Scenario IR 已可同时在 LangGraph 和 MAF 上执行。`orphan-process-long-delay` 现在会派生 `activation-trusted-action`，保留 `target-command -> post-return` lifecycle，但把 passive `late-effect` 换成 late-only fixed trusted-action artifacts，用于判断残留后台进程是否能操纵 future trusted state。`unix-listener-residue-fork` seed 仍会派生 `activation-trusted-action`，保留初始 branch 的 Unix listener plant 与 `checkpoint -> fork` lifecycle，但把被动 socket reachability 替换为 successor branch 中的固定 trusted policy。`open-fd-residue-fork`、`deleted-open-fd-residue-fork` 与 `inherited-fd-branch-leakage` seed 现在也会派生同名后缀的 trusted-action candidate，保留 discarded-branch fd holder 与 fork lifecycle，但把被动 fd observation 替换为固定 trusted policy 与本地 consequence artifact；process 与这三个 FD candidate 现在都显式携带 `cross-seed-crossover` mutation provenance，表示 active-execution / capability-residue plant 与 active-IPC trusted-action activation/oracle pattern 已经形成一个小型受控组合 family。它们的 follow-up 都只依据固定 policy 决定是否写入本地 marker，不执行 response text、recovered marker 或 recovered secret；oracle / compliance 会联合检查 artifact 与 trace，并把 listener relaunch、fd-holder relaunch、process-command drift 或其他 reconstruction 归类为 reconstruction。
 - 第一条生成式 `lifecycle splice` 也已进入 matrix：`unix-listener-residue-fork` seed 现在会派生 `lifecycle-splice-checkpoint-replay` candidate，保留 Unix listener plant，但把 lifecycle 从 `checkpoint -> fork` 改成 `checkpoint -> replay`。prompt 本身是 replay-safe 的：如果 replay 时 `branch-listener.sock` 与 `branch-listener-pid.txt` 已经存在，就只做观察；不存在时才允许 replay 侧合法 relaunch。这样 oracle / compliance / contract 可以把 direct runtime residue、legitimate reexecution 与 clean replay 分开，而不是把所有 replay positive 都混成同一种结果。
 - matrix 会从 Scenario IR mutation metadata 派生 `lifecycle-boundary`、`mutation-focus` 和 `activation-focus` prompt candidate；其中 activation variant 只约束初始 branch 保留后续 trusted activation 所需的状态，不会要求 setup 阶段提前执行 activation。
 - feedback guidance 已从二值 activation reached 扩展为 execution、task compliance、lifecycle、plant、activation、reached 多阶段进度；candidate ranking、coverage gain 和 prompt repair 都会消费该进度。frontier 还能把修复意图标记为 `lifecycle-repair`、`state-plant-repair` 或 `activation-repair`。
@@ -325,7 +325,7 @@ observe
 3. 把当前 `MAF` 已经消费到的 same-run portable scenario 继续扩展到更高价值 family，并进入相同的 campaign / replay / verify / minimize。
 4. 把 minimizer 从 prompt / execution-plan reduction 扩展到 Scenario IR component reduction，并增加 `Semantic Fidelity` 模式。
 5. 对 feedback-guided campaign 做小预算对照实验，证明它比 random / fixed enumeration 更快到达高价值 activation。
-6. 在已落地的 Unix-listener、deleted-open-FD 与 inherited-FD trusted-action family 上继续扩展更强 activation consequence，并把当前 cross-seed crossover 推广成更一般的 lifecycle / activation / oracle 组合机制，而不是继续围绕更多普通 workspace object 扩面。
+6. 在已落地的 Unix-listener、process、open-FD、deleted-open-FD 与 inherited-FD trusted-action family 上继续扩展更强 activation consequence，并把当前 cross-seed crossover 推广成更一般的 lifecycle / activation / oracle 组合机制，而不是继续围绕更多普通 workspace object 扩面。
 
 ## 接下来两周
 
@@ -339,10 +339,10 @@ observe
 
 ### 第二周
 
-- 把当前 `cross-seed-crossover` 从两个 FD trusted-action 个例扩展成可枚举的 crossover family；
+- 把当前 `cross-seed-crossover` 从三个 FD trusted-action 个例扩展成可枚举的 crossover family；
 - 把 minimizer 扩展到 IR component reduction；
 - 运行 `random / fixed enumeration / feedback-guided / full SyncFuzz` 四组小预算实验；
-- 尝试自动合成一个 `Unix socket / FD / process` 的 trusted-activation 场景。
+- 继续把已自动合成的 `Unix socket / FD / process` trusted-activation 场景扩展到更多 consequence 与生命周期边界。
 
 这两周内不再把“接更多 target”或“继续补十几个 workspace object 类型”作为主任务。
 
@@ -365,7 +365,7 @@ observe
 
 1. `Scenario IR` 成为 testcase 的主事实来源；
 2. 至少形成四类 semantic mutation：`primitive substitution`、`activation substitution`、`lifecycle splice`、`fault-phase / phase-shift mutation`；
-3. 至少支持一次 `cross-seed crossover`；当前已有 deleted-open-FD 与 inherited-FD trusted-action crossover provenance，后续需要扩展到更系统的可枚举 family；
+3. 至少支持一次 `cross-seed crossover`；当前已有 process、open-FD、deleted-open-FD 与 inherited-FD trusted-action crossover provenance，后续需要扩展到更系统的可枚举 family；
 4. minimizer 可以删除 `IR component`，而不只删除 prompt 行或 `ExecutionPlan` 字段；
 5. `LangGraph` 和 `MAF` 都能消费同一 portable scenario；
 6. 两个 target 都能进入 `campaign / replay / verify / minimize`；

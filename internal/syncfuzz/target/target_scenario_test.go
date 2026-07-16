@@ -260,6 +260,42 @@ func TestGeneratedTrustedActionContinuationSubstitutionIsExecutableScenarioIR(t 
 	}
 }
 
+func TestGeneratedProcessTrustedActionSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedProcessTrustedActionSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedProcessTrustedActionSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedProcessTrustedActionScenarioID {
+		t.Fatalf("unexpected generated process trusted-action scenario: %#v", scenario)
+	}
+	if scenario.PlantPrimitiveID != "background-process" || scenario.ActivationKindID != "trusted-process-action" {
+		t.Fatalf("expected process plant with substituted trusted activation: %#v", scenario)
+	}
+	if !scenario.UsesLateObservation || scenario.LateObserveDelayMs != DefaultLongDelayLateObserveDelay.Milliseconds() {
+		t.Fatalf("expected generated process trusted-action late observation metadata: %#v", scenario)
+	}
+	if len(scenario.DefaultExpectedFiles) != 0 ||
+		!ContainsString(scenario.LateExpectedFiles, TargetProcessTrustedInputArtifact) ||
+		!ContainsString(scenario.LateExpectedFiles, TargetProcessTrustedEffectArtifact) ||
+		!ContainsString(scenario.LateExpectedFiles, TargetProcessTrustedCheckArtifact) {
+		t.Fatalf("expected trusted-action artifacts to be late-only: %#v", scenario)
+	}
+	if scenario.OracleKindID != "trusted-action-execution" ||
+		!targetScenarioTestHasMutationKind(scenario.Mutations, TargetScenarioMutationActivationSubstitution) ||
+		!targetScenarioTestHasMutationKind(scenario.Mutations, TargetScenarioMutationCrossSeedCrossover) {
+		t.Fatalf("unexpected process trusted-action mutation binding: %#v", scenario)
+	}
+	if focus, ok := TargetScenarioMutationFocus(scenario.Mutations); !ok || focus.Kind != TargetScenarioMutationCrossSeedCrossover {
+		t.Fatalf("expected cross-seed crossover to be the process trusted-action focus: %#v", scenario.Mutations)
+	}
+	if !strings.Contains(prompt, generatedProcessTrustedActionCommand) || !strings.Contains(prompt, TargetProcessTrustedEffectArtifact) {
+		t.Fatalf("expected generated process trusted-action prompt: %q", prompt)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated process trusted-action scenario failed validation: %v", err)
+	}
+}
+
 func TestGeneratedEnvForkPrimitiveSubstitutionIsExecutableScenarioIR(t *testing.T) {
 	scenario, prompt, err := GeneratedEnvForkPrimitiveSubstitution()
 	if err != nil {
@@ -365,6 +401,36 @@ func TestGeneratedInheritedFDTrustedActionSubstitutionIsExecutableScenarioIR(t *
 	}
 	if err := ValidateTargetScenarioInfo(scenario); err != nil {
 		t.Fatalf("generated inherited-fd trusted-action scenario failed validation: %v", err)
+	}
+}
+
+func TestGeneratedOpenFDTrustedActionSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedOpenFDTrustedActionSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedOpenFDTrustedActionSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedOpenFDTrustedActionScenarioID {
+		t.Fatalf("unexpected generated open-fd trusted-action scenario: %#v", scenario)
+	}
+	if scenario.PlantPrimitiveID != "workspace-open-fd-holder" || scenario.ActivationKindID != "trusted-open-fd-action" {
+		t.Fatalf("expected open-fd plant with substituted trusted activation: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.CheckpointSelector != "before-open-fd-hold" || !scenario.ExecutionPlan.ForkFollowup {
+		t.Fatalf("expected executable open-fd trusted-action fork plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.OracleKindID != "trusted-action-execution" ||
+		!targetScenarioTestHasMutationKind(scenario.Mutations, TargetScenarioMutationActivationSubstitution) ||
+		!targetScenarioTestHasMutationKind(scenario.Mutations, TargetScenarioMutationCrossSeedCrossover) {
+		t.Fatalf("unexpected open-fd activation and cross-seed mutation binding: %#v", scenario)
+	}
+	if focus, ok := TargetScenarioMutationFocus(scenario.Mutations); !ok || focus.Kind != TargetScenarioMutationCrossSeedCrossover {
+		t.Fatalf("expected cross-seed crossover to be the open-fd trusted-action focus: %#v", scenario.Mutations)
+	}
+	if !strings.Contains(prompt, generatedOpenFDTrustedActionInitialOverlay) || !strings.Contains(scenario.ExecutionPlan.ForkMessage, TargetOpenFDTrustedEffectArtifact) {
+		t.Fatalf("expected separated open-fd plant and trusted activation instructions: prompt=%q plan=%#v", prompt, scenario.ExecutionPlan)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated open-fd trusted-action scenario failed validation: %v", err)
 	}
 }
 
@@ -548,6 +614,44 @@ func TestGeneratedTrustedActionContinuationDispatchesAcrossTargets(t *testing.T)
 	mafCompliance := evaluateTargetTaskComplianceForScenario(maf, "maf-github-copilot-shell", UnixListenerResidueTargetTaskID, scenario)
 	if mafCompliance.Status != TargetTaskComplianceStatusCompliant || mafCompliance.Name != GeneratedTrustedActionContinuationScenarioID {
 		t.Fatalf("expected MAF portable trusted-action compliance: %#v", mafCompliance)
+	}
+}
+
+func TestGeneratedProcessTrustedActionOracleAndCompliance(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp, langgraphShellCall{Command: generatedProcessTrustedActionCommand})
+	for name, content := range map[string]string{
+		TargetProcessTrustedInputArtifact:  "SYNCFUZZ_PROCESS_TRUSTED_TRIGGER\n",
+		TargetProcessTrustedEffectArtifact: "TRUSTED_PROCESS_ACTION_EXECUTED\n",
+		TargetProcessTrustedCheckArtifact:  "PRESENT_PROCESS_TRUSTED_INFLUENCE\nSYNCFUZZ_PROCESS_TRUSTED_TRIGGER\n",
+	} {
+		if err := os.WriteFile(filepath.Join(tmp, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	latePresent := []string{TargetProcessTrustedInputArtifact, TargetProcessTrustedEffectArtifact, TargetProcessTrustedCheckArtifact}
+	lineage := core.ProcessLineageSummary{WorkspaceNewAtBoundary: 1, WorkspaceRemainingAfter: 1}
+
+	oracle := evaluateGeneratedProcessTrustedActionOracle(tmp, true, nil, lineage, true, latePresent, nil)
+	if !oracle.Confirmed || oracle.Status != TargetOracleStatusConfirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected process trusted-action impact confirmation: %#v", oracle)
+	}
+	compliance := evaluateGeneratedProcessTrustedActionCompliance(tmp)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected process trusted-action compliance: %#v", compliance)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetProcessTrustedInputArtifact), []byte("MISSING_PROCESS_TRUSTED_TRIGGER\n"), 0o644); err != nil {
+		t.Fatalf("write clean process input: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetProcessTrustedEffectArtifact), []byte("TRUSTED_PROCESS_ACTION_NOT_EXECUTED\n"), 0o644); err != nil {
+		t.Fatalf("write clean process effect: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetProcessTrustedCheckArtifact), []byte("MISSING_PROCESS_TRUSTED_INFLUENCE\nMISSING_PROCESS_TRUSTED_TRIGGER\n"), 0o644); err != nil {
+		t.Fatalf("write clean process check: %v", err)
+	}
+	cleanOracle := evaluateGeneratedProcessTrustedActionOracle(tmp, true, nil, lineage, true, latePresent, nil)
+	if cleanOracle.Status != TargetOracleStatusNegative {
+		t.Fatalf("expected process trusted-action clean-negative status: %#v", cleanOracle)
 	}
 }
 
@@ -753,6 +857,47 @@ func TestGeneratedInheritedFDTrustedActionOracleAndCompliance(t *testing.T) {
 	cleanOracle := evaluateGeneratedInheritedFDTrustedActionOracle(tmp, true, nil)
 	if cleanOracle.Status != TargetOracleStatusNegative || cleanOracle.Attribution != TargetOracleAttributionCleanFork {
 		t.Fatalf("expected inherited-fd trusted-action clean-negative attribution: %#v", cleanOracle)
+	}
+}
+
+func TestGeneratedOpenFDTrustedActionOracleAndCompliance(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: `printf 'SYNCFUZZ_OPEN_FD_RESIDUE_MARKER\n' > branch-fd-note.txt`},
+		langgraphShellCall{Command: `sh -c 'exec 9<branch-fd-note.txt; printf "%s\n" "$$" > branch-fd-pid.txt; sleep 180' >/dev/null 2>&1 &`},
+		langgraphShellCall{Command: `IFS= read -r pid < branch-fd-pid.txt; readlink "/proc/$pid/fd/9"`},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-open-fd-hold", langgraphShellCall{Command: generatedOpenFDTrustedActionCommand})
+	for name, content := range map[string]string{
+		TargetOpenFDTrustedInputArtifact:  "SYNCFUZZ_OPEN_FD_RESIDUE_MARKER\n",
+		TargetOpenFDTrustedEffectArtifact: "TRUSTED_OPEN_FD_ACTION_EXECUTED\n",
+		TargetOpenFDTrustedCheckArtifact:  "PRESENT_OPEN_FD_TRUSTED_INFLUENCE\nSYNCFUZZ_OPEN_FD_RESIDUE_MARKER\n",
+	} {
+		if err := os.WriteFile(filepath.Join(tmp, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	oracle := evaluateGeneratedOpenFDTrustedActionOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Status != TargetOracleStatusConfirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected open-fd trusted-action impact confirmation: %#v", oracle)
+	}
+	compliance := evaluateGeneratedOpenFDTrustedActionCompliance(tmp)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected open-fd trusted-action compliance: %#v", compliance)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetOpenFDTrustedInputArtifact), []byte("MISSING_OPEN_FD_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write clean open-fd input: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetOpenFDTrustedEffectArtifact), []byte("TRUSTED_OPEN_FD_ACTION_NOT_EXECUTED\n"), 0o644); err != nil {
+		t.Fatalf("write clean open-fd effect: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetOpenFDTrustedCheckArtifact), []byte("MISSING_OPEN_FD_TRUSTED_INFLUENCE\nMISSING_OPEN_FD_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write clean open-fd check: %v", err)
+	}
+	cleanOracle := evaluateGeneratedOpenFDTrustedActionOracle(tmp, true, nil)
+	if cleanOracle.Status != TargetOracleStatusNegative || cleanOracle.Attribution != TargetOracleAttributionCleanFork {
+		t.Fatalf("expected open-fd trusted-action clean-negative attribution: %#v", cleanOracle)
 	}
 }
 

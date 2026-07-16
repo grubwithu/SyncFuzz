@@ -390,6 +390,43 @@ func TestBuildTargetScheduleMatrixAddsPortableContinuationActivationSubstitution
 	}
 }
 
+func TestBuildTargetScheduleMatrixAddsProcessTrustedActionSubstitution(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		Tasks:    []string{target.LongDelayTargetTaskID},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	var generated *TargetScheduleCandidate
+	for idx := range matrix.Candidates {
+		candidate := &matrix.Candidates[idx]
+		if candidate.ScenarioID == target.GeneratedProcessTrustedActionScenarioID {
+			generated = candidate
+			break
+		}
+	}
+	if generated == nil {
+		t.Fatalf("expected generated process trusted-action activation: %#v", matrix.Candidates)
+	}
+	if !generated.Generated || generated.PlantPrimitiveID != "background-process" || generated.ActivationKindID != "trusted-process-action" {
+		t.Fatalf("unexpected process trusted-action substitution metadata: %#v", generated)
+	}
+	if generated.MutationFocusKind != target.TargetScenarioMutationCrossSeedCrossover || generated.OracleKindID != "trusted-action-execution" {
+		t.Fatalf("expected process cross-seed mutation and oracle bindings: %#v", generated)
+	}
+	if !targetMatrixCandidateHasMutationKind(*generated, target.TargetScenarioMutationActivationSubstitution) ||
+		!targetMatrixCandidateHasMutationKind(*generated, target.TargetScenarioMutationCrossSeedCrossover) {
+		t.Fatalf("expected activation-substitution and cross-seed mutation provenance: %#v", generated.Mutations)
+	}
+	if !generated.UsesLateObservation || !target.ContainsString(generated.LateExpectedFiles, target.TargetProcessTrustedEffectArtifact) {
+		t.Fatalf("expected late-only process trusted-action artifacts: %#v", generated)
+	}
+	if generated.ContractRuleID != "process-trusted-action-post-return-boundary" {
+		t.Fatalf("expected generated process trusted-action contract: %#v", generated)
+	}
+}
+
 func TestBuildTargetScheduleMatrixAddsExecutableActivationSubstitution(t *testing.T) {
 	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
 		TargetID: "langgraph-shell-react",
@@ -424,6 +461,43 @@ func TestBuildTargetScheduleMatrixAddsExecutableActivationSubstitution(t *testin
 	scenario := targetScenarioForCandidate(*generated)
 	if scenario == nil || scenario.ScenarioID != target.GeneratedTrustedActionActivationScenarioID {
 		t.Fatalf("expected exact generated activation Scenario IR: %#v", scenario)
+	}
+}
+
+func TestBuildTargetScheduleMatrixAddsOpenFDTrustedActionSubstitution(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		Tasks:    []string{target.OpenFDResidueForkTargetTaskID},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	var generated *TargetScheduleCandidate
+	for idx := range matrix.Candidates {
+		candidate := &matrix.Candidates[idx]
+		if candidate.ScenarioID == target.GeneratedOpenFDTrustedActionScenarioID {
+			generated = candidate
+			break
+		}
+	}
+	if generated == nil {
+		t.Fatalf("expected generated open-fd trusted-action activation: %#v", matrix.Candidates)
+	}
+	if !generated.Generated || generated.PlantPrimitiveID != "workspace-open-fd-holder" || generated.ActivationKindID != "trusted-open-fd-action" {
+		t.Fatalf("unexpected open-fd activation substitution metadata: %#v", generated)
+	}
+	if generated.MutationFocusKind != target.TargetScenarioMutationCrossSeedCrossover || generated.OracleKindID != "trusted-action-execution" {
+		t.Fatalf("expected open-fd cross-seed mutation and oracle bindings: %#v", generated)
+	}
+	if !targetMatrixCandidateHasMutationKind(*generated, target.TargetScenarioMutationActivationSubstitution) ||
+		!targetMatrixCandidateHasMutationKind(*generated, target.TargetScenarioMutationCrossSeedCrossover) {
+		t.Fatalf("expected activation-substitution and cross-seed mutation provenance: %#v", generated.Mutations)
+	}
+	if generated.ExecutionPlan == nil || generated.ExecutionPlan.CheckpointSelector != "before-open-fd-hold" || !strings.Contains(generated.ExecutionPlan.ForkMessage, target.TargetOpenFDTrustedEffectArtifact) {
+		t.Fatalf("expected executable open-fd trusted-action plan: %#v", generated)
+	}
+	if generated.ContractRuleID != "capability-open-fd-trusted-action-generated-fork-boundary" {
+		t.Fatalf("expected generated open-fd trusted-action contract: %#v", generated)
 	}
 }
 

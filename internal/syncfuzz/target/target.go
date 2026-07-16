@@ -61,6 +61,10 @@ const (
 	TargetOpenFDResidueNoteArtifact              = "branch-fd-note.txt"
 	TargetOpenFDResiduePIDArtifact               = "branch-fd-pid.txt"
 	TargetOpenFDResidueForkArtifact              = "open-fd-residue-fork-check.txt"
+	TargetOpenFDTrustedInputArtifact             = "open-fd-trusted-input.txt"
+	TargetOpenFDTrustedEffectArtifact            = "open-fd-trusted-effect.txt"
+	TargetOpenFDTrustedCheckArtifact             = "open-fd-trusted-check.txt"
+	targetOpenFDTrustedPayload                   = "SYNCFUZZ_OPEN_FD_RESIDUE_MARKER"
 	TargetDeletedOpenFDNoteArtifact              = "branch-deleted-fd-note.txt"
 	TargetDeletedOpenFDPIDArtifact               = "branch-deleted-fd-pid.txt"
 	TargetDeletedOpenFDForkArtifact              = "deleted-open-fd-residue-fork-check.txt"
@@ -92,6 +96,10 @@ const (
 	TargetProcessLateArtifact                    = "process-late.json"
 	TargetFilesystemLateArtifact                 = "filesystem-late-metadata.json"
 	TargetContractProfileArtifact                = "target-contract-profile.json"
+	TargetProcessTrustedInputArtifact            = "process-trusted-input.txt"
+	TargetProcessTrustedEffectArtifact           = "process-trusted-effect.txt"
+	TargetProcessTrustedCheckArtifact            = "process-trusted-check.txt"
+	targetProcessTrustedPayload                  = "SYNCFUZZ_PROCESS_TRUSTED_TRIGGER"
 	TargetEnvResidueCheckArtifact                = "env-residue-check.txt"
 	targetEnvResidueVarName                      = "SYNCFUZZ_ENV_RESIDUE_FLAG"
 	targetEnvResidueMarker                       = "SYNCFUZZ_ENV_RESIDUE_MARKER"
@@ -849,8 +857,14 @@ func evaluateTargetOracleForScenario(workspace string, targetID string, taskID s
 		if scenario.ScenarioID == GeneratedTrustedActionContinuationScenarioID {
 			return evaluateGeneratedTrustedActionContinuationOracle(workspace, targetID, completed, immediateMissing)
 		}
+		if scenario.ScenarioID == GeneratedProcessTrustedActionScenarioID {
+			return evaluateGeneratedProcessTrustedActionOracle(workspace, completed, immediateMissing, lineage, lateObserved, latePresent, lateMissing)
+		}
 		if scenario.ScenarioID == GeneratedTrustedActionActivationScenarioID {
 			return evaluateGeneratedTrustedActionTargetOracle(workspace, completed, immediateMissing)
+		}
+		if scenario.ScenarioID == GeneratedOpenFDTrustedActionScenarioID {
+			return evaluateGeneratedOpenFDTrustedActionOracle(workspace, completed, immediateMissing)
 		}
 		if scenario.ScenarioID == GeneratedDeletedOpenFDTrustedActionScenarioID {
 			return evaluateGeneratedDeletedOpenFDTrustedActionOracle(workspace, completed, immediateMissing)
