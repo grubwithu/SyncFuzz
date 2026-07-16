@@ -31,6 +31,7 @@ const (
 	TargetScenarioMutationLifecycleSplice        TargetScenarioMutationKind = "lifecycle-splice"
 	TargetScenarioMutationActivationSubstitution TargetScenarioMutationKind = "activation-substitution"
 	TargetScenarioMutationPhaseShift             TargetScenarioMutationKind = "phase-shift"
+	TargetScenarioMutationCrossSeedCrossover     TargetScenarioMutationKind = "cross-seed-crossover"
 )
 
 type TargetScenarioComponent struct {
@@ -67,6 +68,8 @@ func TargetScenarioMutationFocus(mutations []TargetScenarioMutation) (TargetScen
 
 func targetScenarioMutationFocusRank(kind TargetScenarioMutationKind) int {
 	switch kind {
+	case TargetScenarioMutationCrossSeedCrossover:
+		return 5
 	case TargetScenarioMutationActivationSubstitution:
 		return 4
 	case TargetScenarioMutationPrimitiveSubstitution:

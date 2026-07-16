@@ -50,6 +50,15 @@ func TestTargetScenariosConformToScenarioIRV1(t *testing.T) {
 	}
 }
 
+func targetScenarioTestHasMutationKind(mutations []TargetScenarioMutation, kind TargetScenarioMutationKind) bool {
+	for _, mutation := range mutations {
+		if mutation.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 func TestNormalizeTargetScenarioInfoRejectsDuplicateComponentIDs(t *testing.T) {
 	_, err := NormalizeTargetScenarioInfo(&TargetScenarioInfo{
 		TaskID:     "duplicate-components",
@@ -343,14 +352,49 @@ func TestGeneratedInheritedFDTrustedActionSubstitutionIsExecutableScenarioIR(t *
 	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.CheckpointSelector != "before-inherited-fd-leak-holder" || !scenario.ExecutionPlan.ForkFollowup {
 		t.Fatalf("expected executable inherited-fd trusted-action fork plan: %#v", scenario.ExecutionPlan)
 	}
-	if scenario.OracleKindID != "trusted-action-execution" || len(scenario.Mutations) != 1 || scenario.Mutations[0].Kind != TargetScenarioMutationActivationSubstitution {
-		t.Fatalf("unexpected inherited-fd activation mutation binding: %#v", scenario)
+	if scenario.OracleKindID != "trusted-action-execution" ||
+		!targetScenarioTestHasMutationKind(scenario.Mutations, TargetScenarioMutationActivationSubstitution) ||
+		!targetScenarioTestHasMutationKind(scenario.Mutations, TargetScenarioMutationCrossSeedCrossover) {
+		t.Fatalf("unexpected inherited-fd activation and cross-seed mutation binding: %#v", scenario)
+	}
+	if focus, ok := TargetScenarioMutationFocus(scenario.Mutations); !ok || focus.Kind != TargetScenarioMutationCrossSeedCrossover {
+		t.Fatalf("expected cross-seed crossover to be the inherited-fd trusted-action focus: %#v", scenario.Mutations)
 	}
 	if !strings.Contains(prompt, generatedInheritedFDTrustedActionInitialOverlay) || !strings.Contains(scenario.ExecutionPlan.ForkMessage, TargetInheritedFDTrustedEffectArtifact) {
 		t.Fatalf("expected separated inherited-fd plant and trusted activation instructions: prompt=%q plan=%#v", prompt, scenario.ExecutionPlan)
 	}
 	if err := ValidateTargetScenarioInfo(scenario); err != nil {
 		t.Fatalf("generated inherited-fd trusted-action scenario failed validation: %v", err)
+	}
+}
+
+func TestGeneratedDeletedOpenFDTrustedActionSubstitutionIsExecutableScenarioIR(t *testing.T) {
+	scenario, prompt, err := GeneratedDeletedOpenFDTrustedActionSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedDeletedOpenFDTrustedActionSubstitution failed: %v", err)
+	}
+	if scenario == nil || scenario.ScenarioID != GeneratedDeletedOpenFDTrustedActionScenarioID {
+		t.Fatalf("unexpected generated deleted-open-fd trusted-action scenario: %#v", scenario)
+	}
+	if scenario.PlantPrimitiveID != "workspace-deleted-open-fd-holder" || scenario.ActivationKindID != "trusted-deleted-fd-action" {
+		t.Fatalf("expected deleted-open-fd plant with substituted trusted activation: %#v", scenario)
+	}
+	if scenario.ExecutionPlan == nil || scenario.ExecutionPlan.CheckpointSelector != "before-deleted-open-fd-hold" || !scenario.ExecutionPlan.ForkFollowup {
+		t.Fatalf("expected executable deleted-open-fd trusted-action fork plan: %#v", scenario.ExecutionPlan)
+	}
+	if scenario.OracleKindID != "trusted-action-execution" ||
+		!targetScenarioTestHasMutationKind(scenario.Mutations, TargetScenarioMutationActivationSubstitution) ||
+		!targetScenarioTestHasMutationKind(scenario.Mutations, TargetScenarioMutationCrossSeedCrossover) {
+		t.Fatalf("unexpected deleted-open-fd activation and cross-seed mutation binding: %#v", scenario)
+	}
+	if focus, ok := TargetScenarioMutationFocus(scenario.Mutations); !ok || focus.Kind != TargetScenarioMutationCrossSeedCrossover {
+		t.Fatalf("expected cross-seed crossover to be the deleted-open-fd trusted-action focus: %#v", scenario.Mutations)
+	}
+	if !strings.Contains(prompt, generatedDeletedOpenFDTrustedActionInitialOverlay) || !strings.Contains(scenario.ExecutionPlan.ForkMessage, TargetDeletedOpenFDTrustedEffectArtifact) {
+		t.Fatalf("expected separated deleted-open-fd plant and trusted activation instructions: prompt=%q plan=%#v", prompt, scenario.ExecutionPlan)
+	}
+	if err := ValidateTargetScenarioInfo(scenario); err != nil {
+		t.Fatalf("generated deleted-open-fd trusted-action scenario failed validation: %v", err)
 	}
 }
 
@@ -709,6 +753,47 @@ func TestGeneratedInheritedFDTrustedActionOracleAndCompliance(t *testing.T) {
 	cleanOracle := evaluateGeneratedInheritedFDTrustedActionOracle(tmp, true, nil)
 	if cleanOracle.Status != TargetOracleStatusNegative || cleanOracle.Attribution != TargetOracleAttributionCleanFork {
 		t.Fatalf("expected inherited-fd trusted-action clean-negative attribution: %#v", cleanOracle)
+	}
+}
+
+func TestGeneratedDeletedOpenFDTrustedActionOracleAndCompliance(t *testing.T) {
+	tmp := t.TempDir()
+	writeLangGraphShellHistory(t, tmp,
+		langgraphShellCall{Command: `printf 'SYNCFUZZ_DELETED_OPEN_FD_RESIDUE_MARKER\n' > branch-deleted-fd-note.txt`},
+		langgraphShellCall{Command: `sh -c 'exec 9<branch-deleted-fd-note.txt; rm -f branch-deleted-fd-note.txt; printf "%s\n" "$$" > branch-deleted-fd-pid.txt; sleep 180' >/dev/null 2>&1 &`},
+		langgraphShellCall{Command: `IFS= read -r pid < branch-deleted-fd-pid.txt; readlink "/proc/$pid/fd/9"`},
+	)
+	writeLangGraphOperationSummary(t, tmp, LanggraphForkArtifact, "fork", true, "before-deleted-open-fd-hold", langgraphShellCall{Command: generatedDeletedOpenFDTrustedActionCommand})
+	for name, content := range map[string]string{
+		TargetDeletedOpenFDTrustedInputArtifact:  "SYNCFUZZ_DELETED_OPEN_FD_RESIDUE_MARKER\n",
+		TargetDeletedOpenFDTrustedEffectArtifact: "TRUSTED_DELETED_FD_ACTION_EXECUTED\n",
+		TargetDeletedOpenFDTrustedCheckArtifact:  "PRESENT_DELETED_OPEN_FD_TRUSTED_INFLUENCE\nSYNCFUZZ_DELETED_OPEN_FD_RESIDUE_MARKER\n",
+	} {
+		if err := os.WriteFile(filepath.Join(tmp, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	oracle := evaluateGeneratedDeletedOpenFDTrustedActionOracle(tmp, true, nil)
+	if !oracle.Confirmed || oracle.Status != TargetOracleStatusConfirmed || oracle.Attribution != TargetOracleAttributionRuntimeResidue {
+		t.Fatalf("expected deleted-open-fd trusted-action impact confirmation: %#v", oracle)
+	}
+	compliance := evaluateGeneratedDeletedOpenFDTrustedActionCompliance(tmp)
+	if compliance.Status != TargetTaskComplianceStatusCompliant {
+		t.Fatalf("expected deleted-open-fd trusted-action compliance: %#v", compliance)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetDeletedOpenFDTrustedInputArtifact), []byte("MISSING_DELETED_OPEN_FD_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write clean deleted-open-fd input: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetDeletedOpenFDTrustedEffectArtifact), []byte("TRUSTED_DELETED_FD_ACTION_NOT_EXECUTED\n"), 0o644); err != nil {
+		t.Fatalf("write clean deleted-open-fd effect: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, TargetDeletedOpenFDTrustedCheckArtifact), []byte("MISSING_DELETED_OPEN_FD_TRUSTED_INFLUENCE\nMISSING_DELETED_OPEN_FD_MARKER\n"), 0o644); err != nil {
+		t.Fatalf("write clean deleted-open-fd check: %v", err)
+	}
+	cleanOracle := evaluateGeneratedDeletedOpenFDTrustedActionOracle(tmp, true, nil)
+	if cleanOracle.Status != TargetOracleStatusNegative || cleanOracle.Attribution != TargetOracleAttributionCleanFork {
+		t.Fatalf("expected deleted-open-fd trusted-action clean-negative attribution: %#v", cleanOracle)
 	}
 }
 

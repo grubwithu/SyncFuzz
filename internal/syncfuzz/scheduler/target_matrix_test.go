@@ -12,6 +12,15 @@ import (
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
+func targetMatrixCandidateHasMutationKind(candidate TargetScheduleCandidate, kind target.TargetScenarioMutationKind) bool {
+	for _, mutation := range candidate.Mutations {
+		if mutation.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildTargetScheduleMatrixExpandsGroupsAndContracts(t *testing.T) {
 	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
 		TargetID:   "langgraph-shell-react",
@@ -440,14 +449,55 @@ func TestBuildTargetScheduleMatrixAddsInheritedFDTrustedActionSubstitution(t *te
 	if !generated.Generated || generated.PlantPrimitiveID != "workspace-inherited-fd-holder" || generated.ActivationKindID != "trusted-secret-action" {
 		t.Fatalf("unexpected inherited-fd activation substitution metadata: %#v", generated)
 	}
-	if generated.MutationFocusKind != target.TargetScenarioMutationActivationSubstitution || generated.OracleKindID != "trusted-action-execution" {
-		t.Fatalf("expected inherited-fd activation mutation and oracle bindings: %#v", generated)
+	if generated.MutationFocusKind != target.TargetScenarioMutationCrossSeedCrossover || generated.OracleKindID != "trusted-action-execution" {
+		t.Fatalf("expected inherited-fd cross-seed mutation and oracle bindings: %#v", generated)
+	}
+	if !targetMatrixCandidateHasMutationKind(*generated, target.TargetScenarioMutationActivationSubstitution) ||
+		!targetMatrixCandidateHasMutationKind(*generated, target.TargetScenarioMutationCrossSeedCrossover) {
+		t.Fatalf("expected activation-substitution and cross-seed mutation provenance: %#v", generated.Mutations)
 	}
 	if generated.ExecutionPlan == nil || generated.ExecutionPlan.CheckpointSelector != "before-inherited-fd-leak-holder" || !strings.Contains(generated.ExecutionPlan.ForkMessage, target.TargetInheritedFDTrustedEffectArtifact) {
 		t.Fatalf("expected executable inherited-fd trusted-action plan: %#v", generated)
 	}
 	if generated.ContractRuleID != "capability-inherited-fd-trusted-action-generated-fork-boundary" {
 		t.Fatalf("expected generated inherited-fd trusted-action contract: %#v", generated)
+	}
+}
+
+func TestBuildTargetScheduleMatrixAddsDeletedOpenFDTrustedActionSubstitution(t *testing.T) {
+	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		Tasks:    []string{target.DeletedOpenFDForkTargetTaskID},
+	})
+	if err != nil {
+		t.Fatalf("BuildTargetScheduleMatrix failed: %v", err)
+	}
+	var generated *TargetScheduleCandidate
+	for idx := range matrix.Candidates {
+		candidate := &matrix.Candidates[idx]
+		if candidate.ScenarioID == target.GeneratedDeletedOpenFDTrustedActionScenarioID {
+			generated = candidate
+			break
+		}
+	}
+	if generated == nil {
+		t.Fatalf("expected generated deleted-open-fd trusted-action activation: %#v", matrix.Candidates)
+	}
+	if !generated.Generated || generated.PlantPrimitiveID != "workspace-deleted-open-fd-holder" || generated.ActivationKindID != "trusted-deleted-fd-action" {
+		t.Fatalf("unexpected deleted-open-fd activation substitution metadata: %#v", generated)
+	}
+	if generated.MutationFocusKind != target.TargetScenarioMutationCrossSeedCrossover || generated.OracleKindID != "trusted-action-execution" {
+		t.Fatalf("expected deleted-open-fd cross-seed mutation and oracle bindings: %#v", generated)
+	}
+	if !targetMatrixCandidateHasMutationKind(*generated, target.TargetScenarioMutationActivationSubstitution) ||
+		!targetMatrixCandidateHasMutationKind(*generated, target.TargetScenarioMutationCrossSeedCrossover) {
+		t.Fatalf("expected activation-substitution and cross-seed mutation provenance: %#v", generated.Mutations)
+	}
+	if generated.ExecutionPlan == nil || generated.ExecutionPlan.CheckpointSelector != "before-deleted-open-fd-hold" || !strings.Contains(generated.ExecutionPlan.ForkMessage, target.TargetDeletedOpenFDTrustedEffectArtifact) {
+		t.Fatalf("expected executable deleted-open-fd trusted-action plan: %#v", generated)
+	}
+	if generated.ContractRuleID != "capability-deleted-open-fd-trusted-action-generated-fork-boundary" {
+		t.Fatalf("expected generated deleted-open-fd trusted-action contract: %#v", generated)
 	}
 }
 

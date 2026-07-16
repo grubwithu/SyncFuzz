@@ -488,6 +488,8 @@ func targetDerivedForkActivationSubstitutionCandidates(base TargetScheduleCandid
 	switch base.TaskID {
 	case target.UnixListenerResidueForkTargetTaskID:
 		generated, err = target.GeneratedUnixListenerForkActivationSubstitutions()
+	case target.DeletedOpenFDForkTargetTaskID:
+		generated, err = target.GeneratedDeletedOpenFDForkActivationSubstitutions()
 	case target.InheritedFDLeakTargetTaskID:
 		generated, err = target.GeneratedInheritedFDForkActivationSubstitutions()
 	default:

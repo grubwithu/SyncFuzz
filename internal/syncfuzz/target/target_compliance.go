@@ -141,6 +141,9 @@ func evaluateTargetTaskComplianceForScenario(workspace string, targetID string, 
 		if scenario.ScenarioID == GeneratedTrustedActionActivationScenarioID {
 			return evaluateGeneratedTrustedActionTargetTaskCompliance(workspace)
 		}
+		if scenario.ScenarioID == GeneratedDeletedOpenFDTrustedActionScenarioID {
+			return evaluateGeneratedDeletedOpenFDTrustedActionCompliance(workspace)
+		}
 		if scenario.ScenarioID == GeneratedInheritedFDTrustedActionScenarioID {
 			return evaluateGeneratedInheritedFDTrustedActionCompliance(workspace)
 		}

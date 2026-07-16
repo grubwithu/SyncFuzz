@@ -367,6 +367,17 @@ func TargetContractProfileFor(targetID string) *TargetContractProfile {
 				Description:    "Fork from before the deleted-fd-holder launch should not preserve the later deleted workspace inode capability across the selected checkpoint boundary.",
 			},
 			{
+				RuleID:         "capability-deleted-open-fd-trusted-action-generated-fork-boundary",
+				TaskID:         DeletedOpenFDForkTargetTaskID,
+				ScenarioID:     GeneratedDeletedOpenFDTrustedActionScenarioID,
+				StateSurface:   "capability.deleted-open-fd-trusted-action",
+				LifecycleEdge:  "checkpoint->fork",
+				Expectation:    TargetContractExpectationReset,
+				SourceStrength: TargetContractSourceStrengthImplicit,
+				EvidenceSource: "syncfuzz-wrapper",
+				Description:    "Fork from before the deleted-fd-holder launch should not let a discarded deleted-open-fd marker influence a successor-branch trusted action.",
+			},
+			{
 				RuleID:         "runtime-inherited-fd-branch-leakage-boundary",
 				TaskID:         InheritedFDLeakTargetTaskID,
 				StateSurface:   "runtime.inherited-fd",
@@ -597,6 +608,9 @@ func targetContractObservedOutcomeForRule(rule TargetContractRule, oracle Target
 	}
 	if rule.ScenarioID == GeneratedTrustedActionActivationScenarioID {
 		return targetContractObservedWorkspaceForkOutcome("trusted-action influence", oracle)
+	}
+	if rule.ScenarioID == GeneratedDeletedOpenFDTrustedActionScenarioID {
+		return targetContractObservedWorkspaceForkOutcome("deleted-open-fd trusted-action influence", oracle)
 	}
 	if rule.ScenarioID == GeneratedInheritedFDTrustedActionScenarioID {
 		return targetContractObservedWorkspaceForkOutcome("inherited-fd trusted-action influence", oracle)

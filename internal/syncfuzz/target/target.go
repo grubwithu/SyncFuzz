@@ -64,6 +64,10 @@ const (
 	TargetDeletedOpenFDNoteArtifact              = "branch-deleted-fd-note.txt"
 	TargetDeletedOpenFDPIDArtifact               = "branch-deleted-fd-pid.txt"
 	TargetDeletedOpenFDForkArtifact              = "deleted-open-fd-residue-fork-check.txt"
+	TargetDeletedOpenFDTrustedInputArtifact      = "deleted-open-fd-trusted-input.txt"
+	TargetDeletedOpenFDTrustedEffectArtifact     = "deleted-open-fd-trusted-effect.txt"
+	TargetDeletedOpenFDTrustedCheckArtifact      = "deleted-open-fd-trusted-check.txt"
+	targetDeletedOpenFDTrustedPayload            = "SYNCFUZZ_DELETED_OPEN_FD_RESIDUE_MARKER"
 	TargetInheritedFDLeakSecretArtifact          = "branch-inherited-fd-secret.txt"
 	TargetInheritedFDLeakPIDArtifact             = "branch-inherited-fd-pid.txt"
 	TargetInheritedFDLeakForkArtifact            = "inherited-fd-branch-leakage-check.txt"
@@ -847,6 +851,9 @@ func evaluateTargetOracleForScenario(workspace string, targetID string, taskID s
 		}
 		if scenario.ScenarioID == GeneratedTrustedActionActivationScenarioID {
 			return evaluateGeneratedTrustedActionTargetOracle(workspace, completed, immediateMissing)
+		}
+		if scenario.ScenarioID == GeneratedDeletedOpenFDTrustedActionScenarioID {
+			return evaluateGeneratedDeletedOpenFDTrustedActionOracle(workspace, completed, immediateMissing)
 		}
 		if scenario.ScenarioID == GeneratedInheritedFDTrustedActionScenarioID {
 			return evaluateGeneratedInheritedFDTrustedActionOracle(workspace, completed, immediateMissing)

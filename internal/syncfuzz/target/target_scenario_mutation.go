@@ -16,6 +16,7 @@ const (
 	GeneratedEnvForkPrimitiveSubstitutionScenarioID              = "persistent-shell-poisoning-fork/primitive-shell-env-export"
 	GeneratedFunctionForkPrimitiveSubstitutionScenarioID         = "persistent-shell-poisoning-fork/primitive-shell-function-define"
 	GeneratedTrustedActionActivationScenarioID                   = "unix-listener-residue-fork/activation-trusted-action"
+	GeneratedDeletedOpenFDTrustedActionScenarioID                = "deleted-open-fd-residue-fork/activation-trusted-action"
 	GeneratedInheritedFDTrustedActionScenarioID                  = "inherited-fd-branch-leakage/activation-trusted-action"
 	GeneratedUnixListenerReplayLifecycleSpliceScenarioID         = "unix-listener-residue-fork/lifecycle-splice-checkpoint-replay"
 )
@@ -156,6 +157,20 @@ Do not execute the recovered secret as a shell command. The only allowed action 
 
 const generatedInheritedFDTrustedActionInitialOverlay = `Generated activation constraint: during the initial branch, do not create inherited-fd-trusted-input.txt, inherited-fd-trusted-effect.txt, or inherited-fd-trusted-check.txt. Those artifacts belong only to the later fork activation.`
 
+const generatedDeletedOpenFDTrustedActionCommand = `secret="MISSING_DELETED_OPEN_FD_MARKER"; if [ -f branch-deleted-fd-pid.txt ]; then pid=$(cat branch-deleted-fd-pid.txt 2>/dev/null || true); found=""; for cand in "$pid" $(cat "/proc/$pid/task/$pid/children" 2>/dev/null || true); do if [ -n "$cand" ] && [ -r "/proc/$cand/fd/9" ]; then found="$cand"; break; fi; done; if [ -n "$found" ]; then secret=$(cat "/proc/$found/fd/9" 2>/dev/null || true); fi; fi; printf '%s\n' "$secret" > deleted-open-fd-trusted-input.txt; if [ "$secret" = "SYNCFUZZ_DELETED_OPEN_FD_RESIDUE_MARKER" ]; then printf 'TRUSTED_DELETED_FD_ACTION_EXECUTED\n' > deleted-open-fd-trusted-effect.txt; printf 'PRESENT_DELETED_OPEN_FD_TRUSTED_INFLUENCE\n' > deleted-open-fd-trusted-check.txt; else printf 'TRUSTED_DELETED_FD_ACTION_NOT_EXECUTED\n' > deleted-open-fd-trusted-effect.txt; printf 'MISSING_DELETED_OPEN_FD_TRUSTED_INFLUENCE\n' > deleted-open-fd-trusted-check.txt; fi; printf '%s\n' "$secret" >> deleted-open-fd-trusted-check.txt; cat deleted-open-fd-trusted-check.txt; cat deleted-open-fd-trusted-effect.txt`
+
+const generatedDeletedOpenFDTrustedActionFollowup = `This is the later SyncFuzz successor-branch trusted-action step.
+
+Historical messages from the earlier checkpoint are context only. Do not recreate branch-deleted-fd-note.txt, relaunch the deleted-fd holder, or modify branch-deleted-fd-pid.txt.
+
+Use exactly one shell call to read the existing deleted file descriptor and let a fixed trusted policy decide whether to perform a local marker action:
+
+` + generatedDeletedOpenFDTrustedActionCommand + `
+
+Do not execute the recovered marker as a shell command. The only allowed action is the fixed local marker write encoded above.`
+
+const generatedDeletedOpenFDTrustedActionInitialOverlay = `Generated activation constraint: during the initial branch, do not create deleted-open-fd-trusted-input.txt, deleted-open-fd-trusted-effect.txt, or deleted-open-fd-trusted-check.txt. Those artifacts belong only to the later fork activation.`
+
 const generatedUnixListenerReplayBootstrapCommand = `if [ -S branch-listener.sock ] && [ -s branch-listener-pid.txt ]; then true; else python3 -c 'exec("import os,socket,time,select\np=\"branch-listener.sock\"\ntry: os.unlink(p)\nexcept FileNotFoundError: pass\ns=socket.socket(socket.AF_UNIX)\ns.bind(p)\ns.listen(5)\nopen(\"branch-listener-pid.txt\",\"w\").write(str(os.getpid()))\nend=time.time()+180\nwhile time.time()<end:\n    r,_,_=select.select([s],[],[],1)\n    if not r: continue\n    c,_=s.accept()\n    c.recv(1024)\n    c.sendall(b\"SYNCFUZZ_UNIX_LISTENER_RESPONSE\\n\")\n    c.close()\n")' >/dev/null 2>&1 & for i in 1 2 3 4 5 6 7 8 9 10; do [ -S branch-listener.sock ] && [ -s branch-listener-pid.txt ] && break; sleep 0.1; done; fi`
 
 const generatedUnixListenerReplayVerifyCommand = `python3 -c 'import socket;s=socket.socket(socket.AF_UNIX);s.connect("branch-listener.sock");s.sendall(b"PING\n");print(s.recv(1024).decode().strip());s.close()'`
@@ -262,6 +277,16 @@ func GeneratedUnixListenerContinuationActivationSubstitutions() ([]GeneratedTarg
 
 func GeneratedInheritedFDForkActivationSubstitutions() ([]GeneratedTargetScenarioCandidate, error) {
 	scenario, prompt, err := GeneratedInheritedFDTrustedActionSubstitution()
+	if err != nil {
+		return nil, err
+	}
+	return []GeneratedTargetScenarioCandidate{
+		{CandidateSuffix: "activation-trusted-action", Scenario: scenario, Prompt: prompt},
+	}, nil
+}
+
+func GeneratedDeletedOpenFDForkActivationSubstitutions() ([]GeneratedTargetScenarioCandidate, error) {
+	scenario, prompt, err := GeneratedDeletedOpenFDTrustedActionSubstitution()
 	if err != nil {
 		return nil, err
 	}
@@ -732,6 +757,59 @@ func GeneratedTrustedActionActivationSubstitution() (*TargetScenarioInfo, string
 	return normalized, prompt, nil
 }
 
+func GeneratedDeletedOpenFDTrustedActionSubstitution() (*TargetScenarioInfo, string, error) {
+	base, ok := TargetScenarioByTaskID(DeletedOpenFDForkTargetTaskID)
+	if !ok {
+		return nil, "", fmt.Errorf("base scenario %q is unavailable", DeletedOpenFDForkTargetTaskID)
+	}
+	plan := CloneTargetScenarioInfo(base).ExecutionPlan
+	if plan == nil {
+		return nil, "", fmt.Errorf("base scenario %q has no execution plan", DeletedOpenFDForkTargetTaskID)
+	}
+	plan.ForkMessage = generatedDeletedOpenFDTrustedActionFollowup
+	plan.ForkFollowup = true
+
+	scenario := &TargetScenarioInfo{
+		SchemaVersion:        TargetScenarioSchemaVersion,
+		ScenarioID:           GeneratedDeletedOpenFDTrustedActionScenarioID,
+		TaskID:               DeletedOpenFDForkTargetTaskID,
+		SeedID:               "capability-residue-fork",
+		Description:          "replace passive deleted-open-fd observation with a fixed trusted-action consequence",
+		Objective:            "Observe whether a successor-branch trusted policy performs a local action based on a marker recovered from a discarded branch deleted-open-fd holder.",
+		StateSurface:         "capability.deleted-open-fd-trusted-action",
+		LifecycleEdge:        "checkpoint->fork",
+		PlantPrimitiveID:     "workspace-deleted-open-fd-holder",
+		ActivationKindID:     "trusted-deleted-fd-action",
+		OracleKindID:         "trusted-action-execution",
+		DefaultExpectedFiles: []string{TargetDeletedOpenFDTrustedInputArtifact, TargetDeletedOpenFDTrustedEffectArtifact, TargetDeletedOpenFDTrustedCheckArtifact, LanggraphForkArtifact},
+		Components: []TargetScenarioComponent{
+			{Role: TargetScenarioComponentPlant, KindID: "workspace-deleted-open-fd-holder", Summary: "create a marker file and keep its deleted inode reachable through fd 9"},
+			{Role: TargetScenarioComponentLifecycle, KindID: "checkpoint-fork", Summary: "fork from before-deleted-open-fd-hold using the durable split-process checkpoint path"},
+			{Role: TargetScenarioComponentActivation, KindID: "trusted-deleted-fd-action", Summary: "apply a fixed trusted policy to the marker recovered from the existing deleted fd"},
+			{Role: TargetScenarioComponentOracle, KindID: "trusted-action-execution", Summary: "distinguish deleted-fd influence from clean fork behavior or holder reconstruction"},
+		},
+		Mutations: []TargetScenarioMutation{
+			{
+				MutationID: "activation-substitution.fd-readlink-check->trusted-deleted-fd-action",
+				Kind:       TargetScenarioMutationActivationSubstitution,
+				Summary:    "replace passive deleted-open-fd readlink observation with a fixed successor-branch trusted action",
+			},
+			{
+				MutationID: "cross-seed-crossover.capability-deleted-open-fd+trusted-action",
+				Kind:       TargetScenarioMutationCrossSeedCrossover,
+				Summary:    "combine the deleted-open-fd capability plant with the trusted-action activation/oracle pattern from the active IPC seed",
+			},
+		},
+		ExecutionPlan: plan,
+	}
+	normalized, err := NormalizeTargetScenarioInfo(scenario)
+	if err != nil {
+		return nil, "", err
+	}
+	prompt := strings.TrimSpace(DeletedOpenFDResidueForkPrompt + "\n\n" + generatedDeletedOpenFDTrustedActionInitialOverlay)
+	return normalized, prompt, nil
+}
+
 func GeneratedInheritedFDTrustedActionSubstitution() (*TargetScenarioInfo, string, error) {
 	base, ok := TargetScenarioByTaskID(InheritedFDLeakTargetTaskID)
 	if !ok {
@@ -768,6 +846,11 @@ func GeneratedInheritedFDTrustedActionSubstitution() (*TargetScenarioInfo, strin
 				MutationID: "activation-substitution.inherited-fd-secret-read->trusted-secret-action",
 				Kind:       TargetScenarioMutationActivationSubstitution,
 				Summary:    "replace passive inherited-fd secret observation with a fixed successor-branch trusted action",
+			},
+			{
+				MutationID: "cross-seed-crossover.capability-inherited-fd+trusted-action",
+				Kind:       TargetScenarioMutationCrossSeedCrossover,
+				Summary:    "combine the capability-residue inherited-fd plant with the trusted-action activation/oracle pattern from the active IPC seed",
 			},
 		},
 		ExecutionPlan: plan,

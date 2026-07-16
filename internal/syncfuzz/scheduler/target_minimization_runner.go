@@ -665,6 +665,14 @@ func targetScenarioComponentReducersForStep(step TargetMinimizationStep, compone
 				return targetScenarioClearLifecycleMetadata(scenario, plan, componentID, kindID)
 			},
 		})
+	case step.Kind == "activation-minimization" && targetScenarioActivationMetadataReductionAllowed(component, scenario, fidelity):
+		kindID := strings.TrimSpace(component.KindID)
+		reducers = append(reducers, targetScenarioComponentReducer{
+			stepID: "component-clear-activation-metadata:" + componentID,
+			apply: func(scenario *target.TargetScenarioInfo, _ *target.TargetScenarioExecutionPlan) bool {
+				return targetScenarioClearActivationMetadata(scenario, componentID, kindID)
+			},
+		})
 	case step.Kind == "oracle-preservation" && targetScenarioOracleMetadataReductionAllowed(component, scenario, fidelity):
 		kindID := strings.TrimSpace(component.KindID)
 		reducers = append(reducers, targetScenarioComponentReducer{
@@ -720,6 +728,17 @@ func targetScenarioOracleMetadataReductionAllowed(component target.TargetScenari
 	}
 	oracleID := strings.TrimSpace(scenario.OracleKindID)
 	return oracleID != "" && oracleID == strings.TrimSpace(component.KindID)
+}
+
+func targetScenarioActivationMetadataReductionAllowed(component target.TargetScenarioComponent, scenario *target.TargetScenarioInfo, fidelity TargetMinimizationFidelity) bool {
+	if scenario == nil || component.Role != target.TargetScenarioComponentActivation {
+		return false
+	}
+	if fidelity != TargetMinimizationFidelityImpact {
+		return false
+	}
+	activationID := strings.TrimSpace(scenario.ActivationKindID)
+	return activationID != "" && activationID == strings.TrimSpace(component.KindID)
 }
 
 func targetScenarioComponentSummaryReductionAllowed(component target.TargetScenarioComponent) bool {
@@ -792,6 +811,20 @@ func targetScenarioClearOracleMetadata(scenario *target.TargetScenarioInfo, comp
 		return false
 	}
 	scenario.OracleKindID = ""
+	return true
+}
+
+func targetScenarioClearActivationMetadata(scenario *target.TargetScenarioInfo, componentID string, kindID string) bool {
+	if scenario == nil || strings.TrimSpace(scenario.ActivationKindID) == "" {
+		return false
+	}
+	if strings.TrimSpace(kindID) != "" && strings.TrimSpace(scenario.ActivationKindID) != strings.TrimSpace(kindID) {
+		return false
+	}
+	if !targetScenarioDeleteComponent(scenario, componentID) {
+		return false
+	}
+	scenario.ActivationKindID = ""
 	return true
 }
 
@@ -938,10 +971,24 @@ func targetMinimizationPreservedImpact(source TargetSuiteRunResult, trial *targe
 	if !targetMinimizationOracleStatusMatches(source, trial) {
 		return false
 	}
-	if source.Signature.Impact != "" {
-		return trial.Signature.Impact == source.Signature.Impact
+	if !targetMinimizationImpactMatches(source, trial) {
+		return false
 	}
 	return true
+}
+
+func targetMinimizationImpactMatches(source TargetSuiteRunResult, trial *target.TargetRunResult) bool {
+	if source.Signature.Impact == "" {
+		return true
+	}
+	if trial.Signature.Impact == source.Signature.Impact {
+		return true
+	}
+	if trial.Signature.Impact != "" {
+		return false
+	}
+	wantOracleName := strings.TrimSpace(source.TargetOracle.Name)
+	return wantOracleName != "" && strings.TrimSpace(trial.TargetOracle.Name) == wantOracleName
 }
 
 func targetMinimizationOracleStatusMatches(source TargetSuiteRunResult, trial *target.TargetRunResult) bool {

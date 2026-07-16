@@ -805,6 +805,111 @@ func TestRunTargetMinimizationImpactFidelityAcceptsOracleMetadataReduction(t *te
 	}
 }
 
+func TestRunTargetMinimizationImpactFidelityAcceptsActivationMetadataReduction(t *testing.T) {
+	tmp := t.TempDir()
+	plan := &target.TargetScenarioExecutionPlan{LifecycleOperationID: "run-continue"}
+	scenario := &target.TargetScenarioInfo{
+		SchemaVersion:    target.TargetScenarioSchemaVersion,
+		ScenarioID:       "impact-activation-reduction",
+		TaskID:           target.PersistentShellTargetTaskID,
+		Description:      "Persistent shell minimizer fixture with reducible activation metadata.",
+		Objective:        "Confirm that a workspace-local git shim is still observed.",
+		PlantPrimitiveID: "shell-path-prepend",
+		ActivationKindID: "git-resolution",
+		OracleKindID:     "persistent-shell-path",
+		ExecutionPlan:    plan,
+		Components: []target.TargetScenarioComponent{
+			{
+				ComponentID: "activation.required",
+				Role:        target.TargetScenarioComponentActivation,
+				KindID:      "git-resolution",
+			},
+		},
+	}
+	baseline, err := target.RunTarget(context.Background(), target.TargetRunOptions{
+		OutDir:        filepath.Join(tmp, "baseline-runs"),
+		TargetID:      "minimizer-target",
+		TaskID:        target.PersistentShellTargetTaskID,
+		Scenario:      scenario,
+		ExecutionPlan: plan,
+		Prompt:        "plant path state",
+		Command:       `mkdir -p workspace-bin && printf '#!/bin/sh\nprintf WORKSPACE_GIT\n' > workspace-bin/git && chmod +x workspace-bin/git && printf '%s\n' "$PWD/workspace-bin/git" > shell-poison-check.txt`,
+		ObserveDelay:  10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget baseline failed: %v", err)
+	}
+	if !baseline.TargetOracle.Confirmed {
+		t.Fatalf("expected confirmed baseline: %#v", baseline.TargetOracle)
+	}
+
+	sourcePath := filepath.Join(tmp, "target-suite-result.json")
+	if err := core.WriteJSON(sourcePath, TargetSuiteResult{
+		SchemaVersion: "syncfuzz.target-suite-result.v1",
+		SuiteID:       "impact-activation-minimizer-suite",
+		Results: []TargetSuiteRunResult{
+			{
+				CandidateID:            "minimizer-target/persistent-shell-poisoning",
+				RunID:                  baseline.RunID,
+				TargetID:               baseline.TargetID,
+				TaskID:                 baseline.TaskID,
+				Confirmed:              true,
+				OutcomeCategory:        corpus.TargetObservationResidueObserved,
+				ActivationStage:        TargetActivationStageActivationReached,
+				TargetOracle:           baseline.TargetOracle,
+				TaskCompliance:         baseline.TaskCompliance,
+				ContractInterpretation: baseline.ContractInterpretation,
+				Signature:              baseline.Signature,
+				ArtifactDir:            baseline.ArtifactDir,
+				MinimizationPlan: &TargetMinimizationPlan{
+					SchemaVersion: "syncfuzz.target-minimization-plan.v1",
+					Applicable:    true,
+					Steps: []TargetMinimizationStep{
+						{
+							Order:         1,
+							StepID:        "m1",
+							Kind:          "activation-minimization",
+							ComponentID:   "activation.required",
+							ComponentKind: "git-resolution",
+							ComponentRole: target.TargetScenarioComponentActivation,
+							Summary:       "try reducing activation metadata",
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("write minimization source: %v", err)
+	}
+
+	result, err := RunTargetMinimization(context.Background(), TargetMinimizationRunOptions{
+		SourcePath:     sourcePath,
+		OutDir:         filepath.Join(tmp, "minimized-runs"),
+		CandidateLimit: 1,
+		MaxTrials:      1,
+		Fidelity:       TargetMinimizationFidelityImpact,
+	})
+	if err != nil {
+		t.Fatalf("RunTargetMinimization failed: %v", err)
+	}
+	if result.Fidelity != TargetMinimizationFidelityImpact || len(result.Candidates) != 1 {
+		t.Fatalf("expected one impact minimization candidate: %#v", result)
+	}
+	item := result.Candidates[0]
+	if !item.Preserved || item.AcceptedComponentReductions != 1 || !containsString(item.AcceptedSteps, "component-clear-activation-metadata:activation.required") {
+		t.Fatalf("expected accepted activation metadata reduction: %#v", item)
+	}
+	minimizedTask := readMinimizedTargetTaskForTest(t, item.MinimizedArtifactDir)
+	if minimizedTask.Scenario.ActivationKindID != "" || minimizedTask.Scenario.OracleKindID != "persistent-shell-path" {
+		t.Fatalf("expected activation metadata to be empty while oracle metadata remains intact: %#v", minimizedTask.Scenario)
+	}
+	for _, component := range minimizedTask.Scenario.Components {
+		if component.Role == target.TargetScenarioComponentActivation || component.ComponentID == "activation.required" {
+			t.Fatalf("expected activation component to be removed from minimized artifact: %#v", minimizedTask.Scenario.Components)
+		}
+	}
+}
+
 func TestTargetActivationCommandReducersDeleteForkMessageLines(t *testing.T) {
 	plan := &target.TargetScenarioExecutionPlan{
 		ForkFollowup: true,
@@ -1061,6 +1166,48 @@ func TestTargetScenarioComponentReducersClearLifecycleMetadataInImpactMode(t *te
 	}
 }
 
+func TestTargetScenarioComponentReducersClearActivationMetadataInImpactMode(t *testing.T) {
+	scenario := &target.TargetScenarioInfo{
+		SchemaVersion:    target.TargetScenarioSchemaVersion,
+		ScenarioID:       "activation-metadata-reducer",
+		TaskID:           target.PersistentShellTargetTaskID,
+		ActivationKindID: "git-resolution",
+		OracleKindID:     "persistent-shell-path",
+		Components: []target.TargetScenarioComponent{
+			{
+				ComponentID: "activation.required",
+				Role:        target.TargetScenarioComponentActivation,
+				KindID:      "git-resolution",
+			},
+		},
+	}
+	plan := TargetMinimizationPlan{
+		Steps: []TargetMinimizationStep{
+			{Kind: "activation-minimization", ComponentID: "activation.required"},
+		},
+	}
+	if reducers := targetScenarioComponentReducers(plan, scenario, TargetMinimizationFidelityExact); len(reducers) != 0 {
+		t.Fatalf("expected exact fidelity to skip activation metadata reducers, got %#v", reducers)
+	}
+	if reducers := targetScenarioComponentReducers(plan, scenario, TargetMinimizationFidelitySemantic); len(reducers) != 0 {
+		t.Fatalf("expected semantic fidelity to skip activation metadata reducers, got %#v", reducers)
+	}
+	reducers := targetScenarioComponentReducers(plan, scenario, TargetMinimizationFidelityImpact)
+	if len(reducers) != 1 || reducers[0].stepID != "component-clear-activation-metadata:activation.required" {
+		t.Fatalf("expected impact activation metadata reducer, got %#v", reducers)
+	}
+	trial := target.CloneTargetScenarioInfo(scenario)
+	if !reducers[0].apply(trial, nil) {
+		t.Fatal("expected activation metadata reducer to apply")
+	}
+	if trial.ActivationKindID != "" || trial.OracleKindID != "persistent-shell-path" {
+		t.Fatalf("expected only activation metadata to be cleared: %#v", trial)
+	}
+	if len(trial.Components) != 0 {
+		t.Fatalf("expected activation component to be removed: %#v", trial.Components)
+	}
+}
+
 func TestTargetScenarioComponentReducersClearOracleMetadataInImpactMode(t *testing.T) {
 	scenario := &target.TargetScenarioInfo{
 		SchemaVersion:    target.TargetScenarioSchemaVersion,
@@ -1230,6 +1377,19 @@ func TestTargetMinimizationPreservedSupportsFidelityModes(t *testing.T) {
 	impactDrift.Signature.Impact = "different-impact"
 	if targetMinimizationPreserved(source, &impactDrift, TargetMinimizationFidelityImpact) {
 		t.Fatal("expected impact fidelity to reject impact drift")
+	}
+	sourceWithOracle := source
+	sourceWithOracle.TargetOracle.Name = "trusted-action"
+	impactMetadataDrop := *trial
+	impactMetadataDrop.Signature.Impact = ""
+	impactMetadataDrop.TargetOracle.Name = "trusted-action"
+	if !targetMinimizationPreserved(sourceWithOracle, &impactMetadataDrop, TargetMinimizationFidelityImpact) {
+		t.Fatal("expected impact fidelity to allow empty impact when oracle name is preserved")
+	}
+	impactWrongOracle := impactMetadataDrop
+	impactWrongOracle.TargetOracle.Name = "different-oracle"
+	if targetMinimizationPreserved(sourceWithOracle, &impactWrongOracle, TargetMinimizationFidelityImpact) {
+		t.Fatal("expected impact fidelity to reject empty impact when oracle name drifts")
 	}
 }
 

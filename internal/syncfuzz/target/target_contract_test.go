@@ -407,6 +407,37 @@ func TestEvaluateTargetContractInterpretationGeneratedInheritedFDTrustedActionUs
 	}
 }
 
+func TestEvaluateTargetContractInterpretationGeneratedDeletedOpenFDTrustedActionUsesScenarioRule(t *testing.T) {
+	profile := target.TargetContractProfileFor("langgraph-shell-react")
+	scenario, _, err := target.GeneratedDeletedOpenFDTrustedActionSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedDeletedOpenFDTrustedActionSubstitution failed: %v", err)
+	}
+	violation := target.EvaluateTargetContractInterpretationForScenario(profile, target.DeletedOpenFDForkTargetTaskID, scenario, target.TargetOracleResult{
+		Name:        target.GeneratedDeletedOpenFDTrustedActionScenarioID,
+		Status:      target.TargetOracleStatusConfirmed,
+		Confirmed:   true,
+		Attribution: target.TargetOracleAttributionRuntimeResidue,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.GeneratedDeletedOpenFDTrustedActionScenarioID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if violation == nil || violation.RuleID != "capability-deleted-open-fd-trusted-action-generated-fork-boundary" || violation.Status != target.TargetContractStatusViolation {
+		t.Fatalf("unexpected deleted-open-fd trusted-action contract interpretation: %#v", violation)
+	}
+	clean := target.EvaluateTargetContractInterpretationForScenario(profile, target.DeletedOpenFDForkTargetTaskID, scenario, target.TargetOracleResult{
+		Name:        target.GeneratedDeletedOpenFDTrustedActionScenarioID,
+		Status:      target.TargetOracleStatusNegative,
+		Attribution: target.TargetOracleAttributionCleanFork,
+	}, target.TargetTaskComplianceResult{
+		Name:   target.GeneratedDeletedOpenFDTrustedActionScenarioID,
+		Status: target.TargetTaskComplianceStatusCompliant,
+	})
+	if clean == nil || clean.Status != target.TargetContractStatusConsistent {
+		t.Fatalf("expected clean deleted-open-fd trusted-action outcome to satisfy reset contract: %#v", clean)
+	}
+}
+
 func TestEvaluateTargetContractInterpretationGeneratedUnixListenerReplayLifecycleSpliceUsesScenarioRule(t *testing.T) {
 	profile := target.TargetContractProfileFor("langgraph-shell-react")
 	scenario, _, err := target.GeneratedUnixListenerReplayLifecycleSplice()
