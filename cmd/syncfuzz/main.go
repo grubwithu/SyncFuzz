@@ -86,7 +86,7 @@ Usage:
   syncfuzz target prompt-profiles
   syncfuzz target prompt-variants
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
-  syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--out runs]
+  syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--fidelity exact|semantic|impact] [--out runs]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz target run [--target maf-github-copilot-shell] [--task orphan-process] [--command-file examples/target-commands/maf-github-copilot-shell.sh] [--observe-delay 500ms] [--out runs]
   syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles baseline,workflow,audit] [--matrix] [--feedback-from target-matrix-result.json] [--candidate-limit 3] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
@@ -653,9 +653,10 @@ func targetMinimize(args []string) {
 	fs := flag.NewFlagSet("target minimize", flag.ExitOnError)
 	sourcePath := fs.String("from", "", "target-suite-result.json or target-matrix-result.json to turn into a minimization batch")
 	outDir := fs.String("out", "runs", "directory for target minimization artifacts")
-	execute := fs.Bool("execute", false, "execute conservative prompt-reduction trials and preserve the source oracle constraints")
+	execute := fs.Bool("execute", false, "execute conservative prompt, Scenario IR component, and execution-plan trials while preserving the source oracle constraints")
 	candidateLimit := fs.Int("candidate-limit", 1, "maximum applicable candidates to execute when --execute is set; 0 means all")
-	maxTrials := fs.Int("max-trials", 32, "maximum prompt-reduction trials per candidate when --execute is set")
+	maxTrials := fs.Int("max-trials", 32, "maximum minimization trials per candidate when --execute is set")
+	fidelity := fs.String("fidelity", string(scheduler.TargetMinimizationFidelityExact), "minimization fidelity mode: exact, semantic, or impact")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -665,6 +666,7 @@ func targetMinimize(args []string) {
 			OutDir:         *outDir,
 			CandidateLimit: *candidateLimit,
 			MaxTrials:      *maxTrials,
+			Fidelity:       scheduler.TargetMinimizationFidelity(*fidelity),
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "syncfuzz target minimize failed: %v\n", err)
@@ -672,20 +674,25 @@ func targetMinimize(args []string) {
 		}
 		fmt.Printf("minimization_id: %s\n", result.MinimizationID)
 		fmt.Printf("source_schema: %s\n", result.SourceSchema)
+		fmt.Printf("fidelity: %s\n", result.Fidelity)
 		fmt.Printf("applicable_plans: %d\n", result.ApplicablePlans)
 		fmt.Printf("executed_candidates: %d\n", result.ExecutedCandidates)
 		fmt.Printf("total_trials: %d\n", result.TotalTrials)
 		fmt.Printf("accepted_reductions: %d\n", result.AcceptedReductions)
 		for index, candidate := range result.Candidates {
-			fmt.Printf("candidate_%d: task=%s preserved=%t prompt_lines=%d->%d trials=%d accepted=%d prompt_accepted=%d execution_accepted=%d",
+			fmt.Printf("candidate_%d: task=%s preserved=%t prompt_lines=%d->%d components=%d->%d trials=%d accepted=%d prompt_accepted=%d component_accepted=%d activation_accepted=%d execution_accepted=%d",
 				index+1,
 				candidate.TaskID,
 				candidate.Preserved,
 				candidate.OriginalPromptLines,
 				candidate.MinimizedPromptLines,
+				candidate.OriginalComponents,
+				candidate.MinimizedComponents,
 				candidate.Trials,
 				candidate.AcceptedReductions,
 				candidate.AcceptedPromptReductions,
+				candidate.AcceptedComponentReductions,
+				candidate.AcceptedActivationReductions,
 				candidate.AcceptedExecutionReductions,
 			)
 			if len(candidate.AcceptedSteps) > 0 {
