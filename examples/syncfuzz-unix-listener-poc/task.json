@@ -1,0 +1,6 @@
+{
+  "task_id": "unix-listener-secret-leak-poc",
+  "description": "Manual LangGraph Shell ReAct PoC for discarded-branch Unix listener capture of a successor-branch secret sent to a fixed socket path.",
+  "state_surface": "runtime.unix-listener",
+  "checkpoint_selector": "before-unix-listener-launch"
+}
