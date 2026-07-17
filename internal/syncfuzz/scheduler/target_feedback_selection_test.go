@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
@@ -575,6 +576,72 @@ func TestSelectTargetMatrixCandidatesAllowsFullExclusionToReturnEmptyMatrix(t *t
 	}
 }
 
+func TestSelectTargetMatrixCandidatesFixedPolicyPreservesMatrixOrder(t *testing.T) {
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates: []TargetScheduleCandidate{
+			testTargetScheduleCandidate("task-c", target.TargetPromptProfileBaselineID),
+			testTargetScheduleCandidate("task-a", target.TargetPromptProfileBaselineID),
+			testTargetScheduleCandidate("task-b", target.TargetPromptProfileBaselineID),
+		},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	selected, err := selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{
+		SelectionPolicy: TargetSelectionPolicyFixed,
+		Limit:           2,
+	})
+	if err != nil {
+		t.Fatalf("selectTargetMatrixCandidates failed: %v", err)
+	}
+	got := targetTestCandidateIDs(selected.Candidates)
+	want := []string{
+		targetScheduleCandidateID("test-target", "task-c", target.TargetPromptProfileBaselineID),
+		targetScheduleCandidateID("test-target", "task-a", target.TargetPromptProfileBaselineID),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("fixed policy order mismatch: got %#v want %#v", got, want)
+	}
+}
+
+func TestSelectTargetMatrixCandidatesRandomPolicyIsDeterministic(t *testing.T) {
+	matrix := &TargetScheduleMatrix{
+		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
+		TargetID:      "test-target",
+		Candidates: []TargetScheduleCandidate{
+			testTargetScheduleCandidate("task-a", target.TargetPromptProfileBaselineID),
+			testTargetScheduleCandidate("task-b", target.TargetPromptProfileBaselineID),
+			testTargetScheduleCandidate("task-c", target.TargetPromptProfileBaselineID),
+			testTargetScheduleCandidate("task-d", target.TargetPromptProfileBaselineID),
+		},
+	}
+	matrix.TotalCandidates = len(matrix.Candidates)
+
+	first, err := selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{
+		SelectionPolicy: TargetSelectionPolicyRandom,
+		RandomSeed:      99,
+		Limit:           3,
+	})
+	if err != nil {
+		t.Fatalf("selectTargetMatrixCandidates failed: %v", err)
+	}
+	second, err := selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{
+		SelectionPolicy: TargetSelectionPolicyRandom,
+		RandomSeed:      99,
+		Limit:           3,
+	})
+	if err != nil {
+		t.Fatalf("selectTargetMatrixCandidates failed: %v", err)
+	}
+	if !reflect.DeepEqual(targetTestCandidateIDs(first.Candidates), targetTestCandidateIDs(second.Candidates)) {
+		t.Fatalf("expected deterministic random selection, got first=%#v second=%#v", first.Candidates, second.Candidates)
+	}
+	if reflect.DeepEqual(targetTestCandidateIDs(first.Candidates), targetTestCandidateIDs(matrix.Candidates[:3])) {
+		t.Fatalf("expected random policy to differ from fixed matrix order, got %#v", first.Candidates)
+	}
+}
+
 func testTargetScheduleCandidate(taskID string, profileID string) TargetScheduleCandidate {
 	return TargetScheduleCandidate{
 		CandidateID:            targetScheduleCandidateID("test-target", taskID, profileID),
@@ -588,6 +655,14 @@ func testTargetScheduleCandidate(taskID string, profileID string) TargetSchedule
 		StateSurface:           "workspace.file",
 		LifecycleEdge:          "checkpoint->fork",
 	}
+}
+
+func targetTestCandidateIDs(candidates []TargetScheduleCandidate) []string {
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, candidate.CandidateID)
+	}
+	return out
 }
 
 func testTargetScenarioCandidate(taskID string, seedID string, primitiveID string) TargetScheduleCandidate {

@@ -89,8 +89,8 @@ Usage:
   syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--fidelity exact|semantic|impact] [--out runs]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz target run [--target maf-github-copilot-shell] [--task orphan-process] [--command-file examples/target-commands/maf-github-copilot-shell.sh] [--observe-delay 500ms] [--out runs]
-  syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles baseline,workflow,audit] [--matrix] [--feedback-from target-matrix-result.json] [--candidate-limit 3] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
-  syncfuzz target campaign [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--group phase5a-baseline] [--prompt-profiles baseline,workflow,audit] [--rounds 2] [--candidate-limit 3] [--repeat 1] [--min-coverage-gain-score 0] [--max-stagnant-rounds 0] [--auto-pivot] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles baseline,workflow,audit] [--matrix] [--selection-policy explore|feedback|fixed|random] [--random-seed 1] [--feedback-from target-matrix-result.json] [--candidate-limit 3] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target campaign [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--group phase5a-baseline] [--prompt-profiles baseline,workflow,audit] [--rounds 2] [--selection-policy explore|feedback|fixed|random] [--random-seed 1] [--candidate-limit 3] [--repeat 1] [--min-coverage-gain-score 0] [--max-stagnant-rounds 0] [--auto-pivot] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz corpus list [--corpus corpus] [--limit 20]
   syncfuzz corpus analyze [--corpus corpus] [--limit 0] [--verification runs/verify-<id>/verification-result.json]
   syncfuzz corpus show --id <entry_id> [--corpus corpus]
@@ -875,6 +875,8 @@ func targetSuite(args []string) {
 	matrixMode := fs.Bool("matrix", false, "run the real-target task matrix instead of a fixed task list")
 	feedbackFrom := fs.String("feedback-from", "", "previous target-matrix-result.json used to rank target candidates")
 	candidateLimit := fs.Int("candidate-limit", 0, "maximum matrix candidates to execute after feedback ranking; 0 means all")
+	selectionPolicy := fs.String("selection-policy", "", "matrix candidate selection policy: explore, feedback, fixed, or random")
+	randomSeed := fs.Int64("random-seed", scheduler.DefaultTargetRandomSeed, "deterministic seed used by --selection-policy random")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -910,6 +912,8 @@ func targetSuite(args []string) {
 		Matrix:           *matrixMode,
 		FeedbackFrom:     *feedbackFrom,
 		CandidateLimit:   *candidateLimit,
+		SelectionPolicy:  scheduler.TargetSelectionPolicy(*selectionPolicy),
+		RandomSeed:       *randomSeed,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz target suite failed: %v\n", err)
@@ -943,6 +947,12 @@ func targetSuite(args []string) {
 		}
 		if result.CandidateLimit > 0 {
 			fmt.Printf("candidate_limit: %d\n", result.CandidateLimit)
+		}
+		if result.SelectionPolicy != "" {
+			fmt.Printf("selection_policy: %s\n", result.SelectionPolicy)
+		}
+		if result.RandomSeed != 0 {
+			fmt.Printf("random_seed: %d\n", result.RandomSeed)
 		}
 		if len(result.CandidateSummaries) > 0 {
 			top := result.CandidateSummaries[0]
@@ -1022,6 +1032,8 @@ func targetCampaign(args []string) {
 	repeat := fs.Int("repeat", 1, "number of repetitions per target candidate")
 	candidateLimit := fs.Int("candidate-limit", 0, "candidate budget for feedback-ranked rounds; 0 means all")
 	feedbackFrom := fs.String("feedback-from", "", "optional seed target-matrix-result.json for the first round")
+	selectionPolicy := fs.String("selection-policy", "", "matrix candidate selection policy: explore, feedback, fixed, or random")
+	randomSeed := fs.Int64("random-seed", scheduler.DefaultTargetRandomSeed, "deterministic seed used by --selection-policy random")
 	minCoverageGainScore := fs.Int("min-coverage-gain-score", 0, "minimum round coverage gain weighted score before a round counts as stagnant")
 	maxStagnantRounds := fs.Int("max-stagnant-rounds", 0, "stop early after this many consecutive stagnant rounds; 0 disables early stop")
 	autoPivot := fs.Bool("auto-pivot", false, "when stagnation is detected, expand into a recommended missing dimension instead of stopping early")
@@ -1058,6 +1070,8 @@ func targetCampaign(args []string) {
 		Repeat:               *repeat,
 		CandidateLimit:       *candidateLimit,
 		FeedbackFrom:         *feedbackFrom,
+		SelectionPolicy:      scheduler.TargetSelectionPolicy(*selectionPolicy),
+		RandomSeed:           *randomSeed,
 		MinCoverageGainScore: *minCoverageGainScore,
 		MaxStagnantRounds:    *maxStagnantRounds,
 		AutoPivot:            *autoPivot,
@@ -1086,6 +1100,12 @@ func targetCampaign(args []string) {
 		fmt.Printf("seed_ids: %s\n", strings.Join(result.SeedIDs, ","))
 	}
 	fmt.Printf("candidate_limit: %d\n", result.CandidateLimit)
+	if result.SelectionPolicy != "" {
+		fmt.Printf("selection_policy: %s\n", result.SelectionPolicy)
+	}
+	if result.RandomSeed != 0 {
+		fmt.Printf("random_seed: %d\n", result.RandomSeed)
+	}
 	if result.MaxStagnantRounds > 0 {
 		fmt.Printf("min_coverage_gain_score: %d\n", result.MinCoverageGainScore)
 		fmt.Printf("max_stagnant_rounds: %d\n", result.MaxStagnantRounds)
@@ -1142,9 +1162,10 @@ func targetCampaign(args []string) {
 		)
 	}
 	for _, round := range result.RoundResults {
-		fmt.Printf("round_%d: scheduler=%s candidates=%d runs=%d confirmed=%d errors=%d matrix_result=%s\n",
+		fmt.Printf("round_%d: scheduler=%s policy=%s candidates=%d runs=%d confirmed=%d errors=%d matrix_result=%s\n",
 			round.Round,
 			round.SchedulerMode,
+			round.SelectionPolicy,
 			round.TotalCandidates,
 			round.TotalRuns,
 			round.Confirmed,

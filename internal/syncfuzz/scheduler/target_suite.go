@@ -40,6 +40,8 @@ type TargetSuiteOptions struct {
 	FeedbackFrom      string
 	CandidateLimit    int
 	ExcludeCandidates []string
+	SelectionPolicy   TargetSelectionPolicy
+	RandomSeed        int64
 }
 
 type TargetSuiteRunResult struct {
@@ -173,6 +175,8 @@ type TargetSuiteResult struct {
 	OriginalCandidates   int                              `json:"original_candidates,omitempty"`
 	CandidateLimit       int                              `json:"candidate_limit,omitempty"`
 	FeedbackFrom         string                           `json:"feedback_from,omitempty"`
+	SelectionPolicy      TargetSelectionPolicy            `json:"selection_policy,omitempty"`
+	RandomSeed           int64                            `json:"random_seed,omitempty"`
 	ScheduleMatrix       string                           `json:"schedule_matrix,omitempty"`
 	MatrixResult         string                           `json:"matrix_result,omitempty"`
 	CandidateSummaries   []TargetCandidateSummary         `json:"candidate_summaries,omitempty"`
@@ -196,6 +200,8 @@ type TargetMatrixResult struct {
 	OriginalCandidates int                              `json:"original_candidates,omitempty"`
 	CandidateLimit     int                              `json:"candidate_limit,omitempty"`
 	FeedbackFrom       string                           `json:"feedback_from,omitempty"`
+	SelectionPolicy    TargetSelectionPolicy            `json:"selection_policy,omitempty"`
+	RandomSeed         int64                            `json:"random_seed,omitempty"`
 	Repeat             int                              `json:"repeat"`
 	TotalRuns          int                              `json:"total_runs"`
 	Confirmed          int                              `json:"confirmed"`
@@ -226,6 +232,18 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	if err := environment.ValidateEnvironmentKind(opts.EnvKind); err != nil {
 		return nil, err
 	}
+	selectionPolicy, err := normalizeTargetSelectionPolicy(opts.SelectionPolicy, opts.FeedbackFrom)
+	if err != nil {
+		return nil, err
+	}
+	randomSeed := opts.RandomSeed
+	if selectionPolicy == TargetSelectionPolicyRandom && randomSeed == 0 {
+		randomSeed = DefaultTargetRandomSeed
+	}
+	effectiveFeedbackFrom := opts.FeedbackFrom
+	if selectionPolicy != TargetSelectionPolicyFeedback {
+		effectiveFeedbackFrom = ""
+	}
 	schedulerMode := suiteSchedulerCaseList
 	var (
 		tasks                  []string
@@ -234,7 +252,6 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 		matrix                 *TargetScheduleMatrix
 		coverageUniverse       *TargetScheduleMatrix
 		originalCandidateCount int
-		err                    error
 	)
 	if opts.Matrix {
 		schedulerMode = suiteSchedulerMatrix
@@ -252,12 +269,15 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 		originalCandidateCount = matrix.TotalCandidates
 		tasks = append([]string{}, matrix.Tasks...)
 		taskGroups = append([]string{}, matrix.TaskGroups...)
-		if opts.FeedbackFrom != "" || opts.CandidateLimit > 0 || len(opts.ExcludeCandidates) > 0 {
+		selectionRequested := opts.FeedbackFrom != "" || opts.CandidateLimit > 0 || len(opts.ExcludeCandidates) > 0 || opts.SelectionPolicy != ""
+		if selectionRequested {
 			schedulerMode = suiteSchedulerFeedback
 			matrix, err = selectTargetMatrixCandidates(matrix, TargetFeedbackSelectionOptions{
-				FeedbackFrom:        opts.FeedbackFrom,
+				FeedbackFrom:        effectiveFeedbackFrom,
 				Limit:               opts.CandidateLimit,
 				ExcludeCandidateIDs: opts.ExcludeCandidates,
+				SelectionPolicy:     selectionPolicy,
+				RandomSeed:          randomSeed,
 			})
 			if err != nil {
 				return nil, err
@@ -308,7 +328,15 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 		result.TotalCandidates = matrix.TotalCandidates
 		result.OriginalCandidates = originalCandidateCount
 		result.CandidateLimit = opts.CandidateLimit
-		result.FeedbackFrom = opts.FeedbackFrom
+		result.FeedbackFrom = effectiveFeedbackFrom
+		if schedulerMode == suiteSchedulerMatrix && opts.SelectionPolicy == "" && opts.FeedbackFrom == "" {
+			result.SelectionPolicy = TargetSelectionPolicyFixed
+		} else {
+			result.SelectionPolicy = selectionPolicy
+		}
+		if result.SelectionPolicy == TargetSelectionPolicyRandom {
+			result.RandomSeed = randomSeed
+		}
 		result.ScheduleMatrix = filepath.Join(suiteDir, targetScheduleMatrixArtifact)
 		result.MatrixResult = filepath.Join(suiteDir, targetMatrixResultArtifact)
 	} else if selection := target.TargetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs); len(selection) > 0 {
@@ -390,6 +418,8 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 			OriginalCandidates: result.OriginalCandidates,
 			CandidateLimit:     result.CandidateLimit,
 			FeedbackFrom:       result.FeedbackFrom,
+			SelectionPolicy:    result.SelectionPolicy,
+			RandomSeed:         result.RandomSeed,
 			Repeat:             result.Repeat,
 			TotalRuns:          result.TotalRuns,
 			Confirmed:          result.Confirmed,

@@ -32,6 +32,8 @@ type TargetCampaignOptions struct {
 	Repeat               int
 	CandidateLimit       int
 	FeedbackFrom         string
+	SelectionPolicy      TargetSelectionPolicy
+	RandomSeed           int64
 	MinCoverageGainScore int
 	MaxStagnantRounds    int
 	AutoPivot            bool
@@ -50,6 +52,8 @@ type TargetCampaignRoundResult struct {
 	ArtifactDir         string                               `json:"artifact_dir"`
 	MatrixResult        string                               `json:"matrix_result"`
 	FeedbackFrom        string                               `json:"feedback_from,omitempty"`
+	SelectionPolicy     TargetSelectionPolicy                `json:"selection_policy,omitempty"`
+	RandomSeed          int64                                `json:"random_seed,omitempty"`
 	OriginalCandidates  int                                  `json:"original_candidates,omitempty"`
 	TotalCandidates     int                                  `json:"total_candidates"`
 	TotalRuns           int                                  `json:"total_runs"`
@@ -95,6 +99,8 @@ type TargetCampaignResult struct {
 	Repeat               int                                 `json:"repeat"`
 	CandidateLimit       int                                 `json:"candidate_limit,omitempty"`
 	SeedFeedbackFrom     string                              `json:"seed_feedback_from,omitempty"`
+	SelectionPolicy      TargetSelectionPolicy               `json:"selection_policy,omitempty"`
+	RandomSeed           int64                               `json:"random_seed,omitempty"`
 	Tasks                []string                            `json:"tasks,omitempty"`
 	TaskGroups           []string                            `json:"task_groups,omitempty"`
 	SeedIDs              []string                            `json:"seed_ids,omitempty"`
@@ -149,6 +155,14 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 	if opts.CandidateLimit < 0 {
 		return nil, fmt.Errorf("candidate limit cannot be negative")
 	}
+	selectionPolicy, err := normalizeTargetSelectionPolicy(opts.SelectionPolicy, opts.FeedbackFrom)
+	if err != nil {
+		return nil, err
+	}
+	randomSeed := opts.RandomSeed
+	if selectionPolicy == TargetSelectionPolicyRandom && randomSeed == 0 {
+		randomSeed = DefaultTargetRandomSeed
+	}
 	if opts.MaxStagnantRounds < 0 {
 		return nil, fmt.Errorf("max stagnant rounds cannot be negative")
 	}
@@ -185,6 +199,12 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 		PromptProfiles:       append([]string{}, target.TargetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs)...),
 		PivotHistory:         []TargetCampaignPivotEvent{},
 		RoundResults:         []TargetCampaignRoundResult{},
+	}
+	if opts.SelectionPolicy != "" || opts.FeedbackFrom != "" {
+		result.SelectionPolicy = selectionPolicy
+	}
+	if result.SelectionPolicy == TargetSelectionPolicyRandom {
+		result.RandomSeed = randomSeed
 	}
 	runningOpts := opts
 	universe, err := buildTargetCampaignUniverse(runningOpts)
@@ -225,6 +245,8 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 			FeedbackFrom:      feedbackFrom,
 			CandidateLimit:    runningOpts.CandidateLimit,
 			ExcludeCandidates: sortedSet(seenCandidates),
+			SelectionPolicy:   runningOpts.SelectionPolicy,
+			RandomSeed:        randomSeed,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("target campaign round %d failed: %w", round, err)
@@ -474,6 +496,8 @@ func targetCampaignRoundResult(round int, suite *TargetSuiteResult, coverageGain
 		ArtifactDir:         suite.ArtifactDir,
 		MatrixResult:        suite.MatrixResult,
 		FeedbackFrom:        suite.FeedbackFrom,
+		SelectionPolicy:     suite.SelectionPolicy,
+		RandomSeed:          suite.RandomSeed,
 		OriginalCandidates:  suite.OriginalCandidates,
 		TotalCandidates:     suite.TotalCandidates,
 		TotalRuns:           suite.TotalRuns,

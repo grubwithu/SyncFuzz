@@ -3,6 +3,7 @@ package scheduler
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"sort"
 	"strings"
@@ -11,10 +12,23 @@ import (
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
+type TargetSelectionPolicy string
+
+const (
+	TargetSelectionPolicyExplore  TargetSelectionPolicy = "explore"
+	TargetSelectionPolicyFeedback TargetSelectionPolicy = "feedback"
+	TargetSelectionPolicyFixed    TargetSelectionPolicy = "fixed"
+	TargetSelectionPolicyRandom   TargetSelectionPolicy = "random"
+
+	DefaultTargetRandomSeed int64 = 1
+)
+
 type TargetFeedbackSelectionOptions struct {
 	FeedbackFrom        string
 	Limit               int
 	ExcludeCandidateIDs []string
+	SelectionPolicy     TargetSelectionPolicy
+	RandomSeed          int64
 }
 
 type targetDimensionGapSet map[string]map[string]struct{}
@@ -88,11 +102,19 @@ func selectTargetMatrixCandidates(matrix *TargetScheduleMatrix, opts TargetFeedb
 	if opts.Limit < 0 {
 		return nil, fmt.Errorf("candidate limit cannot be negative")
 	}
+	policy, err := normalizeTargetSelectionPolicy(opts.SelectionPolicy, opts.FeedbackFrom)
+	if err != nil {
+		return nil, err
+	}
+	randomSeed := opts.RandomSeed
+	if policy == TargetSelectionPolicyRandom && randomSeed == 0 {
+		randomSeed = DefaultTargetRandomSeed
+	}
 
 	candidates := append([]TargetScheduleCandidate{}, matrix.Candidates...)
 	var summaryByCandidate map[string]TargetCandidateSummary
 	var dimensionCoverage []TargetDimensionCoverageSummary
-	if opts.FeedbackFrom != "" {
+	if policy == TargetSelectionPolicyFeedback && opts.FeedbackFrom != "" {
 		feedback, err := readTargetMatrixFeedback(opts.FeedbackFrom)
 		if err != nil {
 			return nil, err
@@ -106,9 +128,13 @@ func selectTargetMatrixCandidates(matrix *TargetScheduleMatrix, opts TargetFeedb
 	if len(opts.ExcludeCandidateIDs) > 0 {
 		candidates = filterExcludedTargetCandidates(candidates, opts.ExcludeCandidateIDs)
 	}
-	if len(summaryByCandidate) > 0 {
+	switch {
+	case policy == TargetSelectionPolicyFixed:
+	case policy == TargetSelectionPolicyRandom:
+		orderTargetRandomCandidates(candidates, randomSeed)
+	case len(summaryByCandidate) > 0:
 		candidates = orderTargetFeedbackCandidates(candidates, summaryByCandidate, dimensionCoverage)
-	} else {
+	default:
 		candidates = orderTargetExplorationCandidates(candidates, nil, nil, nil)
 	}
 	if opts.Limit > 0 && len(candidates) > opts.Limit {
@@ -119,6 +145,29 @@ func selectTargetMatrixCandidates(matrix *TargetScheduleMatrix, opts TargetFeedb
 	selected.Candidates = append([]TargetScheduleCandidate{}, candidates...)
 	selected.TotalCandidates = len(selected.Candidates)
 	return &selected, nil
+}
+
+func normalizeTargetSelectionPolicy(policy TargetSelectionPolicy, feedbackFrom string) (TargetSelectionPolicy, error) {
+	normalized := TargetSelectionPolicy(strings.TrimSpace(string(policy)))
+	if normalized == "" {
+		if strings.TrimSpace(feedbackFrom) != "" {
+			return TargetSelectionPolicyFeedback, nil
+		}
+		return TargetSelectionPolicyExplore, nil
+	}
+	switch normalized {
+	case TargetSelectionPolicyExplore, TargetSelectionPolicyFeedback, TargetSelectionPolicyFixed, TargetSelectionPolicyRandom:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("unknown target selection policy %q", policy)
+	}
+}
+
+func orderTargetRandomCandidates(candidates []TargetScheduleCandidate, seed int64) {
+	rng := rand.New(rand.NewSource(seed))
+	rng.Shuffle(len(candidates), func(i, j int) {
+		candidates[i], candidates[j] = candidates[j], candidates[i]
+	})
 }
 
 func filterExcludedTargetCandidates(candidates []TargetScheduleCandidate, exclude []string) []TargetScheduleCandidate {
