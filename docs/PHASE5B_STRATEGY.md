@@ -66,6 +66,14 @@ generic target、contract-unresolved、不兼容或 contract-consistent pair 只
 descriptive evidence。下一步是在 controlled campaign 中量化这层 calibration 的
 覆盖率与未解析原因，不能把任何汇总本身宣传为因果判定。
 
+`target calibration-summary` 已将这类 campaign 的离线统计固化为
+`target-pair-calibration-summary.json`：它递归收集每个 v2 pair artifact，给出
+calibration coverage、unresolved reason、contract-rule 分布以及逐报告 provenance。
+它刻意不自动声称 hypothesis precision；只有提供独立的
+`syncfuzz.target-pair-root-cause-review.v1` candidate-level review manifest 时，
+才按 `supported / (supported + unsupported)` 输出 reviewed precision，
+`inconclusive` 不进入分母。
+
 ## 当前判断
 
 SyncFuzz 已经不再停留在“框架能不能跑起来”的阶段。基于 `targets/langgraph_shell_react/`，我们已经稳定观测到几类真实 residue：

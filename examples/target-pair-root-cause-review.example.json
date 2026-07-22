@@ -1,0 +1,16 @@
+{
+  "schema_version": "syncfuzz.target-pair-root-cause-review.v1",
+  "reviews": [
+    {
+      "target_run_id": "<target-run-id>",
+      "point": "after-recovery",
+      "state_surface": "filesystem-namespace",
+      "mechanism": "target-only namespace object at lifecycle checkpoint",
+      "evidence": "<candidate-evidence>",
+      "contract_profile_id": "<contract-profile-id>",
+      "contract_rule_id": "<contract-rule-id>",
+      "verdict": "supported",
+      "rationale": "Independent trace or counterfactual evidence confirms this candidate."
+    }
+  ]
+}

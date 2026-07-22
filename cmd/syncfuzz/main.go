@@ -91,6 +91,7 @@ Usage:
   syncfuzz target plan-probes --footprint resource-footprint.json [--out observation-plan.json]
   syncfuzz target refine-plan --plan observation-plan.json --fallback-report targeted-probe-report.json [--out observation-plan-refined.json]
   syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id> [--out target-pair-differential.json]
+  syncfuzz target calibration-summary --inputs runs/<pair-campaign>,runs/<target-run-id>/target-pair-differential.json [--review-manifests review.json] --out target-pair-calibration-summary.json
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--fidelity exact|semantic|impact] [--out runs]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--observation-plan observation-plan.json] [--observation-mode shadow|pruned-filesystem|pruned] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
@@ -475,7 +476,7 @@ func campaign(args []string) {
 
 func runTarget(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, matrix, minimize, run, suite, or campaign")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, calibration-summary, matrix, minimize, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -501,6 +502,8 @@ func runTarget(args []string) {
 		targetRefinePlan(args[1:])
 	case "compare":
 		targetCompare(args[1:])
+	case "calibration-summary":
+		targetCalibrationSummary(args[1:])
 	case "matrix":
 		targetMatrix(args[1:])
 	case "minimize":
@@ -765,6 +768,44 @@ func targetCompare(args []string) {
 	fmt.Printf("root_cause_eligible: %t\n", result.ContractCalibration.RootCauseEligible)
 	fmt.Printf("root_cause_candidates: %d\n", len(result.RootCauseCandidates))
 	fmt.Printf("artifact: %s\n", output)
+}
+
+func targetCalibrationSummary(args []string) {
+	fs := flag.NewFlagSet("target calibration-summary", flag.ExitOnError)
+	inputs := fs.String("inputs", "", "comma-separated pair report paths or directory roots")
+	reviewManifests := fs.String("review-manifests", "", "comma-separated candidate-level root-cause review manifests")
+	outPath := fs.String("out", "", "target-pair-calibration-summary.json output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if len(splitCSV(*inputs)) == 0 || strings.TrimSpace(*outPath) == "" {
+		fmt.Fprintln(os.Stderr, "target calibration-summary requires --inputs and --out")
+		os.Exit(2)
+	}
+	result, err := target.SummarizeTargetPairCalibrations(target.TargetPairCalibrationSummaryOptions{
+		Inputs:              splitCSV(*inputs),
+		ReviewManifestPaths: splitCSV(*reviewManifests),
+		OutputPath:          *outPath,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target calibration-summary failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("pair_reports: %d\n", result.TotalPairs)
+	fmt.Printf("root_cause_eligible_pairs: %d\n", result.RootCauseEligiblePairs)
+	fmt.Printf("calibration_coverage: %.2f%%\n", result.CalibrationCoverage*100)
+	fmt.Printf("evidence_candidates: %d\n", result.EvidenceCandidates)
+	fmt.Printf("root_cause_candidates: %d\n", result.RootCauseCandidates)
+	fmt.Printf("unresolved_reasons: %d\n", len(result.UnresolvedReasons))
+	if result.HypothesisReview != nil {
+		fmt.Printf("reviewed_root_cause_candidates: %d\n", result.HypothesisReview.ReviewedCandidates)
+		if result.HypothesisReview.PrecisionAvailable {
+			fmt.Printf("reviewed_hypothesis_precision: %.2f%%\n", result.HypothesisReview.Precision*100)
+		} else {
+			fmt.Println("reviewed_hypothesis_precision: unavailable")
+		}
+	}
+	fmt.Printf("artifact: %s\n", *outPath)
 }
 
 func resourceClassCSV(classes []observation.ResourceClass) string {

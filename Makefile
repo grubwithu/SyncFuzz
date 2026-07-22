@@ -61,6 +61,9 @@ TARGET_REFINED_OBSERVATION_PLAN ?=
 TARGET_CONTROL_RUN ?=
 TARGET_COMPARE_RUN ?=
 TARGET_PAIR_DIFFERENTIAL ?=
+TARGET_PAIR_REPORTS ?=
+TARGET_PAIR_CALIBRATION_SUMMARY ?=
+TARGET_PAIR_REVIEW_MANIFESTS ?=
 EXPECT_FILES ?=
 
 # Phase 5B feedback experiment v3
@@ -236,6 +239,7 @@ help:
 	@echo "  make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json"
 	@echo "  make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<target-run-id>/targeted-probe-report.json"
 	@echo "  make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id>"
+	@echo "  make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign> TARGET_PAIR_CALIBRATION_SUMMARY=runs/<pair-campaign>/target-pair-calibration-summary.json [TARGET_PAIR_REVIEW_MANIFESTS=reviews.json]"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned ENV=local"
@@ -328,6 +332,11 @@ target-compare:
 	@test -n "$(TARGET_CONTROL_RUN)" || (echo "usage: make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id> [TARGET_PAIR_DIFFERENTIAL=path]"; exit 2)
 	@test -n "$(TARGET_COMPARE_RUN)" || (echo "usage: make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id> [TARGET_PAIR_DIFFERENTIAL=path]"; exit 2)
 	$(SYNCFUZZ) target compare --control $(TARGET_CONTROL_RUN) --target $(TARGET_COMPARE_RUN) $(if $(TARGET_PAIR_DIFFERENTIAL),--out $(TARGET_PAIR_DIFFERENTIAL),)
+
+target-calibration-summary:
+	@test -n "$(TARGET_PAIR_REPORTS)" || (echo "usage: make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign>[,runs/<target-run-id>/target-pair-differential.json] TARGET_PAIR_CALIBRATION_SUMMARY=path [TARGET_PAIR_REVIEW_MANIFESTS=reviews.json]"; exit 2)
+	@test -n "$(TARGET_PAIR_CALIBRATION_SUMMARY)" || (echo "usage: make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign>[,runs/<target-run-id>/target-pair-differential.json] TARGET_PAIR_CALIBRATION_SUMMARY=path [TARGET_PAIR_REVIEW_MANIFESTS=reviews.json]"; exit 2)
+	$(SYNCFUZZ) target calibration-summary --inputs $(TARGET_PAIR_REPORTS) $(if $(TARGET_PAIR_REVIEW_MANIFESTS),--review-manifests $(TARGET_PAIR_REVIEW_MANIFESTS),) --out $(TARGET_PAIR_CALIBRATION_SUMMARY)
 
 target-matrix:
 	$(SYNCFUZZ) target matrix --target $(TARGET_ID) --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS)
