@@ -477,7 +477,7 @@ func campaign(args []string) {
 
 func runTarget(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, pair-campaign, calibration-summary, contract-candidates, matrix, minimize, run, suite, or campaign")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, signatures, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, pair-campaign, calibration-summary, contract-candidates, matrix, minimize, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -489,6 +489,8 @@ func runTarget(args []string) {
 		targetSeeds()
 	case "scenarios":
 		targetScenarios()
+	case "signatures":
+		targetSignatures()
 	case "groups":
 		targetGroups()
 	case "prompt-profiles":
@@ -584,6 +586,30 @@ func targetScenarios() {
 			strings.Join(mutations, ","),
 		)
 	}
+}
+
+func targetSignatures() {
+	fmt.Printf("%-34s %-26s %-20s %-20s %-24s %-30s %s\n", "scenario", "seed", "relations", "resource_classes", "boundary", "mechanisms", "consequences")
+	for _, info := range target.TargetViolationSignatures() {
+		signature := info.Signature
+		fmt.Printf("%-34s %-26s %-20s %-20s %-24s %-30s %s\n",
+			info.ScenarioID,
+			info.SeedID,
+			targetSignatureValues(signature.Relations),
+			targetSignatureValues(signature.ResourceClasses),
+			signature.LifecycleBoundary,
+			targetSignatureValues(signature.PersistenceMechanisms),
+			targetSignatureValues(signature.Consequences),
+		)
+	}
+}
+
+func targetSignatureValues[T ~string](values []T) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, string(value))
+	}
+	return strings.Join(parts, ",")
 }
 
 func targetGroups() {

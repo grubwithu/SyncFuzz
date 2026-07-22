@@ -88,6 +88,12 @@ printf target-output`,
 	if recorded.TaskCompliance.Status != TargetTaskComplianceStatusNotApplicable {
 		t.Fatalf("expected default orphan-process task to skip compliance checks: %#v", recorded.TaskCompliance)
 	}
+	if result.ViolationSignature == nil || result.ViolationSignature.LifecycleBoundary != TargetViolationBoundaryCommandReturn || !targetViolationTestContains(result.ViolationSignature.Relations, TargetViolationReorderedDelayed) || !targetViolationTestContains(result.ViolationSignature.ResourceClasses, TargetViolationProcess) {
+		t.Fatalf("expected recorded delayed-process violation signature: %#v", result.ViolationSignature)
+	}
+	if recorded.ViolationSignature == nil || recorded.ViolationSignature.SignatureID != result.ViolationSignature.SignatureID {
+		t.Fatalf("expected persisted violation signature: %#v", recorded.ViolationSignature)
+	}
 }
 
 func TestRunTargetConsumesObservationPlanInShadowMode(t *testing.T) {

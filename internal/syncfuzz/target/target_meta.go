@@ -22,6 +22,7 @@ type TargetTaskInfo struct {
 	UsesLateObservation   bool                         `json:"uses_late_observation,omitempty"`
 	StateSurface          string                       `json:"state_surface,omitempty"`
 	LifecycleEdge         string                       `json:"lifecycle_edge,omitempty"`
+	ViolationSignature    TargetViolationSignature     `json:"violation_signature"`
 	LifecycleOperationID  string                       `json:"lifecycle_operation_id,omitempty"`
 	Components            []TargetScenarioComponent    `json:"components,omitempty"`
 	ExecutionPlan         *TargetScenarioExecutionPlan `json:"execution_plan,omitempty"`
@@ -65,6 +66,7 @@ func TargetTasks() []TargetTaskInfo {
 			UsesLateObservation:   scenario.UsesLateObservation,
 			StateSurface:          scenario.StateSurface,
 			LifecycleEdge:         scenario.LifecycleEdge,
+			ViolationSignature:    scenario.ViolationSignature,
 			Components:            append([]TargetScenarioComponent{}, scenario.Components...),
 			Mutations:             append([]TargetScenarioMutation{}, scenario.Mutations...),
 		})

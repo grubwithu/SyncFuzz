@@ -241,6 +241,24 @@ func targetDimensionCoverageDescriptors() []targetDimensionDescriptor {
 		{name: "lifecycle_edge", values: func(candidate TargetScheduleCandidate) []string {
 			return targetDimensionSingle(candidate.LifecycleEdge)
 		}},
+		{name: "violation_relation", values: func(candidate TargetScheduleCandidate) []string {
+			return targetViolationRelations(candidate.ViolationSignature)
+		}},
+		{name: "violation_resource_class", values: func(candidate TargetScheduleCandidate) []string {
+			return targetViolationResourceClasses(candidate.ViolationSignature)
+		}},
+		{name: "violation_lifecycle_boundary", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionSingle(string(candidate.ViolationSignature.LifecycleBoundary))
+		}},
+		{name: "violation_persistence_mechanism", values: func(candidate TargetScheduleCandidate) []string {
+			return targetViolationPersistenceMechanisms(candidate.ViolationSignature)
+		}},
+		{name: "violation_consequence", values: func(candidate TargetScheduleCandidate) []string {
+			return targetViolationConsequences(candidate.ViolationSignature)
+		}},
+		{name: "violation_signature_id", values: func(candidate TargetScheduleCandidate) []string {
+			return targetDimensionSingle(candidate.ViolationSignature.SignatureID)
+		}},
 		{name: "contract_rule_id", values: func(candidate TargetScheduleCandidate) []string {
 			return targetDimensionSingle(candidate.ContractRuleID)
 		}},
@@ -297,6 +315,38 @@ func targetDimensionCoverageDescriptors() []targetDimensionDescriptor {
 			return targetDimensionPair(targetCandidateMutationFocusID(candidate), candidate.OracleKindID)
 		}},
 	}
+}
+
+func targetViolationRelations(signature target.TargetViolationSignature) []string {
+	values := make([]string, 0, len(signature.Relations))
+	for _, value := range signature.Relations {
+		values = append(values, string(value))
+	}
+	return values
+}
+
+func targetViolationResourceClasses(signature target.TargetViolationSignature) []string {
+	values := make([]string, 0, len(signature.ResourceClasses))
+	for _, value := range signature.ResourceClasses {
+		values = append(values, string(value))
+	}
+	return values
+}
+
+func targetViolationPersistenceMechanisms(signature target.TargetViolationSignature) []string {
+	values := make([]string, 0, len(signature.PersistenceMechanisms))
+	for _, value := range signature.PersistenceMechanisms {
+		values = append(values, string(value))
+	}
+	return values
+}
+
+func targetViolationConsequences(signature target.TargetViolationSignature) []string {
+	values := make([]string, 0, len(signature.Consequences))
+	for _, value := range signature.Consequences {
+		values = append(values, string(value))
+	}
+	return values
 }
 
 func targetDimensionSingle(value string) []string {

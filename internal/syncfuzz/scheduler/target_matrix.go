@@ -37,6 +37,7 @@ type TargetScheduleCandidate struct {
 	UsesLateObservation      bool                                `json:"uses_late_observation,omitempty"`
 	DefaultLateObserveDelay  int64                               `json:"default_late_observe_delay_ms,omitempty"`
 	Signature                core.MismatchSignature              `json:"signature"`
+	ViolationSignature       target.TargetViolationSignature     `json:"violation_signature"`
 	ContractProfileID        string                              `json:"contract_profile_id,omitempty"`
 	ContractRuleID           string                              `json:"contract_rule_id,omitempty"`
 	ContractExpectation      target.TargetContractExpectation    `json:"contract_expectation,omitempty"`
@@ -120,6 +121,7 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 				candidate.UsesLateObservation = taskInfo.UsesLateObservation
 				candidate.StateSurface = taskInfo.StateSurface
 				candidate.LifecycleEdge = taskInfo.LifecycleEdge
+				candidate.ViolationSignature = taskInfo.ViolationSignature
 				candidate.LifecycleOperationID = taskInfo.LifecycleOperationID
 				candidate.Components = append([]target.TargetScenarioComponent{}, taskInfo.Components...)
 				if taskInfo.ExecutionPlan != nil {
@@ -553,6 +555,7 @@ func targetDerivedGeneratedScenarioCandidate(base TargetScheduleCandidate, gener
 	derived.LateExpectedFiles = append([]string{}, scenario.LateExpectedFiles...)
 	derived.UsesLateObservation = scenario.UsesLateObservation
 	derived.DefaultLateObserveDelay = scenario.LateObserveDelayMs
+	derived.ViolationSignature = scenario.ViolationSignature
 	derived.StateSurface = scenario.StateSurface
 	derived.LifecycleEdge = scenario.LifecycleEdge
 	derived.LifecycleOperationID = ""

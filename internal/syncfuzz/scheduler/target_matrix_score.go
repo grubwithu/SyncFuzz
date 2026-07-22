@@ -23,6 +23,7 @@ type TargetCandidateSummary struct {
 	MutationFocusID         string                                      `json:"mutation_focus_id,omitempty"`
 	MutationFocusKind       target.TargetScenarioMutationKind           `json:"mutation_focus_kind,omitempty"`
 	Mutations               []target.TargetScenarioMutation             `json:"mutations,omitempty"`
+	ViolationSignature      target.TargetViolationSignature             `json:"violation_signature"`
 	Runs                    int                                         `json:"runs"`
 	Confirmed               int                                         `json:"confirmed"`
 	Unconfirmed             int                                         `json:"unconfirmed"`
@@ -94,6 +95,7 @@ func summarizeTargetCandidates(results []TargetSuiteRunResult) []TargetCandidate
 					MutationFocusID:      result.MutationFocusID,
 					MutationFocusKind:    result.MutationFocusKind,
 					Mutations:            append([]target.TargetScenarioMutation{}, result.Mutations...),
+					ViolationSignature:   result.ViolationSignature,
 				},
 				attributions:       make(map[string]struct{}),
 				oracleStatuses:     make(map[target.TargetOracleStatus]struct{}),

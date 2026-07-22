@@ -247,6 +247,7 @@ help:
 	@echo "  make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"
 	@echo "  make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign> TARGET_PAIR_CALIBRATION_SUMMARY=runs/<pair-campaign>/target-pair-calibration-summary.json [TARGET_PAIR_REVIEW_MANIFESTS=reviews.json]"
 	@echo "  make target-contract-candidates TARGET_CONTRACT_CANDIDATES=contract-candidates.json TARGET_CONTRACT_SOURCE_ROOT=<source-root> TARGET_CONTRACT_CANDIDATE_REPORT=runs/target-contract-candidate-validation.json"
+	@echo "  make target-signatures"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned ENV=local"
@@ -315,6 +316,9 @@ target-seeds:
 
 target-scenarios:
 	$(SYNCFUZZ) target scenarios
+
+target-signatures:
+	$(SYNCFUZZ) target signatures
 
 target-groups:
 	$(SYNCFUZZ) target groups

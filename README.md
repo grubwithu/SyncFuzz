@@ -43,6 +43,7 @@ go run ./cmd/syncfuzz target list
 go run ./cmd/syncfuzz target tasks
 go run ./cmd/syncfuzz target seeds
 go run ./cmd/syncfuzz target scenarios
+go run ./cmd/syncfuzz target signatures
 go run ./cmd/syncfuzz target groups
 go run ./cmd/syncfuzz target prompt-profiles
 go run ./cmd/syncfuzz target footprint --run runs/<target-run-id>
@@ -102,6 +103,7 @@ make target-list
 make target-tasks
 make target-seeds
 make target-scenarios
+make target-signatures
 make target-groups
 make target-prompt-profiles
 make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id>
@@ -297,6 +299,23 @@ the generated hypothesis identity and reports reviewed precision as
 that denominator. Start from
 `examples/target-pair-root-cause-review.example.json`. Without those labels it
 does not invent hypothesis precision.
+
+Every normalized executable Scenario IR now carries a deterministic
+`syncfuzz.target-violation-signature.v1` taxonomy:
+`<relations, resource_classes, lifecycle_boundary,
+persistence_mechanisms, consequences>`. It classifies a query's intended
+recovery-consistency relation, not a run-level finding: for example a forked
+Unix listener is an `ipc-endpoint` residual at `checkpoint-fork`, while an
+open-FD task is a `handle-capability` residual and a delayed background task is
+`reordered-delayed` process state. `target signatures` prints the mapping from
+every built-in seed/query to this five-dimensional label. `target-result`,
+matrix, suite, campaign, candidate-summary, and frontier artifacts preserve
+the signature and use its dimensions in coverage-gap selection, making taxonomy
+novelty an auditable scheduler input rather than an after-the-fact prose
+category.
+`external-effect` and `authority-state` entries remain explicitly classified
+for compatibility with existing MAF probes, but are outside the primary FSE
+`<A,O>` evaluation scope.
 
 `target contract-candidates --input <path> --source-root <directory> --out
 <path>` validates structured contract proposals before any human profile

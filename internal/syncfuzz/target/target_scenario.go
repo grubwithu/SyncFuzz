@@ -109,6 +109,7 @@ type TargetScenarioInfo struct {
 	LateExpectedFiles    []string                     `json:"late_expected_files,omitempty"`
 	UsesLateObservation  bool                         `json:"uses_late_observation,omitempty"`
 	LateObserveDelayMs   int64                        `json:"late_observe_delay_ms,omitempty"`
+	ViolationSignature   TargetViolationSignature     `json:"violation_signature"`
 	Components           []TargetScenarioComponent    `json:"components,omitempty"`
 	Mutations            []TargetScenarioMutation     `json:"mutations,omitempty"`
 	ExecutionPlan        *TargetScenarioExecutionPlan `json:"execution_plan,omitempty"`
@@ -198,6 +199,7 @@ func NormalizeTargetScenarioInfo(info *TargetScenarioInfo) (*TargetScenarioInfo,
 		components = append(components, component)
 	}
 	normalized.Components = components
+	normalized.ViolationSignature = DeriveTargetViolationSignature(normalized)
 	return normalized, ValidateTargetScenarioInfo(normalized)
 }
 
@@ -210,6 +212,11 @@ func ValidateTargetScenarioInfo(info *TargetScenarioInfo) error {
 	}
 	if strings.TrimSpace(info.ScenarioID) == "" || strings.TrimSpace(info.TaskID) == "" {
 		return fmt.Errorf("target scenario identity requires scenario_id and task_id")
+	}
+	if info.ViolationSignature.SchemaVersion != "" {
+		if _, err := NormalizeTargetViolationSignature(info.ViolationSignature); err != nil {
+			return fmt.Errorf("target scenario %q violation signature: %w", info.ScenarioID, err)
+		}
 	}
 	componentIDs := make(map[string]struct{}, len(info.Components))
 	roleKinds := make(map[TargetScenarioComponentRole]map[string]struct{})

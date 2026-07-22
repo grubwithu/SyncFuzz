@@ -60,6 +60,7 @@ go run ./cmd/syncfuzz target list
 go run ./cmd/syncfuzz target tasks
 go run ./cmd/syncfuzz target seeds
 go run ./cmd/syncfuzz target scenarios
+go run ./cmd/syncfuzz target signatures
 go run ./cmd/syncfuzz target prompt-profiles
 go run ./cmd/syncfuzz target footprint --run runs/<target-run-id>
 go run ./cmd/syncfuzz target plan-probes --footprint runs/<target-run-id>/resource-footprint.json
@@ -404,6 +405,19 @@ against an actual candidate before reporting reviewed precision as
 `supported / (supported + unsupported)`; `inconclusive` labels stay outside
 the denominator. Without such independent candidate-level labels, the summary
 does not derive hypothesis precision from its own report.
+
+Every normalized `syncfuzz.target-scenario.v1` now writes a deterministic
+`syncfuzz.target-violation-signature.v1` classification with five dimensions:
+`relations`, `resource_classes`, `lifecycle_boundary`,
+`persistence_mechanisms`, and `consequences`. It is the test intent used to
+classify a seed/query, never an oracle result or causal verdict. `syncfuzz
+target signatures` lists the built-in mapping. The same label is preserved in
+target schedule candidates, suite runs, candidate summaries, and frontiers;
+the feedback coverage model includes each taxonomy dimension and the canonical
+signature id, so future campaigns can account for violation-class novelty.
+Existing MAF external-effect and authority probes retain explicit labels for
+compatibility, while the principal FSE study filters to the OS-facing `<A,O>`
+classes.
 
 `syncfuzz target contract-candidates --input <path> --source-root <directory>
 --out <path>` is the source-grounding boundary for future human or LLM contract

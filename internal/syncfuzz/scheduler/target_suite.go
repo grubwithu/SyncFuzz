@@ -59,6 +59,7 @@ type TargetSuiteRunResult struct {
 	MutationFocusID        string                               `json:"mutation_focus_id,omitempty"`
 	MutationFocusKind      target.TargetScenarioMutationKind    `json:"mutation_focus_kind,omitempty"`
 	Mutations              []target.TargetScenarioMutation      `json:"mutations,omitempty"`
+	ViolationSignature     target.TargetViolationSignature      `json:"violation_signature"`
 	Iteration              int                                  `json:"iteration"`
 	RunID                  string                               `json:"run_id,omitempty"`
 	Confirmed              bool                                 `json:"confirmed"`
@@ -480,6 +481,7 @@ func runTargetSuiteTask(
 		MutationFocusID:      candidate.MutationFocusID,
 		MutationFocusKind:    candidate.MutationFocusKind,
 		Mutations:            append([]target.TargetScenarioMutation{}, candidate.Mutations...),
+		ViolationSignature:   candidate.ViolationSignature,
 		Iteration:            iteration,
 		LateObserveDelayMs:   runLateObserveDelay.Milliseconds(),
 		Signature:            target.TargetSignature(taskID),
@@ -535,6 +537,9 @@ func runTargetSuiteTask(
 	item.TargetOracle = runResult.TargetOracle
 	item.TaskCompliance = runResult.TaskCompliance
 	item.ContractInterpretation = runResult.ContractInterpretation
+	if runResult.ViolationSignature != nil {
+		item.ViolationSignature = *runResult.ViolationSignature
+	}
 	observation := corpus.ClassifyTargetObservation(runResult)
 	item.OutcomeCategory = observation.Category
 	item.OutcomeReason = observation.Reason
@@ -599,6 +604,9 @@ func targetScenarioForCandidate(candidate TargetScheduleCandidate) *target.Targe
 	if candidate.LifecycleEdge != "" {
 		scenario.LifecycleEdge = candidate.LifecycleEdge
 	}
+	if candidate.ViolationSignature.SchemaVersion != "" {
+		scenario.ViolationSignature = candidate.ViolationSignature
+	}
 	if candidate.PlantPrimitiveID != "" {
 		scenario.PlantPrimitiveID = candidate.PlantPrimitiveID
 	}
@@ -649,6 +657,7 @@ func targetScheduledTaskCandidate(targetID string, taskID string, promptProfileI
 		item.Description = taskInfo.Description
 		item.StateSurface = taskInfo.StateSurface
 		item.LifecycleEdge = taskInfo.LifecycleEdge
+		item.ViolationSignature = taskInfo.ViolationSignature
 		item.LifecycleOperationID = taskInfo.LifecycleOperationID
 		item.PlantPrimitiveID = taskInfo.PlantPrimitiveID
 		item.ActivationKindID = taskInfo.ActivationKindID

@@ -371,6 +371,7 @@ type TargetRunResult struct {
 	TargetOracle                   TargetOracleResult            `json:"target_oracle"`
 	TaskCompliance                 TargetTaskComplianceResult    `json:"task_compliance"`
 	ContractInterpretation         *TargetContractInterpretation `json:"contract_interpretation,omitempty"`
+	ViolationSignature             *TargetViolationSignature     `json:"violation_signature,omitempty"`
 	Signature                      core.MismatchSignature        `json:"signature"`
 	ArtifactDir                    string                        `json:"artifact_dir"`
 	Workspace                      string                        `json:"workspace"`
@@ -1153,6 +1154,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		TargetOracle:                   targetOracle,
 		TaskCompliance:                 taskCompliance,
 		ContractInterpretation:         contractInterpretation,
+		ViolationSignature:             TargetViolationSignatureForTask(opts.TaskID, opts.Scenario),
 		Signature:                      signature,
 		ArtifactDir:                    run.RunDir,
 		Workspace:                      workspacePath,

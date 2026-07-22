@@ -420,6 +420,12 @@ func targetDimensionGapWeight(dimension string) int {
 		return 8
 	case "transition_signature":
 		return 8
+	case "violation_signature_id":
+		return 12
+	case "violation_relation", "violation_resource_class", "violation_persistence_mechanism", "violation_consequence":
+		return 8
+	case "violation_lifecycle_boundary":
+		return 6
 	case "activation_kind_id":
 		return 6
 	case "lifecycle_mode_id":

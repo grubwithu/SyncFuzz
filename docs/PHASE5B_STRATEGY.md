@@ -33,6 +33,19 @@ Scenario IR 的 component identity、kind 与 summary；`violation_hypothesis`
 只描述要由后续 differential oracle 回答的 recovery-consistency relation，
 不是一个自动判定或 LLM judge。
 
+为将 seed 与具体 file type 分开，所有规范化的 executable Scenario IR 现在
+携带 `syncfuzz.target-violation-signature.v1`：
+`<relations, resource_classes, lifecycle_boundary, persistence_mechanisms,
+consequences>`。它把 `residual`、`missing`、`duplicated`、
+`reordered-delayed`、`rebound` 等关系，与 namespace / process / execution
+context / handle / IPC 等 OS family 分开记录，并允许一个 Motivation-style
+query 同时声明多个 relation 或 mechanism。`target signatures` 输出完整
+seed/query 映射；matrix、suite、candidate summary 与 frontier 保留它，并把每个
+taxonomy axis 和 canonical signature id 接入 coverage-gap selection。它只是
+mutation/coverage 的 query label，不能替代 artifact evidence、contract
+interpretation 或 oracle verdict。为避免误扩论文范围，已有 MAF
+external-effect / authority probes 仍会被显式标注，但不属于主 `<A,O>` 结论。
+
 target runner 现已通过 `--observation-plan` 消费该 schema：它把验证后的
 plan 复制进新 run，并生成 `targeted-probe-report.json`，以 query-specific
 path/process/FD selection 投影 broad snapshot。默认保持 shadow mode；可选的

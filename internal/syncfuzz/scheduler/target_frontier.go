@@ -33,6 +33,7 @@ type TargetFrontierCandidate struct {
 	ActivationKindID     string                          `json:"activation_kind_id,omitempty"`
 	OracleKindID         string                          `json:"oracle_kind_id,omitempty"`
 	Mutations            []target.TargetScenarioMutation `json:"mutations,omitempty"`
+	ViolationSignature   target.TargetViolationSignature `json:"violation_signature"`
 	GapScore             int                             `json:"gap_score,omitempty"`
 	NoveltyScore         int                             `json:"novelty_score,omitempty"`
 	SelectionMode        string                          `json:"selection_mode,omitempty"`
@@ -182,6 +183,7 @@ func summarizeTargetCoverageFrontier(
 			ActivationKindID:     pick.ActivationKindID,
 			OracleKindID:         pick.OracleKindID,
 			Mutations:            append([]target.TargetScenarioMutation{}, pick.Mutations...),
+			ViolationSignature:   pick.ViolationSignature,
 			GapScore:             bestGapScore,
 			NoveltyScore:         bestNovelty,
 			SelectionMode:        selectionMode,
