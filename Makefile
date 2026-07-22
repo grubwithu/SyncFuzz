@@ -66,6 +66,10 @@ TARGET_PAIR_CAMPAIGN_OUT ?=
 TARGET_PAIR_REPORTS ?=
 TARGET_PAIR_CALIBRATION_SUMMARY ?=
 TARGET_PAIR_REVIEW_MANIFESTS ?=
+TARGET_RUNTIME_PAIR_CONTROL_KIND ?=
+TARGET_RUNTIME_PAIR_CONTROL_DESCRIPTION ?=
+TARGET_RUNTIME_PAIR_CONTROL_COMMAND ?=
+TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE ?=
 TARGET_CONTRACT_CANDIDATES ?=
 TARGET_CONTRACT_SOURCE_ROOT ?=
 TARGET_CONTRACT_CANDIDATE_REPORT ?=
@@ -129,6 +133,8 @@ FEEDBACK_ARGS := $(if $(FEEDBACK_FROM),--feedback-from $(FEEDBACK_FROM),)
 CANDIDATE_LIMIT_ARGS := $(if $(filter-out 0,$(CANDIDATE_LIMIT)),--candidate-limit $(CANDIDATE_LIMIT),)
 TARGET_COMMAND_ARGS := $(if $(TARGET_COMMAND),--command '$(subst ','"'"',$(TARGET_COMMAND))',)
 TARGET_COMMAND_FILE_ARGS := $(if $(TARGET_COMMAND_FILE),--command-file $(TARGET_COMMAND_FILE),)
+TARGET_RUNTIME_PAIR_CONTROL_COMMAND_ARGS := $(if $(TARGET_RUNTIME_PAIR_CONTROL_COMMAND),--control-command '$(subst ','"'"',$(TARGET_RUNTIME_PAIR_CONTROL_COMMAND))',)
+TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE_ARGS := $(if $(TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE),--control-command-file $(TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE),)
 TARGET_TASKS_ARGS := $(if $(TARGET_TASKS),--tasks $(TARGET_TASKS),)
 TARGET_SEED_ARGS := $(if $(TARGET_SEED),--seed $(TARGET_SEED),)
 TARGET_SEEDS_ARGS := $(if $(TARGET_SEEDS),--seeds $(TARGET_SEEDS),)
@@ -165,7 +171,7 @@ SUITE_ARGS = --out $(OUT) --corpus $(CORPUS) --repeat $(REPEAT) --delay $(DELAY)
 CAMPAIGN_ARGS = --out $(OUT) --corpus $(CORPUS) --rounds $(ROUNDS) --repeat $(REPEAT) --delay $(DELAY) $(ENV_ARGS) $(CONTAINER_ARGS) $(CASE_ARGS) $(MOCK_ARGS) $(DIFFERENTIAL_ARGS) $(TIMING_ARGS) $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS)
 TARGET_RUN_ARGS = --out $(OUT) --timeout $(TARGET_TIMEOUT) --observe-delay $(TARGET_OBSERVE_DELAY) $(TARGET_LATE_OBSERVE_ARGS) $(TARGET_OBSERVATION_PLAN_ARGS) $(TARGET_OBSERVATION_MODE_ARGS) $(ENV_ARGS) $(CONTAINER_ARGS) $(TARGET_PROMPT_ARGS) $(TARGET_PROMPT_FILE_ARGS) $(TARGET_EXPECT_ARGS)
 
-.PHONY: help list fault-plans timing-profiles primitives matrix run-case run-pair run-mvp run-action run-authority run-shell run-fs run-branch run-suite run-diff-suite run-matrix-suite run-campaign target-list target-tasks target-seeds target-scenarios target-groups target-prompt-profiles target-footprint target-plan-probes target-refine-plan target-matrix target-minimize target-run target-suite target-matrix-suite target-campaign target-langgraph-shell-react target-langgraph-shell-react-suite target-langgraph-shell-react-matrix-suite target-langgraph-shell-react-campaign target-langgraph-shell-react-check target-maf-github-copilot-shell target-maf-github-copilot-shell-suite target-maf-github-copilot-shell-matrix-suite target-maf-github-copilot-shell-campaign target-maf-github-copilot-shell-check target-maf-workflow-checkpoint target-maf-workflow-checkpoint-suite target-maf-workflow-checkpoint-check phase5b-v3-fixed phase5b-v3-random phase5b-v3-feedback phase5b-v3-full corpus-list corpus-analyze corpus-show corpus-verify replay test-go fmt-go mock-build mock-start
+.PHONY: help list fault-plans timing-profiles primitives matrix run-case run-pair run-mvp run-action run-authority run-shell run-fs run-branch run-suite run-diff-suite run-matrix-suite run-campaign target-list target-tasks target-seeds target-scenarios target-groups target-prompt-profiles target-footprint target-plan-probes target-refine-plan target-runtime-pair target-matrix target-minimize target-run target-suite target-matrix-suite target-campaign target-langgraph-shell-react target-langgraph-shell-react-suite target-langgraph-shell-react-matrix-suite target-langgraph-shell-react-campaign target-langgraph-shell-react-check target-maf-github-copilot-shell target-maf-github-copilot-shell-suite target-maf-github-copilot-shell-matrix-suite target-maf-github-copilot-shell-campaign target-maf-github-copilot-shell-check target-maf-workflow-checkpoint target-maf-workflow-checkpoint-suite target-maf-workflow-checkpoint-check phase5b-v3-fixed phase5b-v3-random phase5b-v3-feedback phase5b-v3-full corpus-list corpus-analyze corpus-show corpus-verify replay test-go fmt-go mock-build mock-start
 
 help:
 	@echo "SyncFuzz targets:"
@@ -244,6 +250,7 @@ help:
 	@echo "  make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json"
 	@echo "  make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<target-run-id>/targeted-probe-report.json"
 	@echo "  make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id>"
+	@echo "  make target-runtime-pair TARGET_RUNTIME_PAIR_CONTROL_KIND=fresh-runtime TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE=control.sh TARGET_COMMAND_FILE=target.sh"
 	@echo "  make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"
 	@echo "  make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign> TARGET_PAIR_CALIBRATION_SUMMARY=runs/<pair-campaign>/target-pair-calibration-summary.json [TARGET_PAIR_REVIEW_MANIFESTS=reviews.json]"
 	@echo "  make target-contract-candidates TARGET_CONTRACT_CANDIDATES=contract-candidates.json TARGET_CONTRACT_SOURCE_ROOT=<source-root> TARGET_CONTRACT_CANDIDATE_REPORT=runs/target-contract-candidate-validation.json"
@@ -343,6 +350,12 @@ target-compare:
 	@test -n "$(TARGET_CONTROL_RUN)" || (echo "usage: make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id> [TARGET_PAIR_DIFFERENTIAL=path]"; exit 2)
 	@test -n "$(TARGET_COMPARE_RUN)" || (echo "usage: make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id> [TARGET_PAIR_DIFFERENTIAL=path]"; exit 2)
 	$(SYNCFUZZ) target compare --control $(TARGET_CONTROL_RUN) --target $(TARGET_COMPARE_RUN) $(if $(TARGET_PAIR_DIFFERENTIAL),--out $(TARGET_PAIR_DIFFERENTIAL),)
+
+target-runtime-pair:
+	@test -n "$(TARGET_RUNTIME_PAIR_CONTROL_KIND)" || (echo "usage: make target-runtime-pair TARGET_RUNTIME_PAIR_CONTROL_KIND=fresh-runtime TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE=control.sh TARGET_COMMAND_FILE=target.sh"; exit 2)
+	@test -n "$(TARGET_RUNTIME_PAIR_CONTROL_COMMAND)$(TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE)" || (echo "usage: make target-runtime-pair TARGET_RUNTIME_PAIR_CONTROL_KIND=fresh-runtime TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE=control.sh TARGET_COMMAND_FILE=target.sh"; exit 2)
+	@test -n "$(TARGET_COMMAND)$(TARGET_COMMAND_FILE)" || (echo "usage: make target-runtime-pair TARGET_RUNTIME_PAIR_CONTROL_KIND=fresh-runtime TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE=control.sh TARGET_COMMAND_FILE=target.sh"; exit 2)
+	$(SYNCFUZZ) target runtime-pair --adapter $(TARGET_ADAPTER) --target $(TARGET_ID) --task $(TARGET_TASK) --control-kind $(TARGET_RUNTIME_PAIR_CONTROL_KIND) $(if $(TARGET_RUNTIME_PAIR_CONTROL_DESCRIPTION),--control-description "$(TARGET_RUNTIME_PAIR_CONTROL_DESCRIPTION)",) $(TARGET_RUNTIME_PAIR_CONTROL_COMMAND_ARGS) $(TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE_ARGS) $(TARGET_COMMAND_ARGS) $(TARGET_COMMAND_FILE_ARGS) --out $(OUT) --timeout $(TARGET_TIMEOUT) --observe-delay $(TARGET_OBSERVE_DELAY) $(TARGET_LATE_OBSERVE_ARGS) $(TARGET_OBSERVATION_PLAN_ARGS) $(TARGET_OBSERVATION_MODE_ARGS) $(ENV_ARGS) $(CONTAINER_ARGS) $(TARGET_PROMPT_ARGS) $(TARGET_PROMPT_FILE_ARGS) $(TARGET_EXPECT_ARGS)
 
 target-pair-campaign:
 	@test -n "$(TARGET_PAIR_CAMPAIGN_MANIFEST)" || (echo "usage: make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"; exit 2)

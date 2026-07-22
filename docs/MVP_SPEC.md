@@ -400,6 +400,16 @@ signature, mutation operators, and semantic diff). Campaign output aggregates
 those labels by control kind and stratum; they describe oracle outcomes only
 and never promote a target-only difference to a causal verdict.
 
+`syncfuzz target runtime-pair --control-kind <kind> --control-command-file
+<path> --command-file <path> ...` executes one real control/target pair before
+the same comparison. It requires identical adapter, target, and task identity,
+creates independent control and target workspaces, and writes
+`target-runtime-pair.json` next to `target-pair-differential.json`. The named
+control intervention remains an explicit responsibility of the supplied
+control command; SyncFuzz records its kind but does not infer or fabricate
+fresh-runtime, cleanup, or namespace behavior. Its two run directories can be
+listed in a later pair-campaign manifest to populate the campaign strata.
+
 `syncfuzz target calibration-summary --inputs <report-or-directory>[,...] --out <path>`
 recursively collects the canonical v2 pair reports produced for a controlled
 campaign and writes `target-pair-calibration-summary.json`. The summary exposes

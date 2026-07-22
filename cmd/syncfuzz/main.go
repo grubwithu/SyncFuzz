@@ -91,6 +91,7 @@ Usage:
   syncfuzz target plan-probes --footprint resource-footprint.json [--out observation-plan.json]
   syncfuzz target refine-plan --plan observation-plan.json --fallback-report targeted-probe-report.json [--out observation-plan-refined.json]
   syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id> [--out target-pair-differential.json]
+  syncfuzz target runtime-pair --control-kind fresh-runtime --control-command '<control command>' --command '<target command>' [--target local-agent] [--task orphan-process] [--out runs]
   syncfuzz target pair-campaign --manifest target-pair-campaign.json --out runs/<pair-campaign>
   syncfuzz target calibration-summary --inputs runs/<pair-campaign>,runs/<target-run-id>/target-pair-differential.json [--review-manifests review.json] --out target-pair-calibration-summary.json
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
@@ -477,7 +478,7 @@ func campaign(args []string) {
 
 func runTarget(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, signatures, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, pair-campaign, calibration-summary, contract-candidates, matrix, minimize, run, suite, or campaign")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, signatures, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, runtime-pair, pair-campaign, calibration-summary, contract-candidates, matrix, minimize, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -505,6 +506,8 @@ func runTarget(args []string) {
 		targetRefinePlan(args[1:])
 	case "compare":
 		targetCompare(args[1:])
+	case "runtime-pair":
+		targetRuntimePair(args[1:])
 	case "pair-campaign":
 		targetPairCampaign(args[1:])
 	case "calibration-summary":
@@ -1179,6 +1182,82 @@ func targetRun(args []string) {
 	fmt.Printf("output_bytes: %d\n", result.CommandResult.OutputBytes)
 	fmt.Printf("workspace: %s\n", result.Workspace)
 	fmt.Printf("artifacts: %s\n", result.ArtifactDir)
+}
+
+func targetRuntimePair(args []string) {
+	fs := flag.NewFlagSet("target runtime-pair", flag.ExitOnError)
+	adapterID := fs.String("adapter", "command", "target adapter id shared by control and target")
+	targetID := fs.String("target", "command", "human-readable target runtime id shared by control and target")
+	taskID := fs.String("task", "orphan-process", "target task id shared by control and target")
+	controlKind := fs.String("control-kind", "", "counterfactual control kind: baseline, fresh-runtime, branch-cleanup, namespace-restore, or custom")
+	controlDescription := fs.String("control-description", "", "required description for a custom control")
+	objective := fs.String("objective", "", "optional target objective")
+	promptProfile := fs.String("prompt-profile", "", "built-in target prompt profile used when no explicit prompt text or prompt file is provided")
+	prompt := fs.String("prompt", "", "inline prompt passed through SYNCFUZZ_PROMPT")
+	promptFile := fs.String("prompt-file", "", "optional prompt file")
+	command := fs.String("command", "", "target command to run inside the target-side SyncFuzz workspace")
+	commandFile := fs.String("command-file", "", "optional file containing the target-side command")
+	controlCommand := fs.String("control-command", "", "control command to run inside the control-side SyncFuzz workspace")
+	controlCommandFile := fs.String("control-command-file", "", "optional file containing the control-side command")
+	expectFiles := fs.String("expect-files", "", "comma-separated files expected after each target run")
+	outDir := fs.String("out", "runs", "directory for runtime pair artifacts")
+	timeout := fs.Duration("timeout", 2*time.Minute, "target command timeout for each side")
+	observeDelay := fs.Duration("observe-delay", 0, "delay after each target command return before final observation; 0 uses the adapter default")
+	lateObserveDelay := fs.Duration("late-observe-delay", 0, "optional delay after immediate observation for delayed target effects")
+	observationPlan := fs.String("observation-plan", "", "optional query-specific observation-plan.json used by both sides")
+	observationMode := fs.String("observation-mode", "", "observation-plan collection mode: shadow (default), pruned-filesystem, or pruned (local process/FD selectors)")
+	envKind := fs.String("env", "local", "execution environment backend")
+	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*controlKind) == "" || (strings.TrimSpace(*controlCommand) == "" && strings.TrimSpace(*controlCommandFile) == "") || (strings.TrimSpace(*command) == "" && strings.TrimSpace(*commandFile) == "") {
+		fmt.Fprintln(os.Stderr, "target runtime-pair requires --control-kind, one of --control-command/--control-command-file, and one of --command/--command-file")
+		os.Exit(2)
+	}
+	shared := target.TargetRunOptions{
+		AdapterID:           *adapterID,
+		TargetID:            *targetID,
+		TaskID:              *taskID,
+		Objective:           *objective,
+		PromptProfileID:     *promptProfile,
+		Prompt:              *prompt,
+		PromptFile:          *promptFile,
+		Timeout:             *timeout,
+		ObserveDelay:        *observeDelay,
+		LateObserveDelay:    *lateObserveDelay,
+		ObservationPlanPath: *observationPlan,
+		ObservationMode:     *observationMode,
+		EnvKind:             *envKind,
+		ContainerImage:      *containerImage,
+		ExpectedFiles:       splitCSV(*expectFiles),
+	}
+	control := shared
+	control.Command = *controlCommand
+	control.CommandFile = *controlCommandFile
+	targetRun := shared
+	targetRun.Command = *command
+	targetRun.CommandFile = *commandFile
+	result, err := target.RunTargetRuntimePair(context.Background(), target.TargetRuntimePairOptions{
+		ControlKind:        target.TargetPairControlKind(*controlKind),
+		ControlDescription: *controlDescription,
+		Control:            control,
+		Target:             targetRun,
+		OutDir:             *outDir,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target runtime-pair failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("pair_id: %s\n", result.PairID)
+	fmt.Printf("control_kind: %s\n", result.ControlKind)
+	fmt.Printf("control_run: %s\n", result.ControlRunDir)
+	fmt.Printf("target_run: %s\n", result.TargetRunDir)
+	fmt.Printf("query_id: %s\n", result.QueryID)
+	fmt.Printf("counterfactual_label: %s\n", result.CounterfactualLabel)
+	fmt.Printf("counterfactual_reason: %s\n", result.CounterfactualReason)
+	fmt.Printf("root_cause_eligible: %t\n", result.ContractCalibration.RootCauseEligible)
+	fmt.Printf("artifact: %s\n", filepath.Join(result.ArtifactDir, target.TargetRuntimePairArtifact))
 }
 
 func targetSuite(args []string) {

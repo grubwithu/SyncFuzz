@@ -110,6 +110,15 @@ signature / mutation operator / semantic diff 分层汇总。label 仅陈述 ora
 outcome，不能替代 counterfactual 因果结论。它只比较预先记录的 run，不会隐式调用
 真实 target 或重新执行模型。
 
+`target runtime-pair` 补上真实执行入口：调用者为同一 adapter / target / task
+显式提供 control command 和 target command，runner 在独立 workspace 中先后执行
+两侧，再立刻生成同一个 v2 pair differential 和
+`syncfuzz.target-runtime-pair.v1`。`fresh-runtime`、`branch-cleanup` 和
+`namespace-restore` 仍是 control command 必须实际实现的 intervention；runner 只
+记录声明的 control kind，绝不从命令文本猜测语义。结果中的两个 run directory 可
+回填到 pair-campaign manifest，从而让真实 runtime 的 label 进入已有的 Query
+strata 汇总；label 仍只是 oracle outcome，不能当作因果结论。
+
 为把后续 LLM 的权限严格限制在 proposal 层，`target contract-candidates` 现已
 提供 source-grounding gate。它接收
 `syncfuzz.target-contract-candidates.v1` 的结构化候选，要求每条候选都带有
