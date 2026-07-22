@@ -58,6 +58,12 @@ func TestRunTargetPairCampaignWritesCounterfactualReportsAndSummary(t *testing.T
 	if len(result.ControlKinds) != 2 || result.ControlKinds[0].ControlKind != TargetPairControlBranchCleanup || result.ControlKinds[0].PairCount != 1 || result.ControlKinds[1].ControlKind != TargetPairControlFreshRuntime || result.ControlKinds[1].RootCauseEligiblePairs != 1 {
 		t.Fatalf("unexpected control-kind summary: %#v", result.ControlKinds)
 	}
+	if len(result.CounterfactualLabels) != 1 || result.CounterfactualLabels[0].Label != TargetPairCounterfactualTargetOnly || result.CounterfactualLabels[0].PairCount != 2 {
+		t.Fatalf("expected deterministic counterfactual labels: %#v", result.CounterfactualLabels)
+	}
+	if len(result.QueryStrata) != 2 {
+		t.Fatalf("expected one query stratum per control kind: %#v", result.QueryStrata)
+	}
 	for _, artifact := range []string{
 		filepath.Join(campaignDir, TargetPairCampaignManifestArtifact),
 		filepath.Join(campaignDir, TargetPairCampaignResultArtifact),

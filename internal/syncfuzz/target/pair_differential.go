@@ -25,16 +25,43 @@ const (
 // lifecycle checkpoints. Its evidence is intentionally descriptive: target-
 // only state is a candidate for later explanation, never a causal verdict.
 type TargetPairDifferential struct {
-	SchemaVersion       string                         `json:"schema_version"`
-	GeneratedAt         string                         `json:"generated_at"`
-	QueryID             string                         `json:"query_id"`
-	ControlRunID        string                         `json:"control_run_id"`
-	TargetRunID         string                         `json:"target_run_id"`
-	Checkpoints         []TargetPairCheckpoint         `json:"checkpoints"`
-	Evidence            []TargetPairEvidenceCandidate  `json:"evidence_candidates,omitempty"`
-	ContractCalibration TargetPairContractCalibration  `json:"contract_calibration"`
-	RootCauseCandidates []TargetPairRootCauseCandidate `json:"root_cause_candidates,omitempty"`
+	SchemaVersion        string                         `json:"schema_version"`
+	GeneratedAt          string                         `json:"generated_at"`
+	QueryID              string                         `json:"query_id"`
+	QueryStratum         TargetPairQueryStratum         `json:"query_stratum"`
+	ControlRunID         string                         `json:"control_run_id"`
+	TargetRunID          string                         `json:"target_run_id"`
+	CounterfactualLabel  TargetPairCounterfactualLabel  `json:"counterfactual_label"`
+	CounterfactualReason string                         `json:"counterfactual_reason,omitempty"`
+	Checkpoints          []TargetPairCheckpoint         `json:"checkpoints"`
+	Evidence             []TargetPairEvidenceCandidate  `json:"evidence_candidates,omitempty"`
+	ContractCalibration  TargetPairContractCalibration  `json:"contract_calibration"`
+	RootCauseCandidates  []TargetPairRootCauseCandidate `json:"root_cause_candidates,omitempty"`
 }
+
+// TargetPairQueryStratum preserves the query taxonomy needed to stratify a
+// controlled runtime campaign. It is descriptive provenance, not a verdict.
+type TargetPairQueryStratum struct {
+	QueryID              string                           `json:"query_id"`
+	ParentQueryID        string                           `json:"parent_query_id,omitempty"`
+	RootQueryID          string                           `json:"root_query_id"`
+	ViolationSignature   *TargetViolationSignature        `json:"violation_signature,omitempty"`
+	MutationOperators    []TargetScenarioMutationOperator `json:"mutation_operators,omitempty"`
+	MutationSemanticDiff []string                         `json:"mutation_semantic_diff,omitempty"`
+}
+
+// TargetPairCounterfactualLabel is a deterministic reading of target and
+// control oracle outcomes. It deliberately does not claim a causal root cause.
+type TargetPairCounterfactualLabel string
+
+const (
+	TargetPairCounterfactualTargetOnly          TargetPairCounterfactualLabel = "target-only-violation"
+	TargetPairCounterfactualPersists            TargetPairCounterfactualLabel = "violation-persists-under-control"
+	TargetPairCounterfactualTargetNegative      TargetPairCounterfactualLabel = "target-violation-not-observed"
+	TargetPairCounterfactualTargetInconclusive  TargetPairCounterfactualLabel = "target-inconclusive"
+	TargetPairCounterfactualControlInconclusive TargetPairCounterfactualLabel = "control-inconclusive"
+	TargetPairCounterfactualTaskNoncompliant    TargetPairCounterfactualLabel = "task-noncompliant"
+)
 
 // TargetPairContractCalibration records whether the paired artifacts support
 // a contract-bound explanation. It is stricter than target-only evidence:
@@ -125,6 +152,7 @@ type TargetPairDifferentialOptions struct {
 type targetPairRunArtifacts struct {
 	Dir          string
 	Result       TargetRunResult
+	Task         *TargetTask
 	Differential TargetCheckpointDifferential
 }
 
@@ -151,14 +179,20 @@ func CompareTargetRuns(opts TargetPairDifferentialOptions) (*TargetPairDifferent
 		observation.ObservationAfterRecovery,
 		observation.ObservationAfterActivation,
 	}
+	queryStratum := targetPairQueryStratum(targetRun, control.Differential.QueryID)
+	if queryStratum.QueryID != "" && queryStratum.QueryID != control.Differential.QueryID {
+		return nil, fmt.Errorf("target query stratum %q does not match checkpoint query %q", queryStratum.QueryID, control.Differential.QueryID)
+	}
 	result := &TargetPairDifferential{
 		SchemaVersion: TargetPairDifferentialSchemaVersion,
 		GeneratedAt:   time.Now().UTC().Format(time.RFC3339Nano),
 		QueryID:       control.Differential.QueryID,
+		QueryStratum:  queryStratum,
 		ControlRunID:  control.Result.RunID,
 		TargetRunID:   targetRun.Result.RunID,
 		Checkpoints:   make([]TargetPairCheckpoint, 0, len(points)),
 	}
+	result.CounterfactualLabel, result.CounterfactualReason = targetPairCounterfactualOutcome(control.Result, targetRun.Result)
 	for _, point := range points {
 		checkpoint, evidence, err := compareTargetPairCheckpoint(point, control, targetRun, controlCheckpoints[point], targetCheckpoints[point])
 		if err != nil {
@@ -223,6 +257,87 @@ func targetPairContractCalibration(control TargetRunResult, target TargetRunResu
 	return calibration
 }
 
+func targetPairCounterfactualOutcome(control TargetRunResult, target TargetRunResult) (TargetPairCounterfactualLabel, string) {
+	if target.TaskCompliance.Status == TargetTaskComplianceStatusViolated || control.TaskCompliance.Status == TargetTaskComplianceStatusViolated {
+		return TargetPairCounterfactualTaskNoncompliant, "a paired run violated the task contract"
+	}
+	if !target.TargetOracle.Confirmed {
+		if target.TargetOracle.Status == TargetOracleStatusNegative {
+			return TargetPairCounterfactualTargetNegative, "target oracle is negative"
+		}
+		return TargetPairCounterfactualTargetInconclusive, "target oracle is not confirmed"
+	}
+	if control.TargetOracle.Confirmed {
+		return TargetPairCounterfactualPersists, "control oracle is also confirmed"
+	}
+	if control.TargetOracle.Status == TargetOracleStatusNegative {
+		return TargetPairCounterfactualTargetOnly, "target oracle is confirmed while control oracle is negative"
+	}
+	return TargetPairCounterfactualControlInconclusive, "control oracle is not negative"
+}
+
+func targetPairQueryStratum(run targetPairRunArtifacts, fallbackQueryID string) TargetPairQueryStratum {
+	stratum := TargetPairQueryStratum{
+		QueryID:            firstTargetPairString(run.Result.QueryID, fallbackQueryID),
+		ParentQueryID:      strings.TrimSpace(run.Result.ParentQueryID),
+		RootQueryID:        firstTargetPairString(run.Result.RootQueryID, run.Result.QueryID, fallbackQueryID),
+		ViolationSignature: cloneTargetViolationSignature(run.Result.ViolationSignature),
+	}
+	if run.Task == nil || run.Task.Scenario == nil {
+		return stratum
+	}
+	scenario := run.Task.Scenario
+	stratum.QueryID = firstTargetPairString(scenario.QueryID, stratum.QueryID)
+	stratum.ParentQueryID = firstTargetPairString(scenario.ParentQueryID, stratum.ParentQueryID)
+	stratum.RootQueryID = firstTargetPairString(scenario.RootQueryID, stratum.RootQueryID, stratum.QueryID)
+	if scenario.ViolationSignature.SchemaVersion != "" {
+		signature := scenario.ViolationSignature
+		stratum.ViolationSignature = &signature
+	}
+	operators := make(map[TargetScenarioMutationOperator]struct{}, len(scenario.Mutations))
+	semanticDiff := make(map[string]struct{})
+	for _, mutation := range scenario.Mutations {
+		if mutation.Operator != "" {
+			operators[mutation.Operator] = struct{}{}
+		}
+		for _, diff := range mutation.SemanticDiff {
+			if diff = strings.TrimSpace(diff); diff != "" {
+				semanticDiff[diff] = struct{}{}
+			}
+		}
+	}
+	for operator := range operators {
+		stratum.MutationOperators = append(stratum.MutationOperators, operator)
+	}
+	for diff := range semanticDiff {
+		stratum.MutationSemanticDiff = append(stratum.MutationSemanticDiff, diff)
+	}
+	sort.Slice(stratum.MutationOperators, func(i, j int) bool { return stratum.MutationOperators[i] < stratum.MutationOperators[j] })
+	sort.Strings(stratum.MutationSemanticDiff)
+	return stratum
+}
+
+func cloneTargetViolationSignature(signature *TargetViolationSignature) *TargetViolationSignature {
+	if signature == nil {
+		return nil
+	}
+	clone := *signature
+	clone.Relations = append([]TargetViolationRelation{}, signature.Relations...)
+	clone.ResourceClasses = append([]TargetViolationResourceClass{}, signature.ResourceClasses...)
+	clone.PersistenceMechanisms = append([]TargetViolationPersistenceMechanism{}, signature.PersistenceMechanisms...)
+	clone.Consequences = append([]TargetViolationConsequence{}, signature.Consequences...)
+	return &clone
+}
+
+func firstTargetPairString(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func targetPairContractReading(result TargetRunResult) TargetPairContractReading {
 	reading := TargetPairContractReading{ComplianceStatus: result.TaskCompliance.Status}
 	interpretation := result.ContractInterpretation
@@ -271,7 +386,18 @@ func readTargetPairRunArtifacts(runDir string) (targetPairRunArtifacts, error) {
 	if strings.TrimSpace(differential.QueryID) == "" {
 		return targetPairRunArtifacts{}, fmt.Errorf("checkpoint differential is missing query_id")
 	}
-	return targetPairRunArtifacts{Dir: runDir, Result: result, Differential: differential}, nil
+	var task *TargetTask
+	taskPath := filepath.Join(runDir, TargetTaskArtifact)
+	if _, err := os.Stat(taskPath); err == nil {
+		stored, err := readTargetPairJSON[TargetTask](taskPath)
+		if err != nil {
+			return targetPairRunArtifacts{}, err
+		}
+		task = &stored
+	} else if !os.IsNotExist(err) {
+		return targetPairRunArtifacts{}, fmt.Errorf("stat target task %s: %w", taskPath, err)
+	}
+	return targetPairRunArtifacts{Dir: runDir, Result: result, Task: task, Differential: differential}, nil
 }
 
 func readTargetPairJSON[T any](path string) (T, error) {

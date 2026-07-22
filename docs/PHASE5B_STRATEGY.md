@@ -102,8 +102,13 @@ calibration coverage、unresolved reason、contract-rule 分布以及逐报告 p
 `syncfuzz.target-pair-campaign-manifest.v1`：每个 entry 先声明
 `baseline`、`fresh-runtime`、`branch-cleanup`、`namespace-restore` 或 `custom`
 control，再在同一 query identity 上运行 compare，并把 manifest、per-pair report、
-campaign result 与 calibration summary 固化到一个 artifact directory。它只比较
-预先记录的 run，不会隐式调用真实 target 或重新执行模型。
+campaign result 与 calibration summary 固化到一个 artifact directory。每个 pair
+还会产生 deterministic counterfactual label：`target-only-violation`、
+`violation-persists-under-control`、target/control inconclusive 或
+`task-noncompliant`；campaign 会按 control kind 与 Query root / violation
+signature / mutation operator / semantic diff 分层汇总。label 仅陈述 oracle
+outcome，不能替代 counterfactual 因果结论。它只比较预先记录的 run，不会隐式调用
+真实 target 或重新执行模型。
 
 为把后续 LLM 的权限严格限制在 proposal 层，`target contract-candidates` 现已
 提供 source-grounding gate。它接收

@@ -52,33 +52,38 @@ type TargetPairCampaignOptions struct {
 }
 
 type TargetPairCampaignResult struct {
-	SchemaVersion              string                               `json:"schema_version"`
-	CampaignID                 string                               `json:"campaign_id"`
-	StartedAt                  string                               `json:"started_at"`
-	FinishedAt                 string                               `json:"finished_at"`
-	ArtifactDir                string                               `json:"artifact_dir"`
-	SourceManifest             string                               `json:"source_manifest"`
-	ManifestArtifact           string                               `json:"manifest_artifact"`
-	CalibrationSummaryArtifact string                               `json:"calibration_summary_artifact"`
-	TotalPairs                 int                                  `json:"total_pairs"`
-	RootCauseEligiblePairs     int                                  `json:"root_cause_eligible_pairs"`
-	CalibrationCoverage        float64                              `json:"calibration_coverage"`
-	ControlKinds               []TargetPairCampaignControlKindStats `json:"control_kinds"`
-	Pairs                      []TargetPairCampaignPairResult       `json:"pairs"`
+	SchemaVersion              string                                `json:"schema_version"`
+	CampaignID                 string                                `json:"campaign_id"`
+	StartedAt                  string                                `json:"started_at"`
+	FinishedAt                 string                                `json:"finished_at"`
+	ArtifactDir                string                                `json:"artifact_dir"`
+	SourceManifest             string                                `json:"source_manifest"`
+	ManifestArtifact           string                                `json:"manifest_artifact"`
+	CalibrationSummaryArtifact string                                `json:"calibration_summary_artifact"`
+	TotalPairs                 int                                   `json:"total_pairs"`
+	RootCauseEligiblePairs     int                                   `json:"root_cause_eligible_pairs"`
+	CalibrationCoverage        float64                               `json:"calibration_coverage"`
+	ControlKinds               []TargetPairCampaignControlKindStats  `json:"control_kinds"`
+	CounterfactualLabels       []TargetPairCampaignLabelStats        `json:"counterfactual_labels"`
+	QueryStrata                []TargetPairCampaignQueryStratumStats `json:"query_strata"`
+	Pairs                      []TargetPairCampaignPairResult        `json:"pairs"`
 }
 
 type TargetPairCampaignPairResult struct {
-	PairID                   string                `json:"pair_id"`
-	ControlKind              TargetPairControlKind `json:"control_kind"`
-	ControlRunDir            string                `json:"control_run_dir"`
-	TargetRunDir             string                `json:"target_run_dir"`
-	PairDifferentialArtifact string                `json:"pair_differential_artifact"`
-	QueryID                  string                `json:"query_id"`
-	CalibrationStatus        string                `json:"calibration_status"`
-	CalibrationReason        string                `json:"calibration_reason,omitempty"`
-	RootCauseEligible        bool                  `json:"root_cause_eligible"`
-	EvidenceCandidates       int                   `json:"evidence_candidates"`
-	RootCauseCandidates      int                   `json:"root_cause_candidates"`
+	PairID                   string                        `json:"pair_id"`
+	ControlKind              TargetPairControlKind         `json:"control_kind"`
+	ControlRunDir            string                        `json:"control_run_dir"`
+	TargetRunDir             string                        `json:"target_run_dir"`
+	PairDifferentialArtifact string                        `json:"pair_differential_artifact"`
+	QueryID                  string                        `json:"query_id"`
+	QueryStratum             TargetPairQueryStratum        `json:"query_stratum"`
+	CounterfactualLabel      TargetPairCounterfactualLabel `json:"counterfactual_label"`
+	CounterfactualReason     string                        `json:"counterfactual_reason,omitempty"`
+	CalibrationStatus        string                        `json:"calibration_status"`
+	CalibrationReason        string                        `json:"calibration_reason,omitempty"`
+	RootCauseEligible        bool                          `json:"root_cause_eligible"`
+	EvidenceCandidates       int                           `json:"evidence_candidates"`
+	RootCauseCandidates      int                           `json:"root_cause_candidates"`
 }
 
 type TargetPairCampaignControlKindStats struct {
@@ -86,6 +91,29 @@ type TargetPairCampaignControlKindStats struct {
 	PairCount              int                   `json:"pair_count"`
 	RootCauseEligiblePairs int                   `json:"root_cause_eligible_pairs"`
 	RootCauseCandidates    int                   `json:"root_cause_candidates"`
+}
+
+type TargetPairCampaignLabelStats struct {
+	Label     TargetPairCounterfactualLabel `json:"label"`
+	PairCount int                           `json:"pair_count"`
+}
+
+// TargetPairCampaignQueryStratumStats aggregates deterministic labels without
+// treating those labels as a causal conclusion. A stratum is the target
+// query's root, violation signature, mutation axes, and control kind.
+type TargetPairCampaignQueryStratumStats struct {
+	ControlKind          TargetPairControlKind            `json:"control_kind"`
+	RootQueryID          string                           `json:"root_query_id"`
+	ViolationSignatureID string                           `json:"violation_signature_id,omitempty"`
+	MutationOperators    []TargetScenarioMutationOperator `json:"mutation_operators,omitempty"`
+	MutationSemanticDiff []string                         `json:"mutation_semantic_diff,omitempty"`
+	PairCount            int                              `json:"pair_count"`
+	CounterfactualLabels []TargetPairCampaignLabelStats   `json:"counterfactual_labels"`
+}
+
+type targetPairCampaignStratumAccumulator struct {
+	stats  TargetPairCampaignQueryStratumStats
+	labels map[TargetPairCounterfactualLabel]*TargetPairCampaignLabelStats
 }
 
 // RunTargetPairCampaign compares the pre-recorded control/target runs listed
@@ -127,6 +155,8 @@ func RunTargetPairCampaign(opts TargetPairCampaignOptions) (*TargetPairCampaignR
 		Pairs:            make([]TargetPairCampaignPairResult, 0, len(manifest.Pairs)),
 	}
 	controlStats := make(map[TargetPairControlKind]*TargetPairCampaignControlKindStats)
+	labelStats := make(map[TargetPairCounterfactualLabel]*TargetPairCampaignLabelStats)
+	strata := make(map[string]*targetPairCampaignStratumAccumulator)
 	for _, pair := range manifest.Pairs {
 		pairDir := filepath.Join(outDir, pair.PairID)
 		if err := os.MkdirAll(pairDir, 0o755); err != nil {
@@ -153,6 +183,9 @@ func RunTargetPairCampaign(opts TargetPairCampaignOptions) (*TargetPairCampaignR
 			TargetRunDir:             pair.TargetRunDir,
 			PairDifferentialArtifact: filepath.Join(pair.PairID, TargetPairDifferentialArtifact),
 			QueryID:                  report.QueryID,
+			QueryStratum:             report.QueryStratum,
+			CounterfactualLabel:      report.CounterfactualLabel,
+			CounterfactualReason:     report.CounterfactualReason,
 			CalibrationStatus:        calibration.Status,
 			CalibrationReason:        calibration.Reason,
 			RootCauseEligible:        calibration.RootCauseEligible,
@@ -169,12 +202,40 @@ func RunTargetPairCampaign(opts TargetPairCampaignOptions) (*TargetPairCampaignR
 		if calibration.RootCauseEligible {
 			stat.RootCauseEligiblePairs++
 		}
+		label := report.CounterfactualLabel
+		if label == "" {
+			label = TargetPairCounterfactualTargetInconclusive
+		}
+		labelStat := labelStats[label]
+		if labelStat == nil {
+			labelStat = &TargetPairCampaignLabelStats{Label: label}
+			labelStats[label] = labelStat
+		}
+		labelStat.PairCount++
+		stratum := targetPairCampaignStratum(strata, pair.ControlKind, report.QueryStratum)
+		stratum.stats.PairCount++
+		stratumLabel := stratum.labels[label]
+		if stratumLabel == nil {
+			stratumLabel = &TargetPairCampaignLabelStats{Label: label}
+			stratum.labels[label] = stratumLabel
+		}
+		stratumLabel.PairCount++
 	}
 	if result.TotalPairs > 0 {
 		result.CalibrationCoverage = float64(result.RootCauseEligiblePairs) / float64(result.TotalPairs)
 	}
 	for _, stat := range controlStats {
 		result.ControlKinds = append(result.ControlKinds, *stat)
+	}
+	for _, stat := range labelStats {
+		result.CounterfactualLabels = append(result.CounterfactualLabels, *stat)
+	}
+	for _, accumulator := range strata {
+		stat := accumulator.stats
+		for _, label := range accumulator.labels {
+			stat.CounterfactualLabels = append(stat.CounterfactualLabels, *label)
+		}
+		result.QueryStrata = append(result.QueryStrata, stat)
 	}
 	canonicalizeTargetPairCampaignResult(result)
 
@@ -281,4 +342,73 @@ func canonicalizeTargetPairCampaignResult(result *TargetPairCampaignResult) {
 	sort.Slice(result.ControlKinds, func(i, j int) bool {
 		return result.ControlKinds[i].ControlKind < result.ControlKinds[j].ControlKind
 	})
+	sort.Slice(result.CounterfactualLabels, func(i, j int) bool {
+		return result.CounterfactualLabels[i].Label < result.CounterfactualLabels[j].Label
+	})
+	for index := range result.QueryStrata {
+		sort.Slice(result.QueryStrata[index].CounterfactualLabels, func(i, j int) bool {
+			return result.QueryStrata[index].CounterfactualLabels[i].Label < result.QueryStrata[index].CounterfactualLabels[j].Label
+		})
+	}
+	sort.Slice(result.QueryStrata, func(i, j int) bool {
+		left, right := result.QueryStrata[i], result.QueryStrata[j]
+		if left.ControlKind != right.ControlKind {
+			return left.ControlKind < right.ControlKind
+		}
+		if left.RootQueryID != right.RootQueryID {
+			return left.RootQueryID < right.RootQueryID
+		}
+		if left.ViolationSignatureID != right.ViolationSignatureID {
+			return left.ViolationSignatureID < right.ViolationSignatureID
+		}
+		return strings.Join(targetPairCampaignMutationOperators(left.MutationOperators), ",")+"\x00"+strings.Join(left.MutationSemanticDiff, ",") < strings.Join(targetPairCampaignMutationOperators(right.MutationOperators), ",")+"\x00"+strings.Join(right.MutationSemanticDiff, ",")
+	})
+}
+
+func targetPairCampaignStratum(
+	strata map[string]*targetPairCampaignStratumAccumulator,
+	controlKind TargetPairControlKind,
+	query TargetPairQueryStratum,
+) *targetPairCampaignStratumAccumulator {
+	rootQueryID := strings.TrimSpace(query.RootQueryID)
+	if rootQueryID == "" {
+		rootQueryID = strings.TrimSpace(query.QueryID)
+	}
+	signatureID := ""
+	if query.ViolationSignature != nil {
+		signatureID = query.ViolationSignature.SignatureID
+	}
+	operators := append([]TargetScenarioMutationOperator{}, query.MutationOperators...)
+	sort.Slice(operators, func(i, j int) bool { return operators[i] < operators[j] })
+	operatorValues := targetPairCampaignMutationOperators(operators)
+	semanticDiff := append([]string{}, query.MutationSemanticDiff...)
+	sort.Strings(semanticDiff)
+	key := strings.Join([]string{string(controlKind), rootQueryID, signatureID, strings.Join(operatorValues, ","), strings.Join(semanticDiff, ",")}, "\x00")
+	accumulator := strata[key]
+	if accumulator != nil {
+		return accumulator
+	}
+	accumulator = &targetPairCampaignStratumAccumulator{
+		stats: TargetPairCampaignQueryStratumStats{
+			ControlKind:          controlKind,
+			RootQueryID:          rootQueryID,
+			ViolationSignatureID: signatureID,
+			MutationOperators:    operators,
+			MutationSemanticDiff: semanticDiff,
+		},
+		labels: make(map[TargetPairCounterfactualLabel]*TargetPairCampaignLabelStats),
+	}
+	strata[key] = accumulator
+	return accumulator
+}
+
+func targetPairCampaignMutationOperators(values []TargetScenarioMutationOperator) []string {
+	operators := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = TargetScenarioMutationOperator(strings.TrimSpace(string(value))); value != "" {
+			operators = append(operators, string(value))
+		}
+	}
+	sort.Strings(operators)
+	return operators
 }

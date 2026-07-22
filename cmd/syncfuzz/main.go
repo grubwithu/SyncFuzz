@@ -824,8 +824,21 @@ func targetPairCampaign(args []string) {
 	fmt.Printf("pair_reports: %d\n", result.TotalPairs)
 	fmt.Printf("root_cause_eligible_pairs: %d\n", result.RootCauseEligiblePairs)
 	fmt.Printf("calibration_coverage: %.2f%%\n", result.CalibrationCoverage*100)
+	fmt.Printf("counterfactual_labels: %s\n", targetPairCampaignLabelSummary(result.CounterfactualLabels))
+	fmt.Printf("query_strata: %d\n", len(result.QueryStrata))
 	fmt.Printf("calibration_summary: %s\n", filepath.Join(*outDir, result.CalibrationSummaryArtifact))
 	fmt.Printf("artifact: %s\n", filepath.Join(*outDir, target.TargetPairCampaignResultArtifact))
+}
+
+func targetPairCampaignLabelSummary(labels []target.TargetPairCampaignLabelStats) string {
+	if len(labels) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(labels))
+	for _, label := range labels {
+		parts = append(parts, fmt.Sprintf("%s=%d", label.Label, label.PairCount))
+	}
+	return strings.Join(parts, ",")
 }
 
 func targetCalibrationSummary(args []string) {

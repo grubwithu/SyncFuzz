@@ -392,7 +392,13 @@ directories against the manifest, and produces a copied manifest, an isolated
 pair differential per entry, `target-pair-campaign-result.json`, and the
 initial calibration summary. This keeps fresh-runtime, cleanup, and namespace
 restoration controls distinguishable in the replication package; a `custom`
-control requires a non-empty description.
+control requires a non-empty description. Each report also records a
+deterministic counterfactual outcome (`target-only-violation`,
+`violation-persists-under-control`, target/control inconclusive, or
+`task-noncompliant`) and the target query stratum (root query, violation
+signature, mutation operators, and semantic diff). Campaign output aggregates
+those labels by control kind and stratum; they describe oracle outcomes only
+and never promote a target-only difference to a causal verdict.
 
 `syncfuzz target calibration-summary --inputs <report-or-directory>[,...] --out <path>`
 recursively collects the canonical v2 pair reports produced for a controlled

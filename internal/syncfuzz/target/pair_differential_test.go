@@ -76,6 +76,117 @@ func TestCompareTargetRunsEmitsRootCauseCandidatesForCalibratedContractViolation
 	}
 }
 
+func TestCompareTargetRunsRecordsCounterfactualLabelAndQueryStratum(t *testing.T) {
+	tmp := t.TempDir()
+	controlDir := filepath.Join(tmp, "control")
+	targetDir := filepath.Join(tmp, "target")
+	writePairRunArtifact(t, controlDir, "control-run", core.Snapshot{}, core.ProcessSnapshot{})
+	writePairRunArtifact(t, targetDir, "target-run", core.Snapshot{Files: []core.FileEntry{{Path: "residue.txt", Type: "file", SHA256: "target"}}}, core.ProcessSnapshot{})
+	writePairRunOracle(t, controlDir, false)
+	writePairRunOracle(t, targetDir, true)
+
+	signature, err := NormalizeTargetViolationSignature(TargetViolationSignature{
+		Relations:             []TargetViolationRelation{TargetViolationResidual},
+		ResourceClasses:       []TargetViolationResourceClass{TargetViolationIPCEndpoint},
+		LifecycleBoundary:     TargetViolationBoundaryCheckpointFork,
+		PersistenceMechanisms: []TargetViolationPersistenceMechanism{TargetViolationSharedRuntime},
+		Consequences:          []TargetViolationConsequence{TargetViolationCrossBranchInterference},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeTargetViolationSignature failed: %v", err)
+	}
+	scenario := TargetScenarioInfo{
+		SchemaVersion:               TargetScenarioSchemaVersion,
+		QueryGenealogySchemaVersion: TargetQueryGenealogySchemaVersion,
+		ScenarioID:                  "pair-query/activation-trusted-action",
+		QueryID:                     "pair-query/activation-trusted-action",
+		ParentQueryID:               "pair-query",
+		RootQueryID:                 "pair-query",
+		TaskID:                      "pair-query",
+		ViolationSignature:          signature,
+		Mutations: []TargetScenarioMutation{{
+			MutationID:   "activation-substitution.socket->trusted-action",
+			Kind:         TargetScenarioMutationActivationSubstitution,
+			Operator:     TargetScenarioMutationOperatorActivation,
+			Parameters:   map[string]string{"from_activation": "socket", "to_activation": "trusted-action"},
+			SemanticDiff: []string{"Activation.kind", "Witness.oracle"},
+		}},
+	}
+	if err := core.WriteJSON(filepath.Join(targetDir, TargetTaskArtifact), TargetTask{TaskID: scenario.TaskID, Scenario: &scenario}); err != nil {
+		t.Fatalf("write target task: %v", err)
+	}
+	setPairRunDifferentialQueryID(t, controlDir, scenario.QueryID)
+	setPairRunDifferentialQueryID(t, targetDir, scenario.QueryID)
+	updatePairRunResult(t, targetDir, func(result *TargetRunResult) {
+		result.QueryID = scenario.QueryID
+		result.ParentQueryID = scenario.ParentQueryID
+		result.RootQueryID = scenario.RootQueryID
+		result.ViolationSignature = &signature
+	})
+
+	result, err := CompareTargetRuns(TargetPairDifferentialOptions{ControlRunDir: controlDir, TargetRunDir: targetDir})
+	if err != nil {
+		t.Fatalf("CompareTargetRuns failed: %v", err)
+	}
+	if result.CounterfactualLabel != TargetPairCounterfactualTargetOnly || result.CounterfactualReason == "" {
+		t.Fatalf("expected target-only counterfactual label: %#v", result)
+	}
+	if result.QueryStratum.QueryID != scenario.QueryID || result.QueryStratum.ParentQueryID != scenario.ParentQueryID || result.QueryStratum.RootQueryID != scenario.RootQueryID || result.QueryStratum.ViolationSignature == nil || result.QueryStratum.ViolationSignature.SignatureID != signature.SignatureID {
+		t.Fatalf("expected query/signature stratum: %#v", result.QueryStratum)
+	}
+	if len(result.QueryStratum.MutationOperators) != 1 || result.QueryStratum.MutationOperators[0] != TargetScenarioMutationOperatorActivation || len(result.QueryStratum.MutationSemanticDiff) != 2 {
+		t.Fatalf("expected mutation stratum: %#v", result.QueryStratum)
+	}
+}
+
+func TestTargetPairCounterfactualOutcomeClassifiesOracleStates(t *testing.T) {
+	tests := []struct {
+		name    string
+		control TargetRunResult
+		target  TargetRunResult
+		want    TargetPairCounterfactualLabel
+	}{
+		{
+			name:    "target-only",
+			control: TargetRunResult{TargetOracle: TargetOracleResult{Status: TargetOracleStatusNegative}},
+			target:  TargetRunResult{TargetOracle: TargetOracleResult{Status: TargetOracleStatusConfirmed, Confirmed: true}},
+			want:    TargetPairCounterfactualTargetOnly,
+		},
+		{
+			name:    "persists",
+			control: TargetRunResult{TargetOracle: TargetOracleResult{Status: TargetOracleStatusConfirmed, Confirmed: true}},
+			target:  TargetRunResult{TargetOracle: TargetOracleResult{Status: TargetOracleStatusConfirmed, Confirmed: true}},
+			want:    TargetPairCounterfactualPersists,
+		},
+		{
+			name:    "target-negative",
+			control: TargetRunResult{TargetOracle: TargetOracleResult{Status: TargetOracleStatusNegative}},
+			target:  TargetRunResult{TargetOracle: TargetOracleResult{Status: TargetOracleStatusNegative}},
+			want:    TargetPairCounterfactualTargetNegative,
+		},
+		{
+			name:    "control-inconclusive",
+			control: TargetRunResult{TargetOracle: TargetOracleResult{Status: TargetOracleStatusInconclusive}},
+			target:  TargetRunResult{TargetOracle: TargetOracleResult{Status: TargetOracleStatusConfirmed, Confirmed: true}},
+			want:    TargetPairCounterfactualControlInconclusive,
+		},
+		{
+			name:    "task-noncompliant",
+			control: TargetRunResult{TaskCompliance: TargetTaskComplianceResult{Status: TargetTaskComplianceStatusViolated}},
+			target:  TargetRunResult{TargetOracle: TargetOracleResult{Status: TargetOracleStatusConfirmed, Confirmed: true}},
+			want:    TargetPairCounterfactualTaskNoncompliant,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			label, reason := targetPairCounterfactualOutcome(test.control, test.target)
+			if label != test.want || reason == "" {
+				t.Fatalf("unexpected label=%q reason=%q", label, reason)
+			}
+		})
+	}
+}
+
 func TestCompareTargetRunsDoesNotPromoteContractConsistentTargetEvidence(t *testing.T) {
 	tmp := t.TempDir()
 	controlDir := filepath.Join(tmp, "control")
@@ -167,6 +278,19 @@ func updatePairRunResult(t *testing.T, runDir string, update func(*TargetRunResu
 	update(&result)
 	if err := core.WriteJSON(resultPath, result); err != nil {
 		t.Fatalf("write target result: %v", err)
+	}
+}
+
+func setPairRunDifferentialQueryID(t *testing.T, runDir string, queryID string) {
+	t.Helper()
+	path := filepath.Join(runDir, TargetCheckpointDifferentialArtifact)
+	differential, err := readTargetPairJSON[TargetCheckpointDifferential](path)
+	if err != nil {
+		t.Fatalf("read checkpoint differential: %v", err)
+	}
+	differential.QueryID = queryID
+	if err := core.WriteJSON(path, differential); err != nil {
+		t.Fatalf("write checkpoint differential: %v", err)
 	}
 }
 

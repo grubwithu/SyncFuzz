@@ -286,7 +286,13 @@ command emits the copied manifest, one pair differential per entry,
 `target-pair-campaign-result.json`, and its initial calibration summary. Start
 from `examples/target-pair-campaign.example.json`; relative run directories are
 resolved against the manifest's location, and a `custom` control requires a
-non-empty description.
+non-empty description. Each pair additionally records a deterministic
+counterfactual outcome—`target-only-violation`,
+`violation-persists-under-control`, a target/control inconclusive outcome, or
+`task-noncompliant`—together with the target query's root, violation signature,
+mutation operators, and semantic diff. The campaign aggregates labels by both
+control kind and this query stratum. These are observed oracle outcomes, not
+causal findings or LLM judgments.
 
 `target calibration-summary --inputs <report-or-directory>[,...] --out <path>`
 recursively collects v2 pair reports for a controlled campaign and writes
