@@ -3,6 +3,7 @@ package target
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,8 +19,10 @@ import (
 const (
 	TargetContractProposalRequestSchemaVersion = "syncfuzz.target-contract-proposal-request.v1"
 	TargetContractProposalRunSchemaVersion     = "syncfuzz.target-contract-proposal-run.v1"
+	TargetContractProposalFailureSchemaVersion = "syncfuzz.target-contract-proposal-failure.v1"
 	TargetContractProposalRequestArtifact      = "target-contract-proposal-request.json"
 	TargetContractProposalCandidateArtifact    = "target-contract-candidates.json"
+	TargetContractProposalFailureArtifact      = "target-contract-proposal-failure.json"
 	TargetContractProposalResultArtifact       = "target-contract-proposal-run.json"
 
 	targetContractProposalMaxSourceBytes = 64 * 1024
@@ -94,6 +97,14 @@ type TargetContractProposalRunResult struct {
 	AutomaticProfileAdoption string `json:"automatic_profile_adoption"`
 }
 
+// targetContractProposalFailure is an optional, safe failure category emitted
+// by a generator wrapper. It deliberately excludes provider response bodies,
+// prompts, command text, and credentials.
+type targetContractProposalFailure struct {
+	SchemaVersion string `json:"schema_version"`
+	Category      string `json:"category"`
+}
+
 // RunTargetContractProposalGenerator creates the fixed request artifact,
 // invokes the explicitly supplied generator command, and validates its JSON
 // output with the existing source-grounding gate. It never calls a provider by
@@ -161,7 +172,8 @@ func RunTargetContractProposalGenerator(ctx context.Context, opts TargetContract
 		return nil, fmt.Errorf("write contract proposal request: %w", err)
 	}
 	candidatePath := filepath.Join(artifactDir, TargetContractProposalCandidateArtifact)
-	if err := runTargetContractProposalCommand(ctx, opts.GeneratorCommand, sourceRoot, requestPath, candidatePath, opts.Timeout); err != nil {
+	failurePath := filepath.Join(artifactDir, TargetContractProposalFailureArtifact)
+	if err := runTargetContractProposalCommand(ctx, opts.GeneratorCommand, sourceRoot, requestPath, candidatePath, failurePath, opts.Timeout); err != nil {
 		return nil, err
 	}
 	validationPath := filepath.Join(artifactDir, "target-contract-candidate-validation.json")
@@ -320,7 +332,7 @@ func targetContractProposalSources(sourceRoot string, sourcePaths []string) ([]T
 	return sources, nil
 }
 
-func runTargetContractProposalCommand(ctx context.Context, command string, sourceRoot string, requestPath string, candidatePath string, timeout time.Duration) error {
+func runTargetContractProposalCommand(ctx context.Context, command string, sourceRoot string, requestPath string, candidatePath string, failurePath string, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
 	}
@@ -331,12 +343,16 @@ func runTargetContractProposalCommand(ctx context.Context, command string, sourc
 	cmd.Env = append(os.Environ(),
 		"SYNCFUZZ_CONTRACT_PROPOSAL_REQUEST="+requestPath,
 		"SYNCFUZZ_CONTRACT_PROPOSAL_OUTPUT="+candidatePath,
+		"SYNCFUZZ_CONTRACT_PROPOSAL_FAILURE="+failurePath,
 		"SYNCFUZZ_CONTRACT_PROPOSAL_OUTPUT_SCHEMA="+TargetContractCandidateSetSchemaVersion,
 		"SYNCFUZZ_CONTRACT_PROPOSAL_AUTHORITY=proposal-only",
 	)
 	if _, err := cmd.CombinedOutput(); err != nil {
 		if commandContext.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("contract proposal generator timed out after %s", timeout)
+		}
+		if category := targetContractProposalFailureCategory(failurePath); category != "" {
+			return fmt.Errorf("contract proposal generator command failed (%s): %w", category, err)
 		}
 		return fmt.Errorf("contract proposal generator command failed: %w", err)
 	}
@@ -348,6 +364,26 @@ func runTargetContractProposalCommand(ctx context.Context, command string, sourc
 		return fmt.Errorf("contract proposal generator output %s is not a regular file", candidatePath)
 	}
 	return nil
+}
+
+func targetContractProposalFailureCategory(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var failure targetContractProposalFailure
+	if err := json.Unmarshal(raw, &failure); err != nil {
+		return ""
+	}
+	if failure.SchemaVersion != TargetContractProposalFailureSchemaVersion {
+		return ""
+	}
+	switch failure.Category {
+	case "configuration", "input", "provider-http", "provider-response", "provider-transport", "local-output":
+		return failure.Category
+	default:
+		return ""
+	}
 }
 
 func isTargetContractProposalRunID(value string) bool {

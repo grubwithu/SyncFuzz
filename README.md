@@ -388,7 +388,11 @@ candidate set, validation report, and proposal-run result with
 user's command does so. `examples/target-contract-proposal-generator.example.sh`
 is a deterministic interface fixture, not an LLM. The generator command is
 caller-supplied and not sandboxed; the proposal pipeline nevertheless never
-loads its output as a contract profile or oracle input.
+loads its output as a contract profile or oracle input. The OpenAI-compatible
+wrapper additionally writes a safe failure category (`configuration`,
+`provider-transport`, `provider-http`, or `provider-response`) when it exits
+unsuccessfully; SyncFuzz surfaces that category without retaining provider
+responses, prompts, or credentials.
 
 For an actual OpenAI-compatible call, use the checked-in wrapper only after
 exporting `OPENAI_API_KEY` and choosing `CONTRACT_PROPOSAL_MODEL` (with optional
