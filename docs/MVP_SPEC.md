@@ -484,7 +484,9 @@ or oracle input.
 `examples/target-contract-proposal-openai.py` is the first real wrapper. It
 uses `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, and an explicit
 `CONTRACT_PROPOSAL_MODEL`, then makes one OpenAI-compatible Chat Completions
-request with JSON-object output. It is opt-in through
+request with JSON-object output. `CONTRACT_PROPOSAL_MODEL` has no fallback to
+`LANGCHAIN_MODEL`: set it explicitly in `.env` or on the command line before a
+run. It is opt-in through
 `--generator-command 'python3 target-contract-proposal-openai.py'`; no test or
 default command invokes it.
 

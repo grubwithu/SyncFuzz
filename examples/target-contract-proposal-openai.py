@@ -28,21 +28,7 @@ def environment(name: str) -> str:
 
 
 def proposal_model() -> str:
-    configured = os.environ.get("CONTRACT_PROPOSAL_MODEL", "").strip()
-    if configured:
-        return configured
-    legacy = os.environ.get("LANGCHAIN_MODEL", "").strip()
-    if not legacy:
-        raise RuntimeError("CONTRACT_PROPOSAL_MODEL is required")
-    provider, separator, model = legacy.partition(":")
-    if not separator:
-        return legacy
-    if provider != "openai" or not model:
-        raise RuntimeError(
-            "LANGCHAIN_MODEL fallback must use openai:<model>; "
-            "set CONTRACT_PROPOSAL_MODEL explicitly for another provider"
-        )
-    return model
+    return environment("CONTRACT_PROPOSAL_MODEL")
 
 
 def load_request() -> tuple[dict, Path]:
