@@ -222,10 +222,11 @@ collector，因此该模式显式要求 local。
 dependency）确定性地扩展一次，之后强制保留 full-probe policy。
 
 generic command adapter 现已提供 opt-in 的 `$SYNCFUZZ_LIFECYCLE_MARKER`：目标在
-真实 plant 完成后调用 `"$SYNCFUZZ_LIFECYCLE_MARKER" after-plant`，runner 在命令
-仍运行时轮询并验证 JSONL marker，立刻采集 P4 filesystem/process artifact，而非
-由 command return 猜测 boundary。未调用 marker 的命令仍诚实保留 P5 partial
-coverage；下一步是把同一协议扩展到 recovery/activation marker。
+真实 plant / recovery / activation 完成后调用对应 marker，runner 在命令仍运行时
+轮询并验证 JSONL marker，分别采集 P4/P6/P7 filesystem/process artifact，并在
+capture 完成后才 ack helper，因而目标无法越过 marker 先执行下一阶段。未调用
+marker 必须严格遵循 plant -> recovery -> activation 顺序；未调用 `after-plant`
+marker 的命令仍诚实保留 P5 partial coverage。
 
 两份 artifact 现在共享 `syncfuzz.lifecycle-query.v1`：
 `q = <Init, Plant, Boundary, Recovery, Activation, Witness>`。每个阶段保留
@@ -236,7 +237,7 @@ interpretation。
 紧接着的开发顺序是：
 
 1. 固化 lifecycle query 与 violation signature 的 typed schema；
-2. 在 controlled campaign 中量化 local plan-selected process/FD probe 与 refine-once 后的 fallback coverage；将 generic command adapter 的 opt-in marker 扩展到 recovery/activation，并量化无 marker 时 P5 partial coverage；
+2. 在 controlled campaign 中量化 local plan-selected process/FD probe、三类 lifecycle marker 与 refine-once 后的 fallback coverage，并量化无 marker 时 P5 partial coverage；
 3. 将差分与 root-cause 输出绑定到这些 checkpoint；
 4. 仅在环境和评估支持时，加入作为同一 evidence source 的 eBPF trace；
 5. 让 LLM 仅从源码/契约生成 probe 或 contract 候选，绝不担当 oracle。

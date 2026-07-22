@@ -40,16 +40,16 @@ path/process/FD selection 投影 broad snapshot。默认保持 shadow mode；可
 planned paths，再用一次最终 full snapshot 作为 fallback，并把未规划对象
 写入 report。本地 `pruned` mode 还会先按 plan selector 匹配 process identity，
 只为命中的 PID 读取 FD，再保留最终 broad process/filesystem fallback。generic
-command adapter 现提供 opt-in `$SYNCFUZZ_LIFECYCLE_MARKER`：目标在实际 plant
-完成后调用 `"$SYNCFUZZ_LIFECYCLE_MARKER" after-plant`，runner 在命令存活期间
-验证 JSONL marker 并采集 P4 filesystem/process artifact；未调用 marker 时才把
-P5 coverage 明确标为 partial。
+command adapter 现提供 opt-in `$SYNCFUZZ_LIFECYCLE_MARKER`：目标在实际 plant /
+recovery / activation 完成后调用对应 marker，runner 在命令存活期间验证 JSONL
+marker 并采集 P4/P6/P7 filesystem/process artifact，再 ack helper，保证目标不会
+在 capture 前进入下一阶段；未调用 `after-plant` marker 时才把 P5 coverage 明确
+标为 partial。
 `target refine-plan` 已将 fallback evidence 接入 compiler：未规划路径可
 扩展一次；socket 会自动补齐 filesystem/process/FD dependency，并把 added
-paths 固化到 refined plan。接下来的直接目标是评估 plan-selected collection 与
-refine-once 的 fallback coverage，并把 marker protocol 扩展到 recovery /
-activation；完成后才评估 time-boxed、特权环境可用的 OS trace/eBPF evidence
-source。
+paths 固化到 refined plan。接下来的直接目标是评估 plan-selected collection、
+marker 覆盖率与 refine-once 的 fallback coverage；完成后才评估 time-boxed、
+特权环境可用的 OS trace/eBPF evidence source。
 
 ## 当前判断
 

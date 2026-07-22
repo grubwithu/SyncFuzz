@@ -189,6 +189,62 @@ func TestRunTargetCapturesExplicitAfterPlantMarker(t *testing.T) {
 	}
 }
 
+func TestRunTargetCapturesAcknowledgedRecoveryAndActivationMarkers(t *testing.T) {
+	tmp := t.TempDir()
+	planPath := filepath.Join(tmp, observation.ObservationPlanArtifact)
+	if err := observation.WritePlan(planPath, &observation.ObservationPlan{
+		QueryID:     "orphan-process",
+		Checkpoints: []observation.ObservationPoint{observation.ObservationBeforePlant, observation.ObservationAfterPlant, observation.ObservationAfterRecovery, observation.ObservationAfterActivation},
+		ProbePlans: []observation.ProbePlan{
+			{Family: observation.ProbeFilesystem, Enabled: true, Paths: []string{"plant.txt", "recovery.txt", "activation.txt"}, Fields: []string{"exists"}},
+		},
+	}); err != nil {
+		t.Fatalf("WritePlan failed: %v", err)
+	}
+	command := "printf plant > plant.txt; \"$SYNCFUZZ_LIFECYCLE_MARKER\" after-plant; printf recovery > recovery.txt; \"$SYNCFUZZ_LIFECYCLE_MARKER\" after-recovery; printf activation > activation.txt; \"$SYNCFUZZ_LIFECYCLE_MARKER\" after-activation; printf complete > late-effect"
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:              filepath.Join(tmp, "runs"),
+		TaskID:              "orphan-process",
+		Command:             command,
+		ObserveDelay:        10 * time.Millisecond,
+		ObservationPlanPath: planPath,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget with lifecycle markers failed: %v", err)
+	}
+	if len(result.LifecycleMarkers) != 3 {
+		t.Fatalf("expected three acknowledged markers, got %#v", result.LifecycleMarkers)
+	}
+	var afterRecovery core.Snapshot
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, TargetSnapshotAfterRecoveryArtifact), &afterRecovery)
+	if !snapshotContainsPath(afterRecovery, "plant.txt") || !snapshotContainsPath(afterRecovery, "recovery.txt") || snapshotContainsPath(afterRecovery, "activation.txt") {
+		t.Fatalf("after-recovery marker was not captured before activation: %#v", afterRecovery)
+	}
+	var afterActivation core.Snapshot
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, TargetSnapshotAfterActivationArtifact), &afterActivation)
+	if !snapshotContainsPath(afterActivation, "activation.txt") || snapshotContainsPath(afterActivation, "late-effect") {
+		t.Fatalf("after-activation marker was not captured before the later effect: %#v", afterActivation)
+	}
+	var report observation.TargetedProbeReport
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, observation.TargetedProbeReportArtifact), &report)
+	if findTargetedProbeCheckpoint(report.Checkpoints, observation.ObservationAfterRecovery).RunnerPhase != "P6" || findTargetedProbeCheckpoint(report.Checkpoints, observation.ObservationAfterActivation).RunnerPhase != "P7" {
+		t.Fatalf("expected semantic recovery and activation checkpoints: %#v", report.Checkpoints)
+	}
+}
+
+func TestRunTargetRejectsOutOfOrderLifecycleMarkers(t *testing.T) {
+	_, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:       filepath.Join(t.TempDir(), "runs"),
+		TaskID:       "orphan-process",
+		Command:      "\"$SYNCFUZZ_LIFECYCLE_MARKER\" after-recovery; \"$SYNCFUZZ_LIFECYCLE_MARKER\" after-plant",
+		Timeout:      2 * time.Second,
+		ObserveDelay: 10 * time.Millisecond,
+	})
+	if err == nil || !strings.Contains(err.Error(), "out of order") {
+		t.Fatalf("expected out-of-order marker error, got %v", err)
+	}
+}
+
 func TestRunTargetRejectsObservationPlanForDifferentQuery(t *testing.T) {
 	tmp := t.TempDir()
 	planPath := filepath.Join(tmp, observation.ObservationPlanArtifact)

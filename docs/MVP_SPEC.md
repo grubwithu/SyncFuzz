@@ -277,6 +277,10 @@ runs/<run_id>/
   target-lifecycle-markers.jsonl        # optional target-emitted semantic markers
   snapshot-after-plant.json             # optional P4 snapshot from after-plant marker
   process-after-plant.json              # optional P4 process snapshot from marker
+  snapshot-after-recovery-marker.json   # optional P6 snapshot from recovery marker
+  process-after-recovery-marker.json    # optional P6 process snapshot from recovery marker
+  snapshot-after-activation-marker.json # optional P7 snapshot from activation marker
+  process-after-activation-marker.json  # optional P7 process snapshot from activation marker
   snapshot-full-fallback.json           # final fallback for pruned-filesystem mode
   process-full-fallback.json            # final process fallback for local pruned mode
   workspace/
@@ -336,12 +340,15 @@ eBPF probes nor claims causal tracing.
 
 The generic command adapter exports an executable
 `$SYNCFUZZ_LIFECYCLE_MARKER` plus `SYNCFUZZ_LIFECYCLE_MARKER_FILE`. A
-cooperating command invokes `"$SYNCFUZZ_LIFECYCLE_MARKER" after-plant` at its
-actual semantic plant boundary. The runner polls that validated JSONL protocol
-while the command remains live, captures filesystem/process artifacts at P4,
-and maps the `after-plant` probe checkpoint to those artifacts. The marker is
-opt-in; absent a marker, P5 remains the explicitly partial command-return
-process observation rather than a fabricated filesystem boundary.
+cooperating command invokes it with `after-plant`, `after-recovery`, or
+`after-activation` at the corresponding semantic boundary. The runner polls
+the validated JSONL protocol while the command remains live, captures the
+matching filesystem/process artifacts at P4/P6/P7, and acknowledges the
+marker before the helper returns; the target therefore cannot advance past the
+marker before capture completes. Markers must be strictly ordered as plant,
+recovery, activation. The protocol is opt-in; absent an
+`after-plant` marker, P5 remains the explicitly partial command-return process
+observation rather than a fabricated filesystem boundary.
 
 `syncfuzz target refine-plan --plan <plan> --fallback-report <report>` reads
 the report's adjacent fallback snapshot and produces

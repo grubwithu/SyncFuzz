@@ -202,7 +202,7 @@ Phase 5 target runs add a parallel artifact set for real agent/runtime observati
 - `observation-plan-refined.json`: optional one-time expansion from a pruned run's fallback evidence
 - `targeted-probe-report.json`: objects selected by that plan at each adapter-visible checkpoint
 - `target-lifecycle-markers.jsonl`: optional semantic markers emitted by the target command
-- `snapshot-after-plant.json` / `process-after-plant.json`: optional P4 observations from an `after-plant` marker
+- `snapshot-after-{plant,recovery,activation}*.json` / `process-after-{plant,recovery,activation}*.json`: optional P4/P6/P7 marker observations
 - `snapshot-full-fallback.json`: final broad filesystem fallback for a `pruned-filesystem` rerun
 - `process-full-fallback.json`: final broad process fallback for a local `pruned` rerun
 
@@ -231,13 +231,17 @@ enabled process or FD selector; filesystem-only plans use
 so `pruned` rejects `--env container`.
 
 Every target command receives an executable `$SYNCFUZZ_LIFECYCLE_MARKER` and a
-marker-file path. Calling `"$SYNCFUZZ_LIFECYCLE_MARKER" after-plant` after the
-actual plant causes the runner to capture `snapshot-after-plant.json` and
-`process-after-plant.json` while the command is still running, then records
-the event in `target-lifecycle-markers.jsonl`. The corresponding targeted
-probe checkpoint is P4 and no longer partial. This protocol is opt-in: when a
-target does not emit it, the generic adapter retains the explicitly partial P5
-command-return process observation instead of inventing a semantic boundary.
+marker-file path. Calling `"$SYNCFUZZ_LIFECYCLE_MARKER" after-plant`,
+`after-recovery`, or `after-activation` after the corresponding semantic stage
+causes the runner to capture the matching filesystem/process artifacts while
+the command is still running, then records the event in
+`target-lifecycle-markers.jsonl`. The helper waits for the runner's capture
+acknowledgement, so the command cannot advance past a marker before that
+snapshot is taken. Markers must appear in this lifecycle order and map to
+P4/P6/P7 respectively. This protocol is
+opt-in: when a target does not emit an `after-plant` marker, the generic
+adapter retains the explicitly partial P5 command-return process observation
+instead of inventing a semantic boundary.
 `target refine-plan` can consume that fallback once, adding observed paths
 (and socket dependency probes when applicable) to a deterministic refined
 plan; a second expansion is rejected by policy.

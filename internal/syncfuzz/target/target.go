@@ -29,6 +29,10 @@ const (
 	TargetLifecycleMarkerHelperArtifact          = "syncfuzz-lifecycle-marker"
 	TargetSnapshotAfterPlantArtifact             = "snapshot-after-plant.json"
 	TargetProcessAfterPlantArtifact              = "process-after-plant.json"
+	TargetSnapshotAfterRecoveryArtifact          = "snapshot-after-recovery-marker.json"
+	TargetProcessAfterRecoveryArtifact           = "process-after-recovery-marker.json"
+	TargetSnapshotAfterActivationArtifact        = "snapshot-after-activation-marker.json"
+	TargetProcessAfterActivationArtifact         = "process-after-activation-marker.json"
 	TargetFullFallbackSnapshotArtifact           = "snapshot-full-fallback.json"
 	TargetFullFallbackProcessArtifact            = "process-full-fallback.json"
 	TargetShellPoisonCheckArtifact               = "shell-poison-check.txt"
@@ -198,8 +202,10 @@ const (
 	TargetObservationModePrunedFilesystem = "pruned-filesystem"
 	TargetObservationModePruned           = "pruned"
 
-	TargetLifecycleMarkerSchemaVersion = "syncfuzz.target-lifecycle-marker.v1"
-	TargetLifecycleAfterPlantEvent     = "after-plant"
+	TargetLifecycleMarkerSchemaVersion  = "syncfuzz.target-lifecycle-marker.v1"
+	TargetLifecycleAfterPlantEvent      = "after-plant"
+	TargetLifecycleAfterRecoveryEvent   = "after-recovery"
+	TargetLifecycleAfterActivationEvent = "after-activation"
 )
 
 type TargetAdapterInfo struct {
@@ -594,42 +600,89 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	lifecycleMarkers := make([]TargetLifecycleMarker, 0)
 	var afterPlantMarkerSnapshot core.Snapshot
 	var afterPlantMarkerProcesses core.ProcessSnapshot
+	var afterRecoveryMarkerSnapshot core.Snapshot
 	afterPlantMarkerCaptured := false
-	observeLifecycleMarker := func(marker TargetLifecycleMarker) error {
-		if afterPlantMarkerCaptured {
-			return fmt.Errorf("lifecycle marker %q was emitted more than once", marker.Event)
-		}
-		if marker.Event != TargetLifecycleAfterPlantEvent {
-			return fmt.Errorf("unsupported lifecycle marker event %q", marker.Event)
-		}
+	afterRecoveryMarkerCaptured := false
+	afterActivationMarkerCaptured := false
+	lastLifecycleMarkerOrder := 0
+	captureLifecycleMarker := func(marker TargetLifecycleMarker, point observation.ObservationPoint, phase string, snapshotArtifact string, processArtifact string, reason string) (core.Snapshot, core.ProcessSnapshot, error) {
 		filesystem, err := snapshotFilesystem(run.Workspace)
 		if err != nil {
-			return err
+			return core.Snapshot{}, core.ProcessSnapshot{}, err
 		}
-		if err := core.WriteJSON(filepath.Join(run.RunDir, TargetSnapshotAfterPlantArtifact), filesystem); err != nil {
-			return err
+		if err := core.WriteJSON(filepath.Join(run.RunDir, snapshotArtifact), filesystem); err != nil {
+			return core.Snapshot{}, core.ProcessSnapshot{}, err
 		}
-		processes, err := recordProcesses(ctx, env, run, "P4", TargetProcessAfterPlantArtifact)
+		processes, err := recordProcesses(ctx, env, run, phase, processArtifact)
 		if err != nil {
-			return err
+			return core.Snapshot{}, core.ProcessSnapshot{}, err
 		}
-		if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterPlant, "P4", &filesystem, &processes, "explicit target after-plant lifecycle marker"); err != nil {
-			return err
+		if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, point, phase, &filesystem, &processes, reason); err != nil {
+			return core.Snapshot{}, core.ProcessSnapshot{}, err
 		}
-		if err := run.Trace.Write(core.NewEvent(run, "P4", "target_lifecycle_marker", map[string]any{
+		if err := run.Trace.Write(core.NewEvent(run, phase, "target_lifecycle_marker", map[string]any{
 			"artifact":  TargetLifecycleMarkerArtifact,
 			"event":     marker.Event,
 			"timestamp": marker.Timestamp,
-			"snapshot":  TargetSnapshotAfterPlantArtifact,
-			"process":   TargetProcessAfterPlantArtifact,
+			"snapshot":  snapshotArtifact,
+			"process":   processArtifact,
 		})); err != nil {
-			return err
+			return core.Snapshot{}, core.ProcessSnapshot{}, err
+		}
+		if err := writeTargetLifecycleMarkerAcknowledgement(markerHostPath, marker.Event); err != nil {
+			return core.Snapshot{}, core.ProcessSnapshot{}, err
 		}
 		lifecycleMarkers = append(lifecycleMarkers, marker)
-		afterPlantMarkerSnapshot = filesystem
-		afterPlantMarkerProcesses = processes
-		afterPlantMarkerCaptured = true
-		return nil
+		return filesystem, processes, nil
+	}
+	observeLifecycleMarker := func(marker TargetLifecycleMarker) error {
+		order := targetLifecycleMarkerOrder(marker.Event)
+		if order == 0 {
+			return fmt.Errorf("unsupported lifecycle marker event %q", marker.Event)
+		}
+		if order <= lastLifecycleMarkerOrder {
+			return fmt.Errorf("lifecycle marker %q is out of order", marker.Event)
+		}
+		switch marker.Event {
+		case TargetLifecycleAfterPlantEvent:
+			if afterPlantMarkerCaptured {
+				return fmt.Errorf("lifecycle marker %q was emitted more than once", marker.Event)
+			}
+			filesystem, processes, err := captureLifecycleMarker(marker, observation.ObservationAfterPlant, "P4", TargetSnapshotAfterPlantArtifact, TargetProcessAfterPlantArtifact, "explicit target after-plant lifecycle marker")
+			if err != nil {
+				return err
+			}
+			afterPlantMarkerSnapshot = filesystem
+			afterPlantMarkerProcesses = processes
+			afterPlantMarkerCaptured = true
+			lastLifecycleMarkerOrder = order
+			return nil
+		case TargetLifecycleAfterRecoveryEvent:
+			if afterRecoveryMarkerCaptured {
+				return fmt.Errorf("lifecycle marker %q was emitted more than once", marker.Event)
+			}
+			filesystem, _, err := captureLifecycleMarker(marker, observation.ObservationAfterRecovery, "P6", TargetSnapshotAfterRecoveryArtifact, TargetProcessAfterRecoveryArtifact, "explicit target after-recovery lifecycle marker")
+			if err != nil {
+				return err
+			}
+			afterRecoveryMarkerSnapshot = filesystem
+			afterRecoveryMarkerCaptured = true
+			lastLifecycleMarkerOrder = order
+			return nil
+		case TargetLifecycleAfterActivationEvent:
+			if afterActivationMarkerCaptured {
+				return fmt.Errorf("lifecycle marker %q was emitted more than once", marker.Event)
+			}
+			_, _, err := captureLifecycleMarker(marker, observation.ObservationAfterActivation, "P7", TargetSnapshotAfterActivationArtifact, TargetProcessAfterActivationArtifact, "explicit target after-activation lifecycle marker")
+			if err != nil {
+				return err
+			}
+			afterActivationMarkerCaptured = true
+			lastLifecycleMarkerOrder = order
+			return nil
+		default:
+			return fmt.Errorf("unsupported lifecycle marker event %q", marker.Event)
+		}
 	}
 	if err := run.Trace.Write(core.NewEvent(run, "P1", "target_task_prepared", map[string]any{
 		"artifact":         TargetTaskArtifact,
@@ -703,8 +756,10 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err != nil {
 		return nil, err
 	}
-	if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterRecovery, "P6", &after, &processAfter, "adapter immediate post-recovery observation"); err != nil {
-		return nil, err
+	if !afterRecoveryMarkerCaptured {
+		if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterRecovery, "P6", &after, &processAfter, "adapter immediate post-recovery observation"); err != nil {
+			return nil, err
+		}
 	}
 	processBoundary := processAfterCommand
 	processBoundaryArtifact := "process-after-command.json"
@@ -719,6 +774,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	metadataSnapshots := []core.FilesystemSnapshotArtifact{{Phase: "P0", Artifact: "snapshot-before.json", Snapshot: before}}
 	if afterPlantMarkerCaptured {
 		metadataSnapshots = append(metadataSnapshots, core.FilesystemSnapshotArtifact{Phase: "P4", Artifact: TargetSnapshotAfterPlantArtifact, Snapshot: afterPlantMarkerSnapshot})
+	}
+	if afterRecoveryMarkerCaptured {
+		metadataSnapshots = append(metadataSnapshots, core.FilesystemSnapshotArtifact{Phase: "P6-marker", Artifact: TargetSnapshotAfterRecoveryArtifact, Snapshot: afterRecoveryMarkerSnapshot})
 	}
 	metadataSnapshots = append(metadataSnapshots, core.FilesystemSnapshotArtifact{Phase: "P6", Artifact: "snapshot-after.json", Snapshot: after})
 	if _, err := core.RecordFilesystemMetadata(run, "P6", "filesystem-metadata.json", metadataSnapshots); err != nil {
@@ -735,8 +793,10 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		if late, processLate, err = observeTargetWorkspace(ctx, env, run, "P7", TargetSnapshotLateArtifact, TargetProcessLateArtifact, snapshotFilesystem, recordProcesses); err != nil {
 			return nil, err
 		}
-		if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterActivation, "P7", &late, &processLate, "adapter late observation used as activation checkpoint"); err != nil {
-			return nil, err
+		if !afterActivationMarkerCaptured {
+			if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterActivation, "P7", &late, &processLate, "adapter late observation used as activation checkpoint"); err != nil {
+				return nil, err
+			}
 		}
 		if _, err := core.RecordFilesystemMetadata(run, "P7", TargetFilesystemLateArtifact, []core.FilesystemSnapshotArtifact{
 			{Phase: "P0", Artifact: "snapshot-before.json", Snapshot: before},
@@ -745,8 +805,10 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		}); err != nil {
 			return nil, err
 		}
-	} else if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterActivation, "P6", &after, &processAfter, "no separate late activation observation was requested; reusing the immediate post-recovery artifact"); err != nil {
-		return nil, err
+	} else if !afterActivationMarkerCaptured {
+		if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterActivation, "P6", &after, &processAfter, "no separate late activation observation was requested; reusing the immediate post-recovery artifact"); err != nil {
+			return nil, err
+		}
 	}
 	fallbackArtifact := ""
 	fallbackPhase := ""
@@ -840,8 +902,17 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"filesystem-metadata.json",
 		TargetResultArtifact,
 	}
+	if lifecycleMarkerArtifact != "" {
+		artifacts = append(artifacts, lifecycleMarkerArtifact)
+	}
 	if afterPlantMarkerCaptured {
-		artifacts = append(artifacts, TargetSnapshotAfterPlantArtifact, TargetProcessAfterPlantArtifact, lifecycleMarkerArtifact)
+		artifacts = append(artifacts, TargetSnapshotAfterPlantArtifact, TargetProcessAfterPlantArtifact)
+	}
+	if afterRecoveryMarkerCaptured {
+		artifacts = append(artifacts, TargetSnapshotAfterRecoveryArtifact, TargetProcessAfterRecoveryArtifact)
+	}
+	if afterActivationMarkerCaptured {
+		artifacts = append(artifacts, TargetSnapshotAfterActivationArtifact, TargetProcessAfterActivationArtifact)
 	}
 	if observationPlan != nil {
 		artifacts = append(artifacts, observation.ObservationPlanArtifact, observation.TargetedProbeReportArtifact)
@@ -868,6 +939,20 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 			core.StateObservation{Layer: "agent", StateClass: "lifecycle-marker", Phase: "P4", Artifact: lifecycleMarkerArtifact, Kind: "jsonl", Description: "explicit target-emitted after-plant marker observed while the command was still running"},
 			core.StateObservation{Layer: "os", StateClass: "filesystem", Phase: "P4", Artifact: TargetSnapshotAfterPlantArtifact, Kind: "filesystem-snapshot", Description: "filesystem observation captured at the explicit after-plant marker"},
 			core.StateObservation{Layer: "os", StateClass: "process", Phase: "P4", Artifact: TargetProcessAfterPlantArtifact, Kind: "process-snapshot", Description: "process observation captured at the explicit after-plant marker"},
+		)
+	}
+	if afterRecoveryMarkerCaptured {
+		observations = append(observations,
+			core.StateObservation{Layer: "agent", StateClass: "lifecycle-marker", Phase: "P6", Artifact: lifecycleMarkerArtifact, Kind: "jsonl", Description: "explicit target-emitted after-recovery marker observed while the command was still running"},
+			core.StateObservation{Layer: "os", StateClass: "filesystem", Phase: "P6", Artifact: TargetSnapshotAfterRecoveryArtifact, Kind: "filesystem-snapshot", Description: "filesystem observation captured at the explicit after-recovery marker"},
+			core.StateObservation{Layer: "os", StateClass: "process", Phase: "P6", Artifact: TargetProcessAfterRecoveryArtifact, Kind: "process-snapshot", Description: "process observation captured at the explicit after-recovery marker"},
+		)
+	}
+	if afterActivationMarkerCaptured {
+		observations = append(observations,
+			core.StateObservation{Layer: "agent", StateClass: "lifecycle-marker", Phase: "P7", Artifact: lifecycleMarkerArtifact, Kind: "jsonl", Description: "explicit target-emitted after-activation marker observed while the command was still running"},
+			core.StateObservation{Layer: "os", StateClass: "filesystem", Phase: "P7", Artifact: TargetSnapshotAfterActivationArtifact, Kind: "filesystem-snapshot", Description: "filesystem observation captured at the explicit after-activation marker"},
+			core.StateObservation{Layer: "os", StateClass: "process", Phase: "P7", Artifact: TargetProcessAfterActivationArtifact, Kind: "process-snapshot", Description: "process observation captured at the explicit after-activation marker"},
 		)
 	}
 	if observationPlan != nil {
@@ -902,6 +987,12 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	faultPhases := []string{"P1 target task prepared", "P5 target command returned", "P6 target workspace observed"}
 	if afterPlantMarkerCaptured {
 		faultPhases = append(faultPhases, "P4 explicit target after-plant marker observed")
+	}
+	if afterRecoveryMarkerCaptured {
+		faultPhases = append(faultPhases, "P6 explicit target after-recovery marker observed")
+	}
+	if afterActivationMarkerCaptured {
+		faultPhases = append(faultPhases, "P7 explicit target after-activation marker observed")
 	}
 	if lateObserved {
 		artifacts = append(artifacts, TargetSnapshotLateArtifact, TargetProcessLateArtifact, TargetFilesystemLateArtifact)
@@ -1063,6 +1154,9 @@ func targetUnplannedFallbackPaths(plan observation.ObservationPlan, snapshot cor
 	}
 	filtered := make([]string, 0, len(paths))
 	for _, path := range paths {
+		if strings.HasPrefix(path, TargetLifecycleMarkerArtifact+".") {
+			continue
+		}
 		switch path {
 		case TargetPromptArtifact, TargetTaskArtifact, TargetLifecycleMarkerArtifact, TargetLifecycleMarkerHelperArtifact:
 			continue
@@ -3452,16 +3546,33 @@ func targetCommandEnv(opts TargetRunOptions, runID string, workspacePath string,
 func writeTargetLifecycleMarkerHelper(path string) error {
 	const helper = `#!/usr/bin/env bash
 set -euo pipefail
-if [ "$#" -ne 1 ] || [ "$1" != "after-plant" ]; then
-  printf 'usage: %s after-plant\n' "$0" >&2
+if [ "$#" -ne 1 ]; then
+  printf 'usage: %s after-plant|after-recovery|after-activation\n' "$0" >&2
   exit 2
 fi
+case "$1" in
+  after-plant|after-recovery|after-activation) ;;
+  *) printf 'unsupported lifecycle event: %s\n' "$1" >&2; exit 2 ;;
+esac
 : "${SYNCFUZZ_LIFECYCLE_MARKER_FILE:?SYNCFUZZ_LIFECYCLE_MARKER_FILE is required}"
 timestamp=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
-printf '{"schema_version":"syncfuzz.target-lifecycle-marker.v1","event":"after-plant","timestamp":"%s"}\n' "$timestamp" >> "$SYNCFUZZ_LIFECYCLE_MARKER_FILE"
+printf '{"schema_version":"syncfuzz.target-lifecycle-marker.v1","event":"%s","timestamp":"%s"}\n' "$1" "$timestamp" >> "$SYNCFUZZ_LIFECYCLE_MARKER_FILE"
+ack_path="${SYNCFUZZ_LIFECYCLE_MARKER_FILE}.${1}.ack"
+while [ ! -f "$ack_path" ]; do sleep 0.005; done
 `
 	if err := os.WriteFile(path, []byte(helper), 0o755); err != nil {
 		return fmt.Errorf("write lifecycle marker helper: %w", err)
+	}
+	return nil
+}
+
+func writeTargetLifecycleMarkerAcknowledgement(markerPath string, event string) error {
+	if !isSupportedTargetLifecycleMarkerEvent(event) {
+		return fmt.Errorf("unsupported lifecycle marker acknowledgement event %q", event)
+	}
+	path := markerPath + "." + event + ".ack"
+	if err := os.WriteFile(path, []byte("captured\n"), 0o644); err != nil {
+		return fmt.Errorf("write lifecycle marker acknowledgement: %w", err)
 	}
 	return nil
 }
@@ -3490,7 +3601,7 @@ func readTargetLifecycleMarkers(path string) ([]TargetLifecycleMarker, error) {
 		if marker.SchemaVersion != TargetLifecycleMarkerSchemaVersion {
 			return nil, fmt.Errorf("unsupported lifecycle marker schema %q", marker.SchemaVersion)
 		}
-		if marker.Event != TargetLifecycleAfterPlantEvent {
+		if !isSupportedTargetLifecycleMarkerEvent(marker.Event) {
 			return nil, fmt.Errorf("unsupported lifecycle marker event %q", marker.Event)
 		}
 		if strings.TrimSpace(marker.Timestamp) == "" {
@@ -3502,6 +3613,23 @@ func readTargetLifecycleMarkers(path string) ([]TargetLifecycleMarker, error) {
 		return nil, fmt.Errorf("read lifecycle marker artifact: %w", err)
 	}
 	return markers, nil
+}
+
+func isSupportedTargetLifecycleMarkerEvent(event string) bool {
+	return targetLifecycleMarkerOrder(event) != 0
+}
+
+func targetLifecycleMarkerOrder(event string) int {
+	switch event {
+	case TargetLifecycleAfterPlantEvent:
+		return 1
+	case TargetLifecycleAfterRecoveryEvent:
+		return 2
+	case TargetLifecycleAfterActivationEvent:
+		return 3
+	default:
+		return 0
+	}
 }
 
 func targetTaskEnvOverrides(taskID string) map[string]string {
