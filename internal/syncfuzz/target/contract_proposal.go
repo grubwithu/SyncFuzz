@@ -29,10 +29,11 @@ const (
 	targetContractProposalMaxBundleBytes = 128 * 1024
 )
 
-// TargetContractProposalOptions runs a user-selected proposal generator over
-// an explicit, bounded source bundle. The command is caller-supplied; the
-// resulting candidate set is proposal-only and is never loaded as a
-// TargetContractProfile or oracle input by this pipeline.
+// TargetContractProposalOptions defines the explicit, bounded source bundle
+// and output location shared by proposal modes. GeneratorCommand is used only
+// by the caller-supplied external-generator mode; the resulting candidate set
+// is proposal-only and is never loaded as a TargetContractProfile or oracle
+// input by this pipeline.
 type TargetContractProposalOptions struct {
 	RunID            string
 	TargetID         string
@@ -88,7 +89,10 @@ type TargetContractProposalRunResult struct {
 	ArtifactDir              string `json:"artifact_dir"`
 	TargetID                 string `json:"target_id"`
 	SourceRoot               string `json:"source_root"`
-	GeneratorCommandSHA256   string `json:"generator_command_sha256"`
+	GeneratorKind            string `json:"generator_kind"`
+	GeneratorCommandSHA256   string `json:"generator_command_sha256,omitempty"`
+	ProviderModel            string `json:"provider_model,omitempty"`
+	ProviderPromptVersion    string `json:"provider_prompt_version,omitempty"`
 	RequestArtifact          string `json:"request_artifact"`
 	CandidateSetArtifact     string `json:"candidate_set_artifact"`
 	ValidationReportArtifact string `json:"validation_report_artifact"`
@@ -103,6 +107,19 @@ type TargetContractProposalRunResult struct {
 type targetContractProposalFailure struct {
 	SchemaVersion string `json:"schema_version"`
 	Category      string `json:"category"`
+	HTTPStatus    int    `json:"http_status,omitempty"`
+}
+
+type targetContractProposalPreparation struct {
+	started       time.Time
+	runID         string
+	artifactDir   string
+	request       TargetContractProposalRequest
+	requestPath   string
+	candidatePath string
+	failurePath   string
+	tasks         []TargetContractProposalTaskContext
+	sourceRoot    string
 }
 
 // RunTargetContractProposalGenerator creates the fixed request artifact,
@@ -110,11 +127,23 @@ type targetContractProposalFailure struct {
 // output with the existing source-grounding gate. It never calls a provider by
 // itself or adopts a generated candidate into a profile.
 func RunTargetContractProposalGenerator(ctx context.Context, opts TargetContractProposalOptions) (*TargetContractProposalRunResult, error) {
-	if strings.TrimSpace(opts.TargetID) == "" {
-		return nil, fmt.Errorf("contract proposal target id is required")
-	}
 	if strings.TrimSpace(opts.GeneratorCommand) == "" {
 		return nil, fmt.Errorf("contract proposal generator command is required")
+	}
+	prepared, err := prepareTargetContractProposal(opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := runTargetContractProposalCommand(ctx, opts.GeneratorCommand, prepared.sourceRoot, prepared.requestPath, prepared.candidatePath, prepared.failurePath, opts.Timeout); err != nil {
+		return nil, err
+	}
+	commandHash := sha256.Sum256([]byte(opts.GeneratorCommand))
+	return finalizeTargetContractProposal(prepared, "external-command", fmt.Sprintf("%x", commandHash[:]), "", "")
+}
+
+func prepareTargetContractProposal(opts TargetContractProposalOptions) (*targetContractProposalPreparation, error) {
+	if strings.TrimSpace(opts.TargetID) == "" {
+		return nil, fmt.Errorf("contract proposal target id is required")
 	}
 	if strings.TrimSpace(opts.OutDir) == "" {
 		return nil, fmt.Errorf("contract proposal output directory is required")
@@ -171,33 +200,44 @@ func RunTargetContractProposalGenerator(ctx context.Context, opts TargetContract
 	if err := core.WriteJSON(requestPath, request); err != nil {
 		return nil, fmt.Errorf("write contract proposal request: %w", err)
 	}
-	candidatePath := filepath.Join(artifactDir, TargetContractProposalCandidateArtifact)
-	failurePath := filepath.Join(artifactDir, TargetContractProposalFailureArtifact)
-	if err := runTargetContractProposalCommand(ctx, opts.GeneratorCommand, sourceRoot, requestPath, candidatePath, failurePath, opts.Timeout); err != nil {
-		return nil, err
-	}
-	validationPath := filepath.Join(artifactDir, "target-contract-candidate-validation.json")
+	return &targetContractProposalPreparation{
+		started:       started,
+		runID:         runID,
+		artifactDir:   artifactDir,
+		request:       request,
+		requestPath:   requestPath,
+		candidatePath: filepath.Join(artifactDir, TargetContractProposalCandidateArtifact),
+		failurePath:   filepath.Join(artifactDir, TargetContractProposalFailureArtifact),
+		tasks:         tasks,
+		sourceRoot:    sourceRoot,
+	}, nil
+}
+
+func finalizeTargetContractProposal(prepared *targetContractProposalPreparation, generatorKind string, generatorCommandSHA256 string, providerModel string, providerPromptVersion string) (*TargetContractProposalRunResult, error) {
+	validationPath := filepath.Join(prepared.artifactDir, "target-contract-candidate-validation.json")
 	validation, err := ValidateTargetContractCandidates(TargetContractCandidateValidationOptions{
-		InputPath:          candidatePath,
-		SourceRoot:         sourceRoot,
-		ExpectedTargetID:   request.TargetID,
-		AllowedTaskIDs:     targetContractProposalTaskIDs(tasks),
-		AllowedSourcePaths: targetContractProposalSourcePaths(sources),
+		InputPath:          prepared.candidatePath,
+		SourceRoot:         prepared.sourceRoot,
+		ExpectedTargetID:   prepared.request.TargetID,
+		AllowedTaskIDs:     targetContractProposalTaskIDs(prepared.tasks),
+		AllowedSourcePaths: targetContractProposalSourcePaths(prepared.request.Sources),
 		OutputPath:         validationPath,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("validate generated contract candidates: %w", err)
 	}
-	commandHash := sha256.Sum256([]byte(opts.GeneratorCommand))
 	result := &TargetContractProposalRunResult{
 		SchemaVersion:            TargetContractProposalRunSchemaVersion,
-		RunID:                    runID,
-		StartedAt:                started.Format(time.RFC3339Nano),
+		RunID:                    prepared.runID,
+		StartedAt:                prepared.started.Format(time.RFC3339Nano),
 		FinishedAt:               time.Now().UTC().Format(time.RFC3339Nano),
-		ArtifactDir:              artifactDir,
-		TargetID:                 request.TargetID,
-		SourceRoot:               sourceRoot,
-		GeneratorCommandSHA256:   fmt.Sprintf("%x", commandHash[:]),
+		ArtifactDir:              prepared.artifactDir,
+		TargetID:                 prepared.request.TargetID,
+		SourceRoot:               prepared.sourceRoot,
+		GeneratorKind:            generatorKind,
+		GeneratorCommandSHA256:   generatorCommandSHA256,
+		ProviderModel:            providerModel,
+		ProviderPromptVersion:    providerPromptVersion,
 		RequestArtifact:          TargetContractProposalRequestArtifact,
 		CandidateSetArtifact:     TargetContractProposalCandidateArtifact,
 		ValidationReportArtifact: filepath.Base(validationPath),
@@ -205,7 +245,7 @@ func RunTargetContractProposalGenerator(ctx context.Context, opts TargetContract
 		Unsupported:              validation.Unsupported,
 		AutomaticProfileAdoption: TargetContractCandidateAutomaticAdoptionDisabled,
 	}
-	if err := core.WriteJSON(filepath.Join(artifactDir, TargetContractProposalResultArtifact), result); err != nil {
+	if err := core.WriteJSON(filepath.Join(prepared.artifactDir, TargetContractProposalResultArtifact), result); err != nil {
 		return nil, fmt.Errorf("write contract proposal run result: %w", err)
 	}
 	return result, nil
@@ -351,8 +391,8 @@ func runTargetContractProposalCommand(ctx context.Context, command string, sourc
 		if commandContext.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("contract proposal generator timed out after %s", timeout)
 		}
-		if category := targetContractProposalFailureCategory(failurePath); category != "" {
-			return fmt.Errorf("contract proposal generator command failed (%s): %w", category, err)
+		if summary := targetContractProposalFailureSummary(failurePath); summary != "" {
+			return fmt.Errorf("contract proposal generator command failed (%s): %w", summary, err)
 		}
 		return fmt.Errorf("contract proposal generator command failed: %w", err)
 	}
@@ -366,7 +406,7 @@ func runTargetContractProposalCommand(ctx context.Context, command string, sourc
 	return nil
 }
 
-func targetContractProposalFailureCategory(path string) string {
+func targetContractProposalFailureSummary(path string) string {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -379,7 +419,12 @@ func targetContractProposalFailureCategory(path string) string {
 		return ""
 	}
 	switch failure.Category {
-	case "configuration", "input", "provider-http", "provider-response", "provider-transport", "local-output":
+	case "configuration", "input", "provider-response", "provider-transport", "local-output":
+		return failure.Category
+	case "provider-http":
+		if failure.HTTPStatus >= 100 && failure.HTTPStatus <= 599 {
+			return fmt.Sprintf("provider-http HTTP %d", failure.HTTPStatus)
+		}
 		return failure.Category
 	default:
 		return ""

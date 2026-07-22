@@ -94,7 +94,8 @@ Usage:
   syncfuzz target runtime-pair --control-kind fresh-runtime --control-command '<control command>' --command '<target command>' [--target local-agent] [--task orphan-process] [--out runs]
   syncfuzz target pair-campaign [--manifest target-pair-campaign.json | --runtime-pairs runs/<runtime-pair>/target-runtime-pair.json,...] --out runs/<pair-campaign>
   syncfuzz target calibration-summary --inputs runs/<pair-campaign>,runs/<target-run-id>/target-pair-differential.json [--review-manifests review.json] --out target-pair-calibration-summary.json
-  syncfuzz target contract-propose --target langgraph-shell-react --tasks persistent-shell-poisoning-replay --source-root <source-root> --sources docs/recovery.md --generator-command '<LLM wrapper command>' --out runs
+  syncfuzz target contract-propose --target langgraph-shell-react --tasks persistent-shell-poisoning-replay --source-root <source-root> --sources docs/recovery.md --provider openai-compatible --out runs
+  syncfuzz target contract-propose --target langgraph-shell-react --tasks persistent-shell-poisoning-replay --source-root <source-root> --sources docs/recovery.md --generator-command '<external generator command>' --out runs
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--fidelity exact|semantic|impact] [--out runs]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--observation-plan observation-plan.json] [--observation-mode shadow|pruned-filesystem|pruned] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
@@ -922,31 +923,61 @@ func targetContractPropose(args []string) {
 	tasks := fs.String("tasks", "", "comma-separated built-in target task ids")
 	sourceRoot := fs.String("source-root", "", "local source or documentation root exposed to the generator")
 	sources := fs.String("sources", "", "comma-separated text files below source-root exposed to the generator")
-	generatorCommand := fs.String("generator-command", "", "explicit local command that reads SYNCFUZZ_CONTRACT_PROPOSAL_REQUEST and writes SYNCFUZZ_CONTRACT_PROPOSAL_OUTPUT")
+	provider := fs.String("provider", "", "built-in proposal provider; currently openai-compatible")
+	model := fs.String("model", os.Getenv("CONTRACT_PROPOSAL_MODEL"), "model for a built-in proposal provider; defaults to CONTRACT_PROPOSAL_MODEL")
+	baseURL := fs.String("base-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI-compatible base URL; defaults to OPENAI_BASE_URL or https://api.openai.com/v1")
+	generatorCommand := fs.String("generator-command", "", "explicit external command that reads SYNCFUZZ_CONTRACT_PROPOSAL_REQUEST and writes SYNCFUZZ_CONTRACT_PROPOSAL_OUTPUT")
 	outDir := fs.String("out", "runs", "directory for contract proposal run artifacts")
-	timeout := fs.Duration("timeout", 2*time.Minute, "proposal generator command timeout")
+	timeout := fs.Duration("timeout", 2*time.Minute, "proposal provider or external generator timeout")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	if strings.TrimSpace(*targetID) == "" || len(splitCSV(*tasks)) == 0 || strings.TrimSpace(*sourceRoot) == "" || len(splitCSV(*sources)) == 0 || strings.TrimSpace(*generatorCommand) == "" {
-		fmt.Fprintln(os.Stderr, "target contract-propose requires --target, --tasks, --source-root, --sources, and --generator-command")
+	if strings.TrimSpace(*targetID) == "" || len(splitCSV(*tasks)) == 0 || strings.TrimSpace(*sourceRoot) == "" || len(splitCSV(*sources)) == 0 {
+		fmt.Fprintln(os.Stderr, "target contract-propose requires --target, --tasks, --source-root, and --sources")
 		os.Exit(2)
 	}
-	result, err := target.RunTargetContractProposalGenerator(context.Background(), target.TargetContractProposalOptions{
-		TargetID:         *targetID,
-		TaskIDs:          splitCSV(*tasks),
-		SourceRoot:       *sourceRoot,
-		SourcePaths:      splitCSV(*sources),
-		GeneratorCommand: *generatorCommand,
-		OutDir:           *outDir,
-		Timeout:          *timeout,
-	})
+	if (strings.TrimSpace(*provider) == "") == (strings.TrimSpace(*generatorCommand) == "") {
+		fmt.Fprintln(os.Stderr, "target contract-propose requires exactly one of --provider or --generator-command")
+		os.Exit(2)
+	}
+	proposalOptions := target.TargetContractProposalOptions{
+		TargetID:    *targetID,
+		TaskIDs:     splitCSV(*tasks),
+		SourceRoot:  *sourceRoot,
+		SourcePaths: splitCSV(*sources),
+		OutDir:      *outDir,
+		Timeout:     *timeout,
+	}
+	var result *target.TargetContractProposalRunResult
+	var err error
+	if strings.TrimSpace(*provider) != "" {
+		if strings.TrimSpace(*provider) != target.TargetContractProposalProviderOpenAICompatible {
+			fmt.Fprintf(os.Stderr, "unsupported contract proposal provider %q; supported: %s\n", *provider, target.TargetContractProposalProviderOpenAICompatible)
+			os.Exit(2)
+		}
+		result, err = target.RunTargetOpenAIContractProposal(context.Background(), target.TargetOpenAIContractProposalOptions{
+			TargetContractProposalOptions: proposalOptions,
+			APIKey:                        os.Getenv("OPENAI_API_KEY"),
+			BaseURL:                       *baseURL,
+			Model:                         *model,
+		})
+	} else {
+		proposalOptions.GeneratorCommand = *generatorCommand
+		result, err = target.RunTargetContractProposalGenerator(context.Background(), proposalOptions)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz target contract-propose failed: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("run_id: %s\n", result.RunID)
 	fmt.Printf("target: %s\n", result.TargetID)
+	fmt.Printf("generator_kind: %s\n", result.GeneratorKind)
+	if result.ProviderModel != "" {
+		fmt.Printf("provider_model: %s\n", result.ProviderModel)
+	}
+	if result.ProviderPromptVersion != "" {
+		fmt.Printf("provider_prompt_version: %s\n", result.ProviderPromptVersion)
+	}
 	fmt.Printf("accepted: %d\n", result.Accepted)
 	fmt.Printf("unsupported: %d\n", result.Unsupported)
 	fmt.Printf("automatic_profile_adoption: %s\n", result.AutomaticProfileAdoption)

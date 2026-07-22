@@ -68,6 +68,7 @@ go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-pla
 go run ./cmd/syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id>
 go run ./cmd/syncfuzz target pair-campaign --manifest target-pair-campaign.json --out runs/<pair-campaign>
 go run ./cmd/syncfuzz target calibration-summary --inputs runs/<pair-campaign> --out runs/<pair-campaign>/target-pair-calibration-summary.json
+go run ./cmd/syncfuzz target contract-propose --target langgraph-shell-react --tasks persistent-shell-poisoning-replay --source-root examples --sources target-contract-candidate-source.example.md --provider openai-compatible --out runs
 go run ./cmd/syncfuzz target contract-propose --target langgraph-shell-react --tasks persistent-shell-poisoning-replay --source-root examples --sources target-contract-candidate-source.example.md --generator-command 'bash target-contract-proposal-generator.example.sh' --out runs
 go run ./cmd/syncfuzz target contract-candidates --input examples/target-contract-candidates.example.json --source-root examples --out runs/target-contract-candidate-validation.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
@@ -466,29 +467,30 @@ root-cause verdict. The checked-in example is self-validating with
 target contract.
 
 `syncfuzz target contract-propose --target <id> --tasks <ids> --source-root
-<directory> --sources <relative-files> --generator-command <command> --out
-<directory>` supplies a narrow execution boundary for an LLM wrapper or other
-proposal generator. SyncFuzz writes a versioned request containing only the
-selected built-in Scenario IR task contexts and bounded, UTF-8 source files;
-the command receives request/output file paths through environment variables
-and must write the existing candidate-set schema. The generator's output is
-then passed through the same validator with `allowed_source_paths` set to the
-exact request bundle, so it cannot turn an unseen local file into accepted
-support. A source is capped at 64 KiB and the complete bundle at 128 KiB. The
-run records a hash—not the text—of the configured command, and
-still fixes `automatic_profile_adoption=disabled`. The bundled shell example
-only tests this I/O contract and does not call an LLM. The command is explicitly
-caller-supplied and unsandboxed; SyncFuzz never adopts its output as a profile
-or oracle input.
+<directory> --sources <relative-files> --provider openai-compatible --out
+<directory>` is the built-in, Go-native LLM integration. It reads
+`OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, and explicit
+`CONTRACT_PROPOSAL_MODEL` (with no `LANGCHAIN_MODEL` fallback), then makes one
+OpenAI-compatible Chat Completions request with JSON-object output. Its
+versioned system prompt declares the complete candidate JSON shape, required
+fields, allowed enum values, and exact `source.start_line` / `source.end_line`
+field names. This provider route is opt-in: no default command contacts a
+provider.
 
-`examples/target-contract-proposal-openai.py` is the first real wrapper. It
-uses `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, and an explicit
-`CONTRACT_PROPOSAL_MODEL`, then makes one OpenAI-compatible Chat Completions
-request with JSON-object output. `CONTRACT_PROPOSAL_MODEL` has no fallback to
-`LANGCHAIN_MODEL`: set it explicitly in `.env` or on the command line before a
-run. It is opt-in through
-`--generator-command 'python3 target-contract-proposal-openai.py'`; no test or
-default command invokes it.
+SyncFuzz writes a versioned request containing only selected built-in Scenario
+IR task contexts and bounded UTF-8 source files. The returned candidate set
+goes through the same validator with `allowed_source_paths` set to the exact
+request bundle, so it cannot turn an unseen local file into accepted support.
+A source is capped at 64 KiB and the complete bundle at 128 KiB. The proposal
+run records `generator_kind`, model name, and system-prompt version, but never
+provider keys, error bodies, prompt text, or endpoints;
+`automatic_profile_adoption=disabled` remains fixed.
+
+`--generator-command <command>` remains an explicitly caller-supplied,
+unsandboxed external-generator mode. Its bundled shell fixture only tests that
+I/O contract and does not call an LLM; the corresponding run records a command
+hash rather than command text. Neither mode adopts output as a profile or
+oracle input.
 
 `syncfuzz target refine-plan --plan <plan> --fallback-report <report>` reads
 the report's adjacent fallback snapshot and produces

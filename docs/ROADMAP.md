@@ -254,11 +254,14 @@ interpretation。
    source-grounding gate：没有可复核本地 source span 的候选一律
    `unsupported`，通过者也只是 `source-grounded-proposal`，不会自动进入
    profile 或 oracle；`target contract-propose` 已提供受评估的源码/契约 proposal
-   generator boundary：它只把显式 allowlist 的 task context / UTF-8 source bundle
-   交给调用者指定的 generator command，再用同一 allowlist 回验输出 citation，且
-   只记录 command hash。`examples/target-contract-proposal-openai.py` 已提供一条
-   opt-in OpenAI-compatible wrapper；下一步针对固定 target/source bundle 运行真实
-   LLM 与人工 proposal，并比较 accepted-support 与 review 后的 profile utility。
+   boundary：它只暴露显式 allowlist 的 task context / UTF-8 source bundle，并用同一
+   allowlist 回验 citation。显式 `--provider openai-compatible` 使用 Go-native
+   client 发送一次请求，记录 generator kind、model 和 prompt version 而非 key、
+   endpoint、prompt text 或 provider error body；其 system prompt 固化完整
+   candidate schema。外部
+   `--generator-command` 仍可用于 fixture 或实验性 generator，并只记录 command
+   hash。下一步针对固定 target/source bundle 运行真实 LLM 与人工 proposal，并比较
+   accepted-support 与 review 后的 profile utility。
 
 最新校准：
 

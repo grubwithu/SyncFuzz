@@ -176,6 +176,34 @@ func TestRunTargetContractProposalGeneratorReportsSafeFailureCategory(t *testing
 	}
 }
 
+func TestRunTargetContractProposalGeneratorReportsSafeHTTPStatus(t *testing.T) {
+	tmp := t.TempDir()
+	sourceRoot := filepath.Join(tmp, "source")
+	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
+		t.Fatalf("create source root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRoot, "replay.md"), []byte("# Replay\n"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	const script = "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' '{\"schema_version\":\"syncfuzz.target-contract-proposal-failure.v1\",\"category\":\"provider-http\",\"http_status\":401}' > \"$SYNCFUZZ_CONTRACT_PROPOSAL_FAILURE\"\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(sourceRoot, "generator.sh"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write failing generator: %v", err)
+	}
+
+	_, err := RunTargetContractProposalGenerator(context.Background(), TargetContractProposalOptions{
+		TargetID:         "langgraph-shell-react",
+		TaskIDs:          []string{PersistentShellReplayTargetTaskID},
+		SourceRoot:       sourceRoot,
+		SourcePaths:      []string{"replay.md"},
+		GeneratorCommand: "./generator.sh",
+		OutDir:           filepath.Join(tmp, "runs"),
+		Timeout:          5 * time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "provider-http HTTP 401") {
+		t.Fatalf("expected safe HTTP failure status, got %v", err)
+	}
+}
+
 func writeTargetContractProposalGeneratorFixture(t *testing.T, sourceRoot string, candidates TargetContractCandidateSet) {
 	t.Helper()
 	fixturePath := filepath.Join(sourceRoot, "generator-candidates.json")

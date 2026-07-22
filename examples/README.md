@@ -22,9 +22,9 @@ LANGCHAIN_MODEL=openai:gpt-4.1-mini go run ./cmd/syncfuzz target suite --target 
 go run ./cmd/syncfuzz target run --target maf-github-copilot-shell --task orphan-process --command-file examples/target-commands/maf-github-copilot-shell.sh --observe-delay 500ms --out runs
 ```
 
-The contract-proposal generator examples have two modes. The shell fixture
-only checks the request/output interface; the Python wrapper is opt-in and
-makes one OpenAI-compatible API request when credentials and a model are set:
+`target-contract-proposal-generator.example.sh` is a deterministic fixture for
+the external-generator request/output interface. The real OpenAI-compatible
+integration is implemented in Go and is opt-in through `--provider`:
 
 ```bash
 CONTRACT_PROPOSAL_MODEL=<model> \
@@ -33,7 +33,7 @@ go run ./cmd/syncfuzz target contract-propose \
   --tasks persistent-shell-poisoning-replay \
   --source-root examples \
   --sources target-contract-candidate-source.example.md \
-  --generator-command 'python3 target-contract-proposal-openai.py' \
+  --provider openai-compatible \
   --out runs
 ```
 
