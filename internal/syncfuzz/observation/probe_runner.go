@@ -14,16 +14,19 @@ const (
 	TargetedProbeReportArtifact      = "targeted-probe-report.json"
 )
 
-// TargetedProbeReport records how a plan selected state from the broad
-// artifacts retained by the command adapter. V1 is shadow mode: broad
-// snapshots remain the correctness fallback while this report demonstrates the
-// exact object-level scope a future pruned collector will use.
+// TargetedProbeReport records how a plan selected state from the command
+// adapter artifacts. Shadow mode projects retained broad snapshots; pruned
+// filesystem mode records the final broad fallback separately.
 type TargetedProbeReport struct {
-	SchemaVersion         string                    `json:"schema_version"`
-	QueryID               string                    `json:"query_id"`
-	PlanArtifact          string                    `json:"plan_artifact"`
-	FullProbeFallbackUsed bool                      `json:"full_probe_fallback_used"`
-	Checkpoints           []TargetedProbeCheckpoint `json:"checkpoints"`
+	SchemaVersion                    string                    `json:"schema_version"`
+	QueryID                          string                    `json:"query_id"`
+	PlanArtifact                     string                    `json:"plan_artifact"`
+	CollectionMode                   string                    `json:"collection_mode"`
+	FullProbeFallbackRequired        bool                      `json:"full_probe_fallback_required"`
+	FullProbeFallbackUsed            bool                      `json:"full_probe_fallback_used"`
+	FallbackFilesystemArtifact       string                    `json:"fallback_filesystem_artifact,omitempty"`
+	UnplannedFallbackFilesystemPaths []string                  `json:"unplanned_fallback_filesystem_paths,omitempty"`
+	Checkpoints                      []TargetedProbeCheckpoint `json:"checkpoints"`
 }
 
 type TargetedProbeCheckpoint struct {
@@ -50,11 +53,53 @@ func NewTargetedProbeReport(plan ObservationPlan, planArtifact string) (*Targete
 		return nil, err
 	}
 	return &TargetedProbeReport{
-		SchemaVersion:         TargetedProbeReportSchemaVersion,
-		QueryID:               plan.QueryID,
-		PlanArtifact:          strings.TrimSpace(planArtifact),
-		FullProbeFallbackUsed: plan.FallbackFullProbe,
+		SchemaVersion:             TargetedProbeReportSchemaVersion,
+		QueryID:                   plan.QueryID,
+		PlanArtifact:              strings.TrimSpace(planArtifact),
+		CollectionMode:            "shadow",
+		FullProbeFallbackRequired: plan.FallbackFullProbe,
 	}, nil
+}
+
+// FilesystemPathsForPlan returns the exact object-level filesystem scope for
+// an observation plan. Unix-socket paths are also namespace paths and are
+// therefore included in the same selected snapshot.
+func FilesystemPathsForPlan(plan ObservationPlan) ([]string, error) {
+	if err := ValidatePlan(&plan); err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, probe := range plan.ProbePlans {
+		if !probe.Enabled {
+			continue
+		}
+		switch probe.Family {
+		case ProbeFilesystem, ProbeUnixSocket:
+			paths = append(paths, probe.Paths...)
+		}
+	}
+	return normalizeProbePaths(paths), nil
+}
+
+// UnplannedFilesystemPaths reports objects present in a broad fallback
+// snapshot but not selected by the plan. It is evidence for later plan
+// expansion, not itself an oracle finding.
+func UnplannedFilesystemPaths(plan ObservationPlan, snapshot core.Snapshot) ([]string, error) {
+	paths, err := FilesystemPathsForPlan(plan)
+	if err != nil {
+		return nil, err
+	}
+	planned := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		planned[path] = struct{}{}
+	}
+	unplanned := make([]string, 0)
+	for _, entry := range snapshot.Files {
+		if _, ok := planned[entry.Path]; !ok {
+			unplanned = append(unplanned, entry.Path)
+		}
+	}
+	return uniqueSortedStrings(unplanned), nil
 }
 
 // CaptureTargetedProbeCheckpoint projects one broad snapshot pair through a

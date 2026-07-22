@@ -48,6 +48,7 @@ go run ./cmd/syncfuzz target prompt-profiles
 go run ./cmd/syncfuzz target footprint --run runs/<target-run-id>
 go run ./cmd/syncfuzz target plan-probes --footprint runs/<target-run-id>/resource-footprint.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
+go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --group phase5a-baseline --prompt-profiles all
 go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --seed shell-path-residue --prompt-profiles all
 go run ./cmd/syncfuzz target run --command-file examples/target-commands/orphan-process.sh --expect-files late-effect --observe-delay 500ms --out runs
@@ -100,6 +101,7 @@ make target-prompt-profiles
 make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id>
 make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
+make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
 make target-matrix TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=all
 make target-minimize MINIMIZE_FROM=runs/target-suite-<id>/target-suite-result.json
 make target-minimize MINIMIZE_FROM=runs/target-suite-<id>/target-suite-result.json MINIMIZE_EXECUTE=true MINIMIZE_CANDIDATE_LIMIT=1 MINIMIZE_MAX_TRIALS=16 MINIMIZE_FIDELITY=semantic
@@ -195,6 +197,7 @@ Phase 5 target runs add a parallel artifact set for real agent/runtime observati
 - `snapshot-late.json` / `process-late.json` / `filesystem-late-metadata.json`: optional late observation artifacts when `--late-observe-delay` is set
 - `observation-plan.json`: validated query-specific plan copied into a rerun that uses `--observation-plan`
 - `targeted-probe-report.json`: objects selected by that plan at each adapter-visible checkpoint
+- `snapshot-full-fallback.json`: final broad filesystem fallback for a `pruned-filesystem` rerun
 
 `syncfuzz target footprint --run <target-run-dir>` compiles the normalized
 Scenario IR and the recorded filesystem, process-lineage, and state-trace
@@ -203,12 +206,17 @@ artifacts into `resource-footprint.json`. `syncfuzz target plan-probes
 contract for `before-plant`, `after-plant`, `after-recovery`, and
 `after-activation`. The current implementation is intentionally offline and
 artifact/IR-guided; it does not claim an eBPF collector or dynamically load
-eBPF programs. `target run --observation-plan <path>` now consumes a matching
-plan in **shadow mode**: it writes `targeted-probe-report.json`, projecting
-only planned paths and process selectors at each adapter-visible checkpoint,
-while retaining broad snapshots as the mandatory correctness fallback. The
-generic command adapter has no semantic `after-plant` marker, so that report
-records a partial P5 process probe instead of inventing a filesystem boundary.
+eBPF programs. `target run --observation-plan <path>` consumes a matching plan
+in **shadow** mode by default: it writes `targeted-probe-report.json`,
+projecting only planned paths and process selectors at each adapter-visible
+checkpoint while retaining broad snapshots as the correctness fallback. The
+opt-in `--observation-mode pruned-filesystem` instead uses exact planned paths
+for the regular filesystem snapshots, then writes one final
+`snapshot-full-fallback.json` and records its unplanned paths in the report.
+This reduces repeated workspace walking/hashing while retaining a final
+full-state check. Process collection remains broad in this increment. The
+generic command adapter has no semantic `after-plant` marker, so its P5
+filesystem probe is explicitly partial rather than a fabricated boundary.
 
 Both artifacts preserve the same typed `query` (`syncfuzz.lifecycle-query.v1`):
 `q = <Init, Plant, Boundary, Recovery, Activation, Witness>`. Its embedded

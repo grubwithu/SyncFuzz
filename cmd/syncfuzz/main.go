@@ -91,7 +91,7 @@ Usage:
   syncfuzz target plan-probes --footprint resource-footprint.json [--out observation-plan.json]
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--fidelity exact|semantic|impact] [--out runs]
-  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--observation-plan observation-plan.json] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--observation-plan observation-plan.json] [--observation-mode shadow|pruned-filesystem] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz target run [--target maf-github-copilot-shell] [--task orphan-process] [--command-file examples/target-commands/maf-github-copilot-shell.sh] [--observe-delay 500ms] [--out runs]
   syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles baseline,workflow,audit] [--matrix] [--selection-policy explore|feedback|fixed|random] [--random-seed 1] [--feedback-from target-matrix-result.json] [--candidate-limit 3] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz target campaign [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--group phase5a-baseline] [--prompt-profiles baseline,workflow,audit] [--rounds 2] [--selection-policy explore|feedback|fixed|random] [--random-seed 1] [--candidate-limit 3] [--repeat 1] [--min-coverage-gain-score 0] [--max-stagnant-rounds 0] [--auto-pivot] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
@@ -845,7 +845,8 @@ func targetRun(args []string) {
 	timeout := fs.Duration("timeout", 2*time.Minute, "target command timeout")
 	observeDelay := fs.Duration("observe-delay", 0, "delay after target command return before final observation; 0 uses the adapter default")
 	lateObserveDelay := fs.Duration("late-observe-delay", 0, "optional delay after immediate observation for delayed target effects")
-	observationPlan := fs.String("observation-plan", "", "optional query-specific observation-plan.json; runs plan-selected probes in shadow mode with broad artifacts retained as fallback")
+	observationPlan := fs.String("observation-plan", "", "optional query-specific observation-plan.json")
+	observationMode := fs.String("observation-mode", "", "observation-plan collection mode: shadow (default) or pruned-filesystem")
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
 	if err := fs.Parse(args); err != nil {
@@ -868,6 +869,7 @@ func targetRun(args []string) {
 		ObserveDelay:        *observeDelay,
 		LateObserveDelay:    *lateObserveDelay,
 		ObservationPlanPath: *observationPlan,
+		ObservationMode:     *observationMode,
 		EnvKind:             *envKind,
 		ContainerImage:      *containerImage,
 		ExpectedFiles:       splitCSV(*expectFiles),
@@ -905,6 +907,7 @@ func targetRun(args []string) {
 	if result.ObservationPlanArtifact != "" {
 		fmt.Printf("observation_plan: %s\n", result.ObservationPlanArtifact)
 		fmt.Printf("observation_plan_query_id: %s\n", result.ObservationPlanQueryID)
+		fmt.Printf("observation_mode: %s\n", result.ObservationMode)
 		fmt.Printf("targeted_probe_report: %s\n", result.TargetedProbeArtifact)
 	}
 	if result.ContractInterpretation != nil {

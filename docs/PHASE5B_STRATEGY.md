@@ -35,12 +35,14 @@ Scenario IR 的 component identity、kind 与 summary；`violation_hypothesis`
 
 target runner 现已通过 `--observation-plan` 消费该 schema：它把验证后的
 plan 复制进新 run，并生成 `targeted-probe-report.json`，以 query-specific
-path/process/FD selection 投影 broad snapshot。当前刻意保持 shadow mode：
-broad artifact 仍是 correctness fallback，generic command adapter 也会把
-没有 semantic plant marker 的 P5 filesystem coverage 明确标为 partial。
-接下来的直接目标是使用这些 coverage report 安全地把 collection 切到
-真正的 plan-selected probe；完成后才评估 time-boxed、特权环境可用的 OS
-trace/eBPF evidence source。
+path/process/FD selection 投影 broad snapshot。默认保持 shadow mode；可选的
+`pruned-filesystem` mode 已把前/后/late 的 workspace snapshot 切到 exact
+planned paths，再用一次最终 full snapshot 作为 fallback，并把未规划对象
+写入 report。generic command adapter 仍会把没有 semantic plant marker 的
+P5 filesystem coverage 明确标为 partial，process/FD 也仍是 broad collection。
+接下来的直接目标是将 fallback evidence 反馈给 compiler，并安全地将
+process/FD collection 切到真正的 plan-selected probe；完成后才评估
+time-boxed、特权环境可用的 OS trace/eBPF evidence source。
 
 ## 当前判断
 

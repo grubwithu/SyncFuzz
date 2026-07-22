@@ -1,6 +1,30 @@
 package core
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestSnapshotFilesystemPathsSelectsOnlyRequestedWorkspaceObjects(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "wanted.txt"), []byte("wanted"), 0o644); err != nil {
+		t.Fatalf("write wanted file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "unwanted.txt"), []byte("unwanted"), 0o644); err != nil {
+		t.Fatalf("write unwanted file: %v", err)
+	}
+	snapshot, err := SnapshotFilesystemPaths(root, []string{"wanted.txt", "missing.txt", "wanted.txt"})
+	if err != nil {
+		t.Fatalf("SnapshotFilesystemPaths failed: %v", err)
+	}
+	if len(snapshot.Files) != 1 || snapshot.Files[0].Path != "wanted.txt" || snapshot.Files[0].SHA256 == "" {
+		t.Fatalf("unexpected selected snapshot: %#v", snapshot)
+	}
+	if _, err := SnapshotFilesystemPaths(root, []string{"../outside"}); err == nil {
+		t.Fatal("expected outside-workspace path to be rejected")
+	}
+}
 
 func TestAnalyzeFilesystemMetadataDetectsDeltas(t *testing.T) {
 	before := Snapshot{

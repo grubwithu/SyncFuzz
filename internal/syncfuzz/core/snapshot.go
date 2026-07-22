@@ -107,30 +107,9 @@ func SnapshotFilesystem(root string) (Snapshot, error) {
 		}
 		rel = filepath.ToSlash(rel)
 
-		item := FileEntry{
-			Path:    rel,
-			Type:    fileType(info),
-			Mode:    info.Mode().String(),
-			Size:    info.Size(),
-			ModTime: info.ModTime().UTC().Format(time.RFC3339Nano),
-		}
-
-		if info.Mode()&os.ModeSymlink != 0 {
-			// Do not follow symlinks during snapshotting; the symlink itself is
-			// often the security-relevant object.
-			target, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			item.SymlinkTarget = target
-		} else if info.Mode().IsRegular() && info.Size() <= maxHashBytes {
-			// Hash small regular files so oracle/debug output can distinguish
-			// content changes without storing file contents in artifacts.
-			sum, err := hashFile(path)
-			if err != nil {
-				return err
-			}
-			item.SHA256 = sum
+		item, err := snapshotFileEntry(path, rel, info)
+		if err != nil {
+			return err
 		}
 
 		files = append(files, item)
@@ -149,6 +128,86 @@ func SnapshotFilesystem(root string) (Snapshot, error) {
 		TakenAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Files:   files,
 	}, nil
+}
+
+// SnapshotFilesystemPaths records only the explicitly requested relative
+// workspace paths. Missing paths are represented by their absence from the
+// returned snapshot, matching SnapshotFilesystem semantics without walking or
+// hashing unrelated workspace objects.
+func SnapshotFilesystemPaths(root string, paths []string) (Snapshot, error) {
+	files := make([]FileEntry, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, requested := range paths {
+		rel, err := normalizeSnapshotRelativePath(requested)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if _, exists := seen[rel]; exists {
+			continue
+		}
+		seen[rel] = struct{}{}
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("snapshot path %s: %w", rel, err)
+		}
+		item, err := snapshotFileEntry(path, rel, info)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		files = append(files, item)
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
+	return Snapshot{
+		Root:    root,
+		TakenAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Files:   files,
+	}, nil
+}
+
+func normalizeSnapshotRelativePath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("snapshot path is required")
+	}
+	clean := filepath.Clean(filepath.FromSlash(path))
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("snapshot path %q must stay inside the workspace", path)
+	}
+	return filepath.ToSlash(clean), nil
+}
+
+func snapshotFileEntry(path string, rel string, info os.FileInfo) (FileEntry, error) {
+	item := FileEntry{
+		Path:    rel,
+		Type:    fileType(info),
+		Mode:    info.Mode().String(),
+		Size:    info.Size(),
+		ModTime: info.ModTime().UTC().Format(time.RFC3339Nano),
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		// Do not follow symlinks during snapshotting; the symlink itself is
+		// often the security-relevant object.
+		target, err := os.Readlink(path)
+		if err != nil {
+			return FileEntry{}, err
+		}
+		item.SymlinkTarget = target
+	} else if info.Mode().IsRegular() && info.Size() <= maxHashBytes {
+		// Hash small regular files so oracle/debug output can distinguish
+		// content changes without storing file contents in artifacts.
+		sum, err := hashFile(path)
+		if err != nil {
+			return FileEntry{}, err
+		}
+		item.SHA256 = sum
+	}
+	return item, nil
 }
 
 func AnalyzeFilesystemMetadata(snapshots []FilesystemSnapshotArtifact) FilesystemMetadataReport {

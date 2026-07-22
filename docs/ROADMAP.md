@@ -211,7 +211,9 @@ lineage 与 state trace 推导 query-specific state surfaces，并对 socket/FD
 `expand-once-then-full-probe` fallback；它不是 eBPF collector。target runner
 现已可通过 `--observation-plan` 在 shadow mode 消费计划，将 plan-selected
 path/process/FD objects 写入 `targeted-probe-report.json`，同时保留 broad
-snapshot 作为 correctness fallback。
+snapshot 作为 correctness fallback。`--observation-mode pruned-filesystem`
+已经把重复的 workspace snapshot 切为 exact planned paths，并在最终状态保留
+一次 `snapshot-full-fallback.json`；fallback 中的未规划路径会写回 report。
 
 两份 artifact 现在共享 `syncfuzz.lifecycle-query.v1`：
 `q = <Init, Plant, Boundary, Recovery, Activation, Witness>`。每个阶段保留
@@ -222,7 +224,7 @@ interpretation。
 紧接着的开发顺序是：
 
 1. 固化 lifecycle query 与 violation signature 的 typed schema；
-2. 用 shadow report 校验 plan coverage 后，将 target runner 的 filesystem / process collection 从 broad snapshot 逐步切换到 plan-selected probe；为 generic command adapter 补 lifecycle marker，消除当前 P5 `after-plant` 的 partial coverage；
+2. 将 process / FD collection 从 broad snapshot 逐步切换到 plan-selected probe，并让 compiler 消费 fallback 中的未规划路径以扩展 plan；为 generic command adapter 补 lifecycle marker，消除当前 P5 `after-plant` 的 partial coverage；
 3. 将差分与 root-cause 输出绑定到这些 checkpoint；
 4. 仅在环境和评估支持时，加入作为同一 evidence source 的 eBPF trace；
 5. 让 LLM 仅从源码/契约生成 probe 或 contract 候选，绝不担当 oracle。

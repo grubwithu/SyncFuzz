@@ -164,6 +164,80 @@ func TestRunTargetRejectsObservationPlanForDifferentQuery(t *testing.T) {
 	}
 }
 
+func TestRunTargetPrunesFilesystemSnapshotsWithFinalFallback(t *testing.T) {
+	tmp := t.TempDir()
+	planPath := filepath.Join(tmp, observation.ObservationPlanArtifact)
+	if err := observation.WritePlan(planPath, &observation.ObservationPlan{
+		QueryID:           "orphan-process",
+		Checkpoints:       []observation.ObservationPoint{observation.ObservationBeforePlant, observation.ObservationAfterRecovery, observation.ObservationAfterActivation},
+		FallbackFullProbe: true,
+		ProbePlans:        []observation.ProbePlan{{Family: observation.ProbeFilesystem, Enabled: true, Paths: []string{"late-effect"}, Fields: []string{"exists", "content_hash"}}},
+	}); err != nil {
+		t.Fatalf("WritePlan failed: %v", err)
+	}
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:              filepath.Join(tmp, "runs"),
+		TaskID:              "orphan-process",
+		Command:             "printf planned > late-effect",
+		ObserveDelay:        10 * time.Millisecond,
+		ObservationPlanPath: planPath,
+		ObservationMode:     TargetObservationModePrunedFilesystem,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget with pruned filesystem observation failed: %v", err)
+	}
+	if result.ObservationMode != TargetObservationModePrunedFilesystem {
+		t.Fatalf("unexpected observation mode: %#v", result)
+	}
+	var selected core.Snapshot
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, "snapshot-after.json"), &selected)
+	if len(selected.Files) != 1 || selected.Files[0].Path != "late-effect" {
+		t.Fatalf("expected selected filesystem snapshot: %#v", selected)
+	}
+	var fallback core.Snapshot
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, TargetFullFallbackSnapshotArtifact), &fallback)
+	if !snapshotContainsPath(fallback, TargetTaskArtifact) || !snapshotContainsPath(fallback, "late-effect") {
+		t.Fatalf("expected broad fallback snapshot: %#v", fallback)
+	}
+	var report observation.TargetedProbeReport
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, observation.TargetedProbeReportArtifact), &report)
+	if report.CollectionMode != TargetObservationModePrunedFilesystem || !report.FullProbeFallbackUsed || report.FallbackFilesystemArtifact != TargetFullFallbackSnapshotArtifact {
+		t.Fatalf("unexpected pruned probe report: %#v", report)
+	}
+	if targetContainsString(report.UnplannedFallbackFilesystemPaths, TargetTaskArtifact) || targetContainsString(report.UnplannedFallbackFilesystemPaths, TargetPromptArtifact) {
+		t.Fatalf("control artifacts must not pollute fallback expansion: %#v", report)
+	}
+}
+
+func readTargetArtifactJSON(t *testing.T, path string, value any) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if err := json.Unmarshal(raw, value); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+}
+
+func snapshotContainsPath(snapshot core.Snapshot, want string) bool {
+	for _, entry := range snapshot.Files {
+		if entry.Path == want {
+			return true
+		}
+	}
+	return false
+}
+
+func targetContainsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func findTargetedProbeCheckpoint(checkpoints []observation.TargetedProbeCheckpoint, point observation.ObservationPoint) observation.TargetedProbeCheckpoint {
 	for _, checkpoint := range checkpoints {
 		if checkpoint.Point == point {
