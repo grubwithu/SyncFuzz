@@ -408,7 +408,11 @@ creates independent control and target workspaces, and writes
 control intervention remains an explicit responsibility of the supplied
 control command; SyncFuzz records its kind but does not infer or fabricate
 fresh-runtime, cleanup, or namespace behavior. Its two run directories can be
-listed in a later pair-campaign manifest to populate the campaign strata.
+listed in a later pair-campaign manifest to populate the campaign strata, or
+its `target-runtime-pair.json` artifacts can be passed directly as the
+comma-separated `target pair-campaign --runtime-pairs` input. The two
+pair-campaign inputs are mutually exclusive, preserving a single auditable
+source for each aggregation.
 
 `syncfuzz target calibration-summary --inputs <report-or-directory>[,...] --out <path>`
 recursively collects the canonical v2 pair reports produced for a controlled

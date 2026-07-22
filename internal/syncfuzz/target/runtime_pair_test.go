@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 )
 
 func TestRunTargetRuntimePairExecutesFreshControlAndTarget(t *testing.T) {
@@ -51,26 +49,14 @@ func TestRunTargetRuntimePairExecutesFreshControlAndTarget(t *testing.T) {
 			t.Fatalf("expected runtime pair artifact %s: %v", path, err)
 		}
 	}
-	manifestPath := filepath.Join(tmp, "runtime-pair-campaign.json")
-	if err := core.WriteJSON(manifestPath, TargetPairCampaignManifest{
-		SchemaVersion: TargetPairCampaignManifestSchemaVersion,
-		Pairs: []TargetPairCampaignPair{{
-			PairID:        "fresh-runtime",
-			ControlKind:   TargetPairControlFreshRuntime,
-			ControlRunDir: result.ControlRunDir,
-			TargetRunDir:  result.TargetRunDir,
-		}},
-	}); err != nil {
-		t.Fatalf("write runtime pair campaign manifest: %v", err)
-	}
 	campaign, err := RunTargetPairCampaign(TargetPairCampaignOptions{
-		ManifestPath: manifestPath,
-		OutDir:       filepath.Join(tmp, "campaign"),
+		RuntimePairPaths: []string{filepath.Join(result.ArtifactDir, TargetRuntimePairArtifact)},
+		OutDir:           filepath.Join(tmp, "campaign"),
 	})
 	if err != nil {
 		t.Fatalf("RunTargetPairCampaign over fresh runtime pair failed: %v", err)
 	}
-	if campaign.TotalPairs != 1 || len(campaign.CounterfactualLabels) != 1 || campaign.CounterfactualLabels[0].Label != TargetPairCounterfactualTargetOnly {
+	if campaign.TotalPairs != 1 || len(campaign.RuntimePairArtifacts) != 1 || len(campaign.CounterfactualLabels) != 1 || campaign.CounterfactualLabels[0].Label != TargetPairCounterfactualTargetOnly {
 		t.Fatalf("fresh runtime pair did not feed pair campaign labels: %#v", campaign)
 	}
 }

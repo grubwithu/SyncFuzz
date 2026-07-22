@@ -52,6 +52,7 @@ go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-pla
 go run ./cmd/syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id>
 go run ./cmd/syncfuzz target runtime-pair --control-kind fresh-runtime --control-command-file <control-command.sh> --command-file <target-command.sh> --target <target-id> --task <task-id> --out runs
 go run ./cmd/syncfuzz target pair-campaign --manifest target-pair-campaign.json --out runs/<pair-campaign>
+go run ./cmd/syncfuzz target pair-campaign --runtime-pairs runs/<runtime-pair>/target-runtime-pair.json --out runs/<pair-campaign>
 go run ./cmd/syncfuzz target calibration-summary --inputs runs/<pair-campaign> --out runs/<pair-campaign>/target-pair-calibration-summary.json
 go run ./cmd/syncfuzz target contract-candidates --input examples/target-contract-candidates.example.json --source-root examples --out runs/target-contract-candidate-validation.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
@@ -113,6 +114,7 @@ make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<pilot-run>/observation-pla
 make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id>
 make target-runtime-pair TARGET_RUNTIME_PAIR_CONTROL_KIND=fresh-runtime TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE=<control-command.sh> TARGET_COMMAND_FILE=<target-command.sh>
 make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>
+make target-pair-campaign TARGET_RUNTIME_PAIR_RESULTS=runs/<runtime-pair>/target-runtime-pair.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>
 make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign> TARGET_PAIR_CALIBRATION_SUMMARY=runs/<pair-campaign>/target-pair-calibration-summary.json
 make target-contract-candidates TARGET_CONTRACT_CANDIDATES=examples/target-contract-candidates.example.json TARGET_CONTRACT_SOURCE_ROOT=examples TARGET_CONTRACT_CANDIDATE_REPORT=runs/target-contract-candidate-validation.json
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
@@ -304,8 +306,10 @@ must implement the declared `fresh-runtime`, `branch-cleanup`, or
 `namespace-restore` intervention in the control command itself; SyncFuzz never
 infers it from shell text. The resulting `control_run_dir` and `target_run_dir`
 can be added to a pair-campaign manifest for multi-pair, query-stratified
-aggregation. It does not run a model implicitly or convert a label into a
-causal finding.
+aggregation. Alternatively, `target pair-campaign --runtime-pairs` reads one
+or more of those result artifacts directly, regenerates a manifest from their
+recorded run directories, and produces the same stratified campaign summary.
+It does not run a model implicitly or convert a label into a causal finding.
 
 `target calibration-summary --inputs <report-or-directory>[,...] --out <path>`
 recursively collects v2 pair reports for a controlled campaign and writes

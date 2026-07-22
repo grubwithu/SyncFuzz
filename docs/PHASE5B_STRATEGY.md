@@ -117,7 +117,10 @@ outcome，不能替代 counterfactual 因果结论。它只比较预先记录的
 `namespace-restore` 仍是 control command 必须实际实现的 intervention；runner 只
 记录声明的 control kind，绝不从命令文本猜测语义。结果中的两个 run directory 可
 回填到 pair-campaign manifest，从而让真实 runtime 的 label 进入已有的 Query
-strata 汇总；label 仍只是 oracle outcome，不能当作因果结论。
+strata 汇总；也可把多个 `target-runtime-pair.json` 直接交给
+`target pair-campaign --runtime-pairs`，由它从已记录的 run directory 重建
+manifest 后汇总。两种 campaign input 互斥，label 仍只是 oracle outcome，不能
+当作因果结论。
 
 为把后续 LLM 的权限严格限制在 proposal 层，`target contract-candidates` 现已
 提供 source-grounding gate。它接收

@@ -63,6 +63,7 @@ TARGET_COMPARE_RUN ?=
 TARGET_PAIR_DIFFERENTIAL ?=
 TARGET_PAIR_CAMPAIGN_MANIFEST ?=
 TARGET_PAIR_CAMPAIGN_OUT ?=
+TARGET_RUNTIME_PAIR_RESULTS ?=
 TARGET_PAIR_REPORTS ?=
 TARGET_PAIR_CALIBRATION_SUMMARY ?=
 TARGET_PAIR_REVIEW_MANIFESTS ?=
@@ -252,6 +253,7 @@ help:
 	@echo "  make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id>"
 	@echo "  make target-runtime-pair TARGET_RUNTIME_PAIR_CONTROL_KIND=fresh-runtime TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE=control.sh TARGET_COMMAND_FILE=target.sh"
 	@echo "  make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"
+	@echo "  make target-pair-campaign TARGET_RUNTIME_PAIR_RESULTS=runs/<runtime-pair>/target-runtime-pair.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"
 	@echo "  make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign> TARGET_PAIR_CALIBRATION_SUMMARY=runs/<pair-campaign>/target-pair-calibration-summary.json [TARGET_PAIR_REVIEW_MANIFESTS=reviews.json]"
 	@echo "  make target-contract-candidates TARGET_CONTRACT_CANDIDATES=contract-candidates.json TARGET_CONTRACT_SOURCE_ROOT=<source-root> TARGET_CONTRACT_CANDIDATE_REPORT=runs/target-contract-candidate-validation.json"
 	@echo "  make target-signatures"
@@ -358,9 +360,10 @@ target-runtime-pair:
 	$(SYNCFUZZ) target runtime-pair --adapter $(TARGET_ADAPTER) --target $(TARGET_ID) --task $(TARGET_TASK) --control-kind $(TARGET_RUNTIME_PAIR_CONTROL_KIND) $(if $(TARGET_RUNTIME_PAIR_CONTROL_DESCRIPTION),--control-description "$(TARGET_RUNTIME_PAIR_CONTROL_DESCRIPTION)",) $(TARGET_RUNTIME_PAIR_CONTROL_COMMAND_ARGS) $(TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE_ARGS) $(TARGET_COMMAND_ARGS) $(TARGET_COMMAND_FILE_ARGS) --out $(OUT) --timeout $(TARGET_TIMEOUT) --observe-delay $(TARGET_OBSERVE_DELAY) $(TARGET_LATE_OBSERVE_ARGS) $(TARGET_OBSERVATION_PLAN_ARGS) $(TARGET_OBSERVATION_MODE_ARGS) $(ENV_ARGS) $(CONTAINER_ARGS) $(TARGET_PROMPT_ARGS) $(TARGET_PROMPT_FILE_ARGS) $(TARGET_EXPECT_ARGS)
 
 target-pair-campaign:
-	@test -n "$(TARGET_PAIR_CAMPAIGN_MANIFEST)" || (echo "usage: make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"; exit 2)
+	@test -n "$(TARGET_PAIR_CAMPAIGN_MANIFEST)$(TARGET_RUNTIME_PAIR_RESULTS)" || (echo "usage: make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"; exit 2)
+	@test -z "$(TARGET_PAIR_CAMPAIGN_MANIFEST)" || test -z "$(TARGET_RUNTIME_PAIR_RESULTS)" || (echo "target-pair-campaign accepts either TARGET_PAIR_CAMPAIGN_MANIFEST or TARGET_RUNTIME_PAIR_RESULTS"; exit 2)
 	@test -n "$(TARGET_PAIR_CAMPAIGN_OUT)" || (echo "usage: make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"; exit 2)
-	$(SYNCFUZZ) target pair-campaign --manifest $(TARGET_PAIR_CAMPAIGN_MANIFEST) --out $(TARGET_PAIR_CAMPAIGN_OUT)
+	$(SYNCFUZZ) target pair-campaign $(if $(TARGET_PAIR_CAMPAIGN_MANIFEST),--manifest $(TARGET_PAIR_CAMPAIGN_MANIFEST),) $(if $(TARGET_RUNTIME_PAIR_RESULTS),--runtime-pairs $(TARGET_RUNTIME_PAIR_RESULTS),) --out $(TARGET_PAIR_CAMPAIGN_OUT)
 
 target-calibration-summary:
 	@test -n "$(TARGET_PAIR_REPORTS)" || (echo "usage: make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign>[,runs/<target-run-id>/target-pair-differential.json] TARGET_PAIR_CALIBRATION_SUMMARY=path [TARGET_PAIR_REVIEW_MANIFESTS=reviews.json]"; exit 2)

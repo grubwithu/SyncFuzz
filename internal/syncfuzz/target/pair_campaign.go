@@ -47,8 +47,9 @@ type TargetPairCampaignPair struct {
 }
 
 type TargetPairCampaignOptions struct {
-	ManifestPath string
-	OutDir       string
+	ManifestPath     string
+	RuntimePairPaths []string
+	OutDir           string
 }
 
 type TargetPairCampaignResult struct {
@@ -58,6 +59,7 @@ type TargetPairCampaignResult struct {
 	FinishedAt                 string                                `json:"finished_at"`
 	ArtifactDir                string                                `json:"artifact_dir"`
 	SourceManifest             string                                `json:"source_manifest"`
+	RuntimePairArtifacts       []string                              `json:"runtime_pair_artifacts,omitempty"`
 	ManifestArtifact           string                                `json:"manifest_artifact"`
 	CalibrationSummaryArtifact string                                `json:"calibration_summary_artifact"`
 	TotalPairs                 int                                   `json:"total_pairs"`
@@ -120,15 +122,11 @@ type targetPairCampaignStratumAccumulator struct {
 // in a manifest, writes one pair report per counterfactual, and then writes a
 // campaign calibration summary over exactly those reports.
 func RunTargetPairCampaign(opts TargetPairCampaignOptions) (*TargetPairCampaignResult, error) {
-	manifestPath := strings.TrimSpace(opts.ManifestPath)
-	if manifestPath == "" {
-		return nil, fmt.Errorf("pair campaign manifest path is required")
-	}
 	outDir := strings.TrimSpace(opts.OutDir)
 	if outDir == "" {
 		return nil, fmt.Errorf("pair campaign output directory is required")
 	}
-	manifest, err := readTargetPairCampaignManifest(manifestPath)
+	manifest, sourceManifest, runtimePairArtifacts, err := readTargetPairCampaignInput(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -146,13 +144,14 @@ func RunTargetPairCampaign(opts TargetPairCampaignOptions) (*TargetPairCampaignR
 		campaignID = fmt.Sprintf("target-pair-campaign-%d", started.UnixNano())
 	}
 	result := &TargetPairCampaignResult{
-		SchemaVersion:    TargetPairCampaignResultSchemaVersion,
-		CampaignID:       campaignID,
-		StartedAt:        started.Format(time.RFC3339Nano),
-		ArtifactDir:      outDir,
-		SourceManifest:   manifestPath,
-		ManifestArtifact: TargetPairCampaignManifestArtifact,
-		Pairs:            make([]TargetPairCampaignPairResult, 0, len(manifest.Pairs)),
+		SchemaVersion:        TargetPairCampaignResultSchemaVersion,
+		CampaignID:           campaignID,
+		StartedAt:            started.Format(time.RFC3339Nano),
+		ArtifactDir:          outDir,
+		SourceManifest:       sourceManifest,
+		RuntimePairArtifacts: runtimePairArtifacts,
+		ManifestArtifact:     TargetPairCampaignManifestArtifact,
+		Pairs:                make([]TargetPairCampaignPairResult, 0, len(manifest.Pairs)),
 	}
 	controlStats := make(map[TargetPairControlKind]*TargetPairCampaignControlKindStats)
 	labelStats := make(map[TargetPairCounterfactualLabel]*TargetPairCampaignLabelStats)
@@ -252,6 +251,106 @@ func RunTargetPairCampaign(opts TargetPairCampaignOptions) (*TargetPairCampaignR
 		return nil, fmt.Errorf("write pair campaign result: %w", err)
 	}
 	return result, nil
+}
+
+func readTargetPairCampaignInput(opts TargetPairCampaignOptions) (TargetPairCampaignManifest, string, []string, error) {
+	manifestPath := strings.TrimSpace(opts.ManifestPath)
+	runtimePairPaths, err := targetPairCampaignRuntimePairPaths(opts.RuntimePairPaths)
+	if err != nil {
+		return TargetPairCampaignManifest{}, "", nil, err
+	}
+	if manifestPath == "" && len(runtimePairPaths) == 0 {
+		return TargetPairCampaignManifest{}, "", nil, fmt.Errorf("pair campaign requires a manifest path or runtime pair artifacts")
+	}
+	if manifestPath != "" && len(runtimePairPaths) > 0 {
+		return TargetPairCampaignManifest{}, "", nil, fmt.Errorf("pair campaign accepts either a manifest path or runtime pair artifacts, not both")
+	}
+	if manifestPath != "" {
+		manifest, err := readTargetPairCampaignManifest(manifestPath)
+		if err != nil {
+			return TargetPairCampaignManifest{}, "", nil, err
+		}
+		return manifest, manifestPath, nil, nil
+	}
+	manifest, err := readTargetRuntimePairCampaignManifest(runtimePairPaths)
+	if err != nil {
+		return TargetPairCampaignManifest{}, "", nil, err
+	}
+	return manifest, strings.Join(runtimePairPaths, ","), runtimePairPaths, nil
+}
+
+func targetPairCampaignRuntimePairPaths(paths []string) ([]string, error) {
+	unique := make(map[string]struct{}, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, original := range paths {
+		path := strings.TrimSpace(original)
+		if path == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("resolve runtime pair artifact %s: %w", path, err)
+		}
+		absolute = filepath.Clean(absolute)
+		if _, seen := unique[absolute]; seen {
+			continue
+		}
+		unique[absolute] = struct{}{}
+		result = append(result, absolute)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func readTargetRuntimePairCampaignManifest(paths []string) (TargetPairCampaignManifest, error) {
+	if len(paths) == 0 {
+		return TargetPairCampaignManifest{}, fmt.Errorf("runtime pair artifacts are required")
+	}
+	manifest := TargetPairCampaignManifest{
+		SchemaVersion: TargetPairCampaignManifestSchemaVersion,
+		Description:   "Pair campaign assembled from fresh runtime pair artifacts.",
+		Pairs:         make([]TargetPairCampaignPair, 0, len(paths)),
+	}
+	seenIDs := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		runtimePair, err := readTargetPairJSON[TargetRuntimePairResult](path)
+		if err != nil {
+			return TargetPairCampaignManifest{}, fmt.Errorf("read runtime pair artifact %s: %w", path, err)
+		}
+		if runtimePair.SchemaVersion != TargetRuntimePairSchemaVersion {
+			return TargetPairCampaignManifest{}, fmt.Errorf("runtime pair artifact %s has unsupported schema %q", path, runtimePair.SchemaVersion)
+		}
+		pairID := strings.TrimSpace(runtimePair.PairID)
+		if !isTargetPairCampaignPairID(pairID) {
+			return TargetPairCampaignManifest{}, fmt.Errorf("runtime pair artifact %s has invalid pair id %q", path, pairID)
+		}
+		if _, exists := seenIDs[pairID]; exists {
+			return TargetPairCampaignManifest{}, fmt.Errorf("runtime pair artifacts repeat pair id %q", pairID)
+		}
+		seenIDs[pairID] = struct{}{}
+		if !isTargetPairControlKind(runtimePair.ControlKind) {
+			return TargetPairCampaignManifest{}, fmt.Errorf("runtime pair artifact %s has unsupported control kind %q", path, runtimePair.ControlKind)
+		}
+		if runtimePair.ControlKind == TargetPairControlCustom && strings.TrimSpace(runtimePair.ControlDescription) == "" {
+			return TargetPairCampaignManifest{}, fmt.Errorf("runtime pair artifact %s custom control %q requires a description", path, pairID)
+		}
+		controlRunDir, err := targetPairCampaignRunDir("", runtimePair.ControlRunDir)
+		if err != nil {
+			return TargetPairCampaignManifest{}, fmt.Errorf("runtime pair artifact %s control run: %w", path, err)
+		}
+		targetRunDir, err := targetPairCampaignRunDir("", runtimePair.TargetRunDir)
+		if err != nil {
+			return TargetPairCampaignManifest{}, fmt.Errorf("runtime pair artifact %s target run: %w", path, err)
+		}
+		manifest.Pairs = append(manifest.Pairs, TargetPairCampaignPair{
+			PairID:        pairID,
+			ControlKind:   runtimePair.ControlKind,
+			ControlRunDir: controlRunDir,
+			TargetRunDir:  targetRunDir,
+			Description:   strings.TrimSpace(runtimePair.ControlDescription),
+		})
+	}
+	return manifest, nil
 }
 
 func readTargetPairCampaignManifest(path string) (TargetPairCampaignManifest, error) {

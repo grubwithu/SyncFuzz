@@ -92,7 +92,7 @@ Usage:
   syncfuzz target refine-plan --plan observation-plan.json --fallback-report targeted-probe-report.json [--out observation-plan-refined.json]
   syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id> [--out target-pair-differential.json]
   syncfuzz target runtime-pair --control-kind fresh-runtime --control-command '<control command>' --command '<target command>' [--target local-agent] [--task orphan-process] [--out runs]
-  syncfuzz target pair-campaign --manifest target-pair-campaign.json --out runs/<pair-campaign>
+  syncfuzz target pair-campaign [--manifest target-pair-campaign.json | --runtime-pairs runs/<runtime-pair>/target-runtime-pair.json,...] --out runs/<pair-campaign>
   syncfuzz target calibration-summary --inputs runs/<pair-campaign>,runs/<target-run-id>/target-pair-differential.json [--review-manifests review.json] --out target-pair-calibration-summary.json
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--fidelity exact|semantic|impact] [--out runs]
@@ -807,17 +807,21 @@ func targetCompare(args []string) {
 func targetPairCampaign(args []string) {
 	fs := flag.NewFlagSet("target pair-campaign", flag.ExitOnError)
 	manifestPath := fs.String("manifest", "", "target pair campaign manifest path")
+	runtimePairs := fs.String("runtime-pairs", "", "comma-separated target-runtime-pair.json artifacts to aggregate")
 	outDir := fs.String("out", "", "directory for target pair campaign artifacts")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	if strings.TrimSpace(*manifestPath) == "" || strings.TrimSpace(*outDir) == "" {
-		fmt.Fprintln(os.Stderr, "target pair-campaign requires --manifest and --out")
+	hasManifest := strings.TrimSpace(*manifestPath) != ""
+	hasRuntimePairs := len(splitCSV(*runtimePairs)) > 0
+	if strings.TrimSpace(*outDir) == "" || hasManifest == hasRuntimePairs {
+		fmt.Fprintln(os.Stderr, "target pair-campaign requires exactly one of --manifest or --runtime-pairs, plus --out")
 		os.Exit(2)
 	}
 	result, err := target.RunTargetPairCampaign(target.TargetPairCampaignOptions{
-		ManifestPath: *manifestPath,
-		OutDir:       *outDir,
+		ManifestPath:     *manifestPath,
+		RuntimePairPaths: splitCSV(*runtimePairs),
+		OutDir:           *outDir,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz target pair-campaign failed: %v\n", err)
