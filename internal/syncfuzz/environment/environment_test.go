@@ -49,6 +49,26 @@ func TestLocalEnvironmentPrepareRunAndExecShell(t *testing.T) {
 	}
 }
 
+func TestLocalEnvironmentExecTargetCommandTimeoutKillsDescendants(t *testing.T) {
+	env := environment.LocalEnvironment{}
+	run := &core.RunContext{Workspace: t.TempDir()}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	_, err := env.ExecTargetCommand(ctx, run, "sleep 5 & wait", nil)
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatalf("expected timeout error")
+	}
+	if ctx.Err() != context.DeadlineExceeded {
+		t.Fatalf("expected context deadline exceeded, got %v", ctx.Err())
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("target command waited %s for a background descendant after timeout", elapsed)
+	}
+}
+
 func TestNewEnvironmentSupportsContainerWithDefaultImage(t *testing.T) {
 	env, err := environment.NewEnvironment("container", "")
 	if err != nil {

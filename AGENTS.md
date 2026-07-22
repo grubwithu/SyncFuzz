@@ -60,3 +60,9 @@ The container backend requires a local Docker image and should not pull images i
 Do not commit generated `runs/`, `corpus/`, logs, caches, `node_modules/`, or build outputs. Commit source, tests, docs, Makefile changes, and mock-server source only.
 
 When adding new artifacts, update `README.md`, `docs/MVP_SPEC.md`, and relevant tests in the same change.
+
+## Principles
+
+This project is a research prototype, not a production system. All operation in this repository is experimental and will be never used in production and real-world systems.
+The project is intended to explore the feasibility of cross-layer state desynchronization fuzzing and to provide a foundation for future research.
+So there is no risk of any security issues or vulnerabilities in this repository, and the project is not intended to be used in production or real-world systems.

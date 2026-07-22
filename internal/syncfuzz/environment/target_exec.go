@@ -6,15 +6,19 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"time"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 )
+
+const targetCommandWaitDelay = time.Second
 
 // ExecTargetCommand runs a real-target agent command (bash -lc <command>) with
 // the given environment overrides. The local backend runs the command directly
 // in the workspace; the container backend runs it inside the Docker sandbox.
 func (e LocalEnvironment) ExecTargetCommand(ctx context.Context, run *core.RunContext, command string, envVars map[string]string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
+	configureTargetCommandCancellation(cmd)
 	cmd.Dir = run.Workspace
 	cmd.Env = append(os.Environ(), sortedEnv(envVars)...)
 	return cmd.CombinedOutput()
@@ -29,7 +33,9 @@ func (e ContainerEnvironment) ExecTargetCommand(ctx context.Context, run *core.R
 		args = append(args, "-e", item)
 	}
 	args = append(args, run.ContainerName, "bash", "-lc", command)
-	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	configureTargetCommandCancellation(cmd)
+	return cmd.CombinedOutput()
 }
 
 func sortedEnv(values map[string]string) []string {

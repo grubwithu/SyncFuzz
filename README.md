@@ -106,6 +106,7 @@ make target-langgraph-shell-react
 make target-langgraph-shell-react-suite TARGET_TASKS=orphan-process-long-delay,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork,rename-residue-fork,mode-residue-fork,append-residue-fork,hardlink-residue-fork,fifo-residue-fork,open-fd-residue-fork,deleted-open-fd-residue-fork,inherited-fd-branch-leakage,unix-listener-residue-fork,discarded-server-trusted-client,socket-response-poisoning,cwd-residue-fork,umask-residue-fork REPEAT=2
 make target-langgraph-shell-react-matrix-suite TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=all REPEAT=1 CANDIDATE_LIMIT=3
 make target-langgraph-shell-react-campaign TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=all ROUNDS=2 CANDIDATE_LIMIT=3 TARGET_SELECTION_POLICY=fixed
+make phase5b-v3-feedback PHASE5B_V3_BLOCK=1 LANGCHAIN_MODEL=openai:gpt-4.1-mini
 make target-maf-github-copilot-shell-check
 make target-maf-github-copilot-shell
 make target-maf-github-copilot-shell TARGET_TASK=persistent-shell-poisoning
@@ -151,6 +152,8 @@ make corpus-show ENTRY_ID=<entry_id_or_unique_prefix>
 make replay ENTRY_ID=<entry_id_or_unique_prefix>
 make run-case CASE=orphan-process ENV=container CONTAINER_IMAGE=ubuntu:latest
 ```
+
+Phase 5B v3 uses a 74-candidate LangGraph universe spanning active IPC, FD capability, delayed process, shell execution-context, and shell PATH residue. It keeps a 32-run campaign budget (`4` rounds x `8` candidates), so fixed, deterministic random, and feedback selection must make meaningful tradeoffs. Run `make phase5b-v3-fixed`, `make phase5b-v3-random`, or `make phase5b-v3-feedback` for a controlled policy comparison. `make phase5b-v3-full` adds conservative feedback-driven auto-pivot and is reported separately because it may expand the candidate universe. Set `PHASE5B_V3_BLOCK` for repeated blocks; use `make -j4` only when the configured model API can sustain four campaigns concurrently.
 
 Artifacts are written under `runs/<run_id>/`:
 

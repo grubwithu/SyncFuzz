@@ -49,7 +49,22 @@ TARGET_OBSERVE_DELAY ?= 500ms
 TARGET_LATE_OBSERVE_DELAY ?= $(if $(filter orphan-process-long-delay,$(TARGET_TASK)),7s,)
 TARGET_SELECTION_POLICY ?=
 TARGET_RANDOM_SEED ?= 1
+TARGET_MIN_COVERAGE_GAIN_SCORE ?= 0
+TARGET_MAX_STAGNANT_ROUNDS ?= 0
+TARGET_AUTO_PIVOT ?= false
 EXPECT_FILES ?=
+
+# Phase 5B feedback experiment v3
+PHASE5B_V3_BLOCK ?= 1
+PHASE5B_V3_OUT ?= runs/phase5b-feedback-v3/block-$(PHASE5B_V3_BLOCK)
+PHASE5B_V3_CORPUS ?= corpus/phase5b-feedback-v3/block-$(PHASE5B_V3_BLOCK)
+PHASE5B_V3_SEEDS ?= active-ipc-residue,active-ipc-residue-fork,capability-residue-fork,delayed-effect,shell-execution-context-residue,shell-execution-context-residue-fork,shell-path-residue
+PHASE5B_V3_ROUNDS ?= 4
+PHASE5B_V3_CANDIDATE_LIMIT ?= 8
+PHASE5B_V3_TIMEOUT ?= 5m
+PHASE5B_V3_RANDOM_SEED ?= $(PHASE5B_V3_BLOCK)
+PHASE5B_V3_MIN_COVERAGE_GAIN_SCORE ?= 500
+PHASE5B_V3_MAX_STAGNANT_ROUNDS ?= 1
 
 # LangGraph target
 LANGCHAIN_MODEL ?=
@@ -109,6 +124,7 @@ TARGET_PROMPT_FILE_ARGS := $(if $(TARGET_PROMPT_FILE),--prompt-file $(TARGET_PRO
 TARGET_EXPECT_ARGS := $(if $(EXPECT_FILES),--expect-files $(EXPECT_FILES),)
 TARGET_LATE_OBSERVE_ARGS := $(if $(TARGET_LATE_OBSERVE_DELAY),--late-observe-delay $(TARGET_LATE_OBSERVE_DELAY),)
 TARGET_SELECTION_ARGS := $(if $(TARGET_SELECTION_POLICY),--selection-policy $(TARGET_SELECTION_POLICY) --random-seed $(TARGET_RANDOM_SEED),)
+TARGET_CAMPAIGN_CONTROL_ARGS := $(if $(filter-out 0,$(TARGET_MIN_COVERAGE_GAIN_SCORE)),--min-coverage-gain-score $(TARGET_MIN_COVERAGE_GAIN_SCORE),) $(if $(filter-out 0,$(TARGET_MAX_STAGNANT_ROUNDS)),--max-stagnant-rounds $(TARGET_MAX_STAGNANT_ROUNDS),) $(if $(filter true,$(TARGET_AUTO_PIVOT)),--auto-pivot,)
 LANGCHAIN_MODEL_ENV := $(if $(LANGCHAIN_MODEL),LANGCHAIN_MODEL='$(subst ','"'"',$(LANGCHAIN_MODEL))',)
 OPENAI_API_KEY_ENV := $(if $(OPENAI_API_KEY),OPENAI_API_KEY='$(subst ','"'"',$(OPENAI_API_KEY))',)
 OPENAI_BASE_URL_ENV := $(if $(OPENAI_BASE_URL),OPENAI_BASE_URL='$(subst ','"'"',$(OPENAI_BASE_URL))',)
@@ -130,7 +146,7 @@ SUITE_ARGS = --out $(OUT) --corpus $(CORPUS) --repeat $(REPEAT) --delay $(DELAY)
 CAMPAIGN_ARGS = --out $(OUT) --corpus $(CORPUS) --rounds $(ROUNDS) --repeat $(REPEAT) --delay $(DELAY) $(ENV_ARGS) $(CONTAINER_ARGS) $(CASE_ARGS) $(MOCK_ARGS) $(DIFFERENTIAL_ARGS) $(TIMING_ARGS) $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS)
 TARGET_RUN_ARGS = --out $(OUT) --timeout $(TARGET_TIMEOUT) --observe-delay $(TARGET_OBSERVE_DELAY) $(TARGET_LATE_OBSERVE_ARGS) $(ENV_ARGS) $(CONTAINER_ARGS) $(TARGET_PROMPT_ARGS) $(TARGET_PROMPT_FILE_ARGS) $(TARGET_EXPECT_ARGS)
 
-.PHONY: help list fault-plans timing-profiles primitives matrix run-case run-pair run-mvp run-action run-authority run-shell run-fs run-branch run-suite run-diff-suite run-matrix-suite run-campaign target-list target-tasks target-seeds target-scenarios target-groups target-prompt-profiles target-matrix target-minimize target-run target-suite target-matrix-suite target-campaign target-langgraph-shell-react target-langgraph-shell-react-suite target-langgraph-shell-react-matrix-suite target-langgraph-shell-react-campaign target-langgraph-shell-react-check target-maf-github-copilot-shell target-maf-github-copilot-shell-suite target-maf-github-copilot-shell-matrix-suite target-maf-github-copilot-shell-campaign target-maf-github-copilot-shell-check target-maf-workflow-checkpoint target-maf-workflow-checkpoint-suite target-maf-workflow-checkpoint-check corpus-list corpus-analyze corpus-show corpus-verify replay test-go fmt-go mock-build mock-start
+.PHONY: help list fault-plans timing-profiles primitives matrix run-case run-pair run-mvp run-action run-authority run-shell run-fs run-branch run-suite run-diff-suite run-matrix-suite run-campaign target-list target-tasks target-seeds target-scenarios target-groups target-prompt-profiles target-matrix target-minimize target-run target-suite target-matrix-suite target-campaign target-langgraph-shell-react target-langgraph-shell-react-suite target-langgraph-shell-react-matrix-suite target-langgraph-shell-react-campaign target-langgraph-shell-react-check target-maf-github-copilot-shell target-maf-github-copilot-shell-suite target-maf-github-copilot-shell-matrix-suite target-maf-github-copilot-shell-campaign target-maf-github-copilot-shell-check target-maf-workflow-checkpoint target-maf-workflow-checkpoint-suite target-maf-workflow-checkpoint-check phase5b-v3-fixed phase5b-v3-random phase5b-v3-feedback phase5b-v3-full corpus-list corpus-analyze corpus-show corpus-verify replay test-go fmt-go mock-build mock-start
 
 help:
 	@echo "SyncFuzz targets:"
@@ -164,6 +180,7 @@ help:
 	@echo "  make target-langgraph-shell-react-suite LANGCHAIN_MODEL=openai:gpt-4.1-mini REPEAT=3"
 	@echo "  make target-langgraph-shell-react-matrix-suite TARGET_GROUP=phase5a-baseline REPEAT=1 CANDIDATE_LIMIT=3"
 	@echo "  make target-langgraph-shell-react-campaign TARGET_GROUP=phase5a-baseline ROUNDS=2 CANDIDATE_LIMIT=3"
+	@echo "  make phase5b-v3-feedback PHASE5B_V3_BLOCK=1 LANGCHAIN_MODEL=openai:gpt-4.1-mini"
 	@echo "  make target-langgraph-shell-react-suite TARGET_GROUP=workspace-residue REPEAT=5"
 	@echo "  make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini OPENAI_BASE_URL=https://api.example.com/v1"
 	@echo "  make target-langgraph-shell-react TARGET_TASK=orphan-process-long-delay"
@@ -293,7 +310,7 @@ target-matrix-suite:
 	$(LOAD_DOTENV); $(SYNCFUZZ) target suite --adapter $(TARGET_ADAPTER) --target $(TARGET_ID) --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS) --matrix $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS) $(TARGET_SELECTION_ARGS) --repeat $(REPEAT) --corpus $(CORPUS) $(TARGET_RUN_ARGS) $(TARGET_COMMAND_ARGS) $(TARGET_COMMAND_FILE_ARGS)
 
 target-campaign:
-	$(LOAD_DOTENV); $(SYNCFUZZ) target campaign --adapter $(TARGET_ADAPTER) --target $(TARGET_ID) --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS) --rounds $(ROUNDS) --repeat $(REPEAT) $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS) $(TARGET_SELECTION_ARGS) --corpus $(CORPUS) --out $(OUT) $(TARGET_RUN_ARGS) $(TARGET_COMMAND_ARGS) $(TARGET_COMMAND_FILE_ARGS)
+	$(LOAD_DOTENV); $(SYNCFUZZ) target campaign --adapter $(TARGET_ADAPTER) --target $(TARGET_ID) --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS) --rounds $(ROUNDS) --repeat $(REPEAT) $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS) $(TARGET_SELECTION_ARGS) $(TARGET_CAMPAIGN_CONTROL_ARGS) --corpus $(CORPUS) $(TARGET_RUN_ARGS) $(TARGET_COMMAND_ARGS) $(TARGET_COMMAND_FILE_ARGS)
 
 target-langgraph-shell-react:
 	@$(LOAD_DOTENV); model="$(LANGCHAIN_MODEL)"; test -n "$$model" || model="$$LANGCHAIN_MODEL"; test -n "$$model" || (echo "usage: make target-langgraph-shell-react LANGCHAIN_MODEL=openai:gpt-4.1-mini"; exit 2)
@@ -309,7 +326,19 @@ target-langgraph-shell-react-matrix-suite:
 
 target-langgraph-shell-react-campaign:
 	@$(LOAD_DOTENV); model="$(LANGCHAIN_MODEL)"; test -n "$$model" || model="$$LANGCHAIN_MODEL"; test -n "$$model" || (echo "usage: make target-langgraph-shell-react-campaign LANGCHAIN_MODEL=openai:gpt-4.1-mini"; exit 2)
-	$(LOAD_DOTENV); $(LANGCHAIN_MODEL_ENV) $(OPENAI_API_KEY_ENV) $(OPENAI_BASE_URL_ENV) SYNCFUZZ_LANGGRAPH_REQUIRE_TOOL_USE=true SYNCFUZZ_LANGGRAPH_EXECUTION_POLICY=$(LANGGRAPH_POLICY) SYNCFUZZ_LANGGRAPH_DOCKER_IMAGE=$(LANGGRAPH_DOCKER_IMAGE) SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND=$(LANGGRAPH_CHECKPOINT_BACKEND) SYNCFUZZ_LANGGRAPH_CHECKPOINT_DIR='$(LANGGRAPH_CHECKPOINT_DIR)' SYNCFUZZ_LANGGRAPH_PROCESS_MODE=$(LANGGRAPH_PROCESS_MODE) SYNCFUZZ_LANGGRAPH_REPLAY=$(LANGGRAPH_REPLAY) SYNCFUZZ_LANGGRAPH_CHECKPOINT_INDEX=$(LANGGRAPH_CHECKPOINT_INDEX) SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR='$(LANGGRAPH_CHECKPOINT_SELECTOR)' SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE='$(LANGGRAPH_FORK_USER_MESSAGE)' $(SYNCFUZZ) target campaign --target langgraph-shell-react --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS) --rounds $(ROUNDS) --repeat $(REPEAT) $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS) $(TARGET_SELECTION_ARGS) --corpus $(CORPUS) --out $(OUT) $(TARGET_RUN_ARGS) --command-file examples/target-commands/langgraph-shell-react.sh
+	$(LOAD_DOTENV); $(LANGCHAIN_MODEL_ENV) $(OPENAI_API_KEY_ENV) $(OPENAI_BASE_URL_ENV) SYNCFUZZ_LANGGRAPH_REQUIRE_TOOL_USE=true SYNCFUZZ_LANGGRAPH_EXECUTION_POLICY=$(LANGGRAPH_POLICY) SYNCFUZZ_LANGGRAPH_DOCKER_IMAGE=$(LANGGRAPH_DOCKER_IMAGE) SYNCFUZZ_LANGGRAPH_CHECKPOINT_BACKEND=$(LANGGRAPH_CHECKPOINT_BACKEND) SYNCFUZZ_LANGGRAPH_CHECKPOINT_DIR='$(LANGGRAPH_CHECKPOINT_DIR)' SYNCFUZZ_LANGGRAPH_PROCESS_MODE=$(LANGGRAPH_PROCESS_MODE) SYNCFUZZ_LANGGRAPH_REPLAY=$(LANGGRAPH_REPLAY) SYNCFUZZ_LANGGRAPH_CHECKPOINT_INDEX=$(LANGGRAPH_CHECKPOINT_INDEX) SYNCFUZZ_LANGGRAPH_CHECKPOINT_SELECTOR='$(LANGGRAPH_CHECKPOINT_SELECTOR)' SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE='$(LANGGRAPH_FORK_USER_MESSAGE)' $(SYNCFUZZ) target campaign --target langgraph-shell-react --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS) --rounds $(ROUNDS) --repeat $(REPEAT) $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS) $(TARGET_SELECTION_ARGS) $(TARGET_CAMPAIGN_CONTROL_ARGS) --corpus $(CORPUS) $(TARGET_RUN_ARGS) --command-file examples/target-commands/langgraph-shell-react.sh
+
+phase5b-v3-fixed:
+	$(MAKE) --no-print-directory target-langgraph-shell-react-campaign OUT=$(PHASE5B_V3_OUT)/fixed CORPUS=$(PHASE5B_V3_CORPUS)/fixed TARGET_SEEDS=$(PHASE5B_V3_SEEDS) TARGET_PROMPT_PROFILES=baseline ROUNDS=$(PHASE5B_V3_ROUNDS) CANDIDATE_LIMIT=$(PHASE5B_V3_CANDIDATE_LIMIT) TARGET_TIMEOUT=$(PHASE5B_V3_TIMEOUT) TARGET_SELECTION_POLICY=fixed
+
+phase5b-v3-random:
+	$(MAKE) --no-print-directory target-langgraph-shell-react-campaign OUT=$(PHASE5B_V3_OUT)/random CORPUS=$(PHASE5B_V3_CORPUS)/random TARGET_SEEDS=$(PHASE5B_V3_SEEDS) TARGET_PROMPT_PROFILES=baseline ROUNDS=$(PHASE5B_V3_ROUNDS) CANDIDATE_LIMIT=$(PHASE5B_V3_CANDIDATE_LIMIT) TARGET_TIMEOUT=$(PHASE5B_V3_TIMEOUT) TARGET_SELECTION_POLICY=random TARGET_RANDOM_SEED=$(PHASE5B_V3_RANDOM_SEED)
+
+phase5b-v3-feedback:
+	$(MAKE) --no-print-directory target-langgraph-shell-react-campaign OUT=$(PHASE5B_V3_OUT)/feedback CORPUS=$(PHASE5B_V3_CORPUS)/feedback TARGET_SEEDS=$(PHASE5B_V3_SEEDS) TARGET_PROMPT_PROFILES=baseline ROUNDS=$(PHASE5B_V3_ROUNDS) CANDIDATE_LIMIT=$(PHASE5B_V3_CANDIDATE_LIMIT) TARGET_TIMEOUT=$(PHASE5B_V3_TIMEOUT) TARGET_SELECTION_POLICY=feedback
+
+phase5b-v3-full:
+	$(MAKE) --no-print-directory target-langgraph-shell-react-campaign OUT=$(PHASE5B_V3_OUT)/full CORPUS=$(PHASE5B_V3_CORPUS)/full TARGET_SEEDS=$(PHASE5B_V3_SEEDS) TARGET_PROMPT_PROFILES=baseline ROUNDS=$(PHASE5B_V3_ROUNDS) CANDIDATE_LIMIT=$(PHASE5B_V3_CANDIDATE_LIMIT) TARGET_TIMEOUT=$(PHASE5B_V3_TIMEOUT) TARGET_SELECTION_POLICY=feedback TARGET_AUTO_PIVOT=true TARGET_MIN_COVERAGE_GAIN_SCORE=$(PHASE5B_V3_MIN_COVERAGE_GAIN_SCORE) TARGET_MAX_STAGNANT_ROUNDS=$(PHASE5B_V3_MAX_STAGNANT_ROUNDS)
 
 target-langgraph-shell-react-check:
 	@$(LOAD_DOTENV); test -x targets/langgraph_shell_react/venv/bin/python || (echo "missing targets/langgraph_shell_react/venv/bin/python"; exit 2)
@@ -336,7 +365,7 @@ target-maf-github-copilot-shell-matrix-suite:
 	$(LOAD_DOTENV); $(OPENAI_API_KEY_ENV) $(OPENAI_BASE_URL_ENV) $(COPILOT_MODEL_ENV) $(COPILOT_PROVIDER_BASE_URL_ENV) $(COPILOT_PROVIDER_TYPE_ENV) $(COPILOT_PROVIDER_API_KEY_ENV) $(MAF_PYTHON_ENV) $(MAF_TIMEOUT_ENV) $(MAF_COPILOT_CLI_ENV) $(MAF_SESSION_HOME_ENV) $(MAF_LOG_LEVEL_ENV) $(MAF_ALLOW_UNSUPPORTED_ENV) $(SYNCFUZZ) target suite --target maf-github-copilot-shell --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS) --matrix $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS) $(TARGET_SELECTION_ARGS) --repeat $(REPEAT) --corpus $(CORPUS) $(TARGET_RUN_ARGS) --command-file examples/target-commands/maf-github-copilot-shell.sh
 
 target-maf-github-copilot-shell-campaign:
-	$(LOAD_DOTENV); $(OPENAI_API_KEY_ENV) $(OPENAI_BASE_URL_ENV) $(COPILOT_MODEL_ENV) $(COPILOT_PROVIDER_BASE_URL_ENV) $(COPILOT_PROVIDER_TYPE_ENV) $(COPILOT_PROVIDER_API_KEY_ENV) $(MAF_PYTHON_ENV) $(MAF_TIMEOUT_ENV) $(MAF_COPILOT_CLI_ENV) $(MAF_SESSION_HOME_ENV) $(MAF_LOG_LEVEL_ENV) $(MAF_ALLOW_UNSUPPORTED_ENV) $(SYNCFUZZ) target campaign --target maf-github-copilot-shell --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS) --rounds $(ROUNDS) --repeat $(REPEAT) $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS) $(TARGET_SELECTION_ARGS) --corpus $(CORPUS) --out $(OUT) $(TARGET_RUN_ARGS) --command-file examples/target-commands/maf-github-copilot-shell.sh
+	$(LOAD_DOTENV); $(OPENAI_API_KEY_ENV) $(OPENAI_BASE_URL_ENV) $(COPILOT_MODEL_ENV) $(COPILOT_PROVIDER_BASE_URL_ENV) $(COPILOT_PROVIDER_TYPE_ENV) $(COPILOT_PROVIDER_API_KEY_ENV) $(MAF_PYTHON_ENV) $(MAF_TIMEOUT_ENV) $(MAF_COPILOT_CLI_ENV) $(MAF_SESSION_HOME_ENV) $(MAF_LOG_LEVEL_ENV) $(MAF_ALLOW_UNSUPPORTED_ENV) $(SYNCFUZZ) target campaign --target maf-github-copilot-shell --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS) --rounds $(ROUNDS) --repeat $(REPEAT) $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS) $(TARGET_SELECTION_ARGS) $(TARGET_CAMPAIGN_CONTROL_ARGS) --corpus $(CORPUS) $(TARGET_RUN_ARGS) --command-file examples/target-commands/maf-github-copilot-shell.sh
 
 target-maf-workflow-checkpoint-check:
 	@$(LOAD_DOTENV); target_python="$(MAF_PYTHON)"; test -n "$$target_python" || target_python="$$MAF_PYTHON"; test -n "$$target_python" || target_python="targets/maf_github_copilot_shell/venv/bin/python"; test -x "$$target_python" || target_python="python3"; $(MAF_PYTHON_ENV) $(MAF_WORKFLOW_EFFECT_SERVICE_URL_ENV) "$$target_python" targets/maf_workflow_checkpoint/run_target.py --check

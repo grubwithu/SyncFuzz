@@ -5,15 +5,15 @@ import "github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 type TargetObservationCategory string
 
 const (
-	TargetObservationResidueObserved      TargetObservationCategory = "residue-observed"
-	TargetObservationExecutionNotReached  TargetObservationCategory = "execution-not-reached"
-	TargetObservationTaskNoncompliant     TargetObservationCategory = "task-noncompliant"
-	TargetObservationLifecycleNotTriggered TargetObservationCategory = "lifecycle-not-triggered"
-	TargetObservationStateNotPlanted      TargetObservationCategory = "state-not-planted"
+	TargetObservationResidueObserved        TargetObservationCategory = "residue-observed"
+	TargetObservationExecutionNotReached    TargetObservationCategory = "execution-not-reached"
+	TargetObservationTaskNoncompliant       TargetObservationCategory = "task-noncompliant"
+	TargetObservationLifecycleNotTriggered  TargetObservationCategory = "lifecycle-not-triggered"
+	TargetObservationStateNotPlanted        TargetObservationCategory = "state-not-planted"
 	TargetObservationActivationNotTriggered TargetObservationCategory = "activation-not-triggered"
-	TargetObservationOracleInconclusive   TargetObservationCategory = "oracle-inconclusive"
-	TargetObservationCleanNegative        TargetObservationCategory = "clean-negative"
-	TargetObservationError                TargetObservationCategory = "error"
+	TargetObservationOracleInconclusive     TargetObservationCategory = "oracle-inconclusive"
+	TargetObservationCleanNegative          TargetObservationCategory = "clean-negative"
+	TargetObservationError                  TargetObservationCategory = "error"
 )
 
 type TargetObservationDetails struct {

@@ -20,18 +20,18 @@ type CorpusAnalysisFieldStats struct {
 }
 
 type CorpusAnalysisSubjectStats struct {
-	ExecutionKind         string                     `json:"execution_kind"`
-	CaseName              string                     `json:"case_name,omitempty"`
-	AdapterID             string                     `json:"adapter_id,omitempty"`
-	TargetID              string                     `json:"target_id,omitempty"`
-	TaskID                string                     `json:"task_id,omitempty"`
-	TotalEntries          int                        `json:"total_entries"`
-	TargetOracleSummaries []CorpusAnalysisFieldStats `json:"target_oracle_summaries,omitempty"`
+	ExecutionKind          string                     `json:"execution_kind"`
+	CaseName               string                     `json:"case_name,omitempty"`
+	AdapterID              string                     `json:"adapter_id,omitempty"`
+	TargetID               string                     `json:"target_id,omitempty"`
+	TaskID                 string                     `json:"task_id,omitempty"`
+	TotalEntries           int                        `json:"total_entries"`
+	TargetOracleSummaries  []CorpusAnalysisFieldStats `json:"target_oracle_summaries,omitempty"`
 	TargetOutcomeSummaries []CorpusAnalysisFieldStats `json:"target_outcome_summaries,omitempty"`
-	ActivationSummaries   []CorpusAnalysisFieldStats `json:"activation_summaries,omitempty"`
-	AttributionSummaries  []CorpusAnalysisFieldStats `json:"attribution_summaries,omitempty"`
-	ComplianceSummaries   []CorpusAnalysisFieldStats `json:"compliance_summaries,omitempty"`
-	ContractSummaries     []CorpusAnalysisFieldStats `json:"contract_summaries,omitempty"`
+	ActivationSummaries    []CorpusAnalysisFieldStats `json:"activation_summaries,omitempty"`
+	AttributionSummaries   []CorpusAnalysisFieldStats `json:"attribution_summaries,omitempty"`
+	ComplianceSummaries    []CorpusAnalysisFieldStats `json:"compliance_summaries,omitempty"`
+	ContractSummaries      []CorpusAnalysisFieldStats `json:"contract_summaries,omitempty"`
 }
 
 type CorpusAnalysisResult struct {

@@ -207,11 +207,11 @@ func targetFeedbackSummaryLess(left TargetCandidateSummary, right TargetCandidat
 	if left.Score != right.Score {
 		return left.Score > right.Score
 	}
-	if left.ReproducibilityRate != right.ReproducibilityRate {
-		return left.ReproducibilityRate > right.ReproducibilityRate
-	}
 	if left.ContractViolations != right.ContractViolations {
 		return left.ContractViolations > right.ContractViolations
+	}
+	if left.ComplianceCompliant != right.ComplianceCompliant {
+		return left.ComplianceCompliant > right.ComplianceCompliant
 	}
 	if left.ActivationProgressScore != right.ActivationProgressScore {
 		return left.ActivationProgressScore > right.ActivationProgressScore
@@ -219,11 +219,19 @@ func targetFeedbackSummaryLess(left TargetCandidateSummary, right TargetCandidat
 	if left.ActivationReached != right.ActivationReached {
 		return left.ActivationReached > right.ActivationReached
 	}
-	if left.Confirmed != right.Confirmed {
-		return left.Confirmed > right.Confirmed
+	if left.ReproducibilityRate != right.ReproducibilityRate {
+		return left.ReproducibilityRate > right.ReproducibilityRate
 	}
 	if left.ComplianceViolated != right.ComplianceViolated {
 		return left.ComplianceViolated < right.ComplianceViolated
+	}
+	leftNotReached := targetCandidateOutcomeCount(left, corpus.TargetObservationExecutionNotReached)
+	rightNotReached := targetCandidateOutcomeCount(right, corpus.TargetObservationExecutionNotReached)
+	if leftNotReached != rightNotReached {
+		return leftNotReached < rightNotReached
+	}
+	if left.Confirmed != right.Confirmed {
+		return left.Confirmed > right.Confirmed
 	}
 	if left.Errors != right.Errors {
 		return left.Errors < right.Errors

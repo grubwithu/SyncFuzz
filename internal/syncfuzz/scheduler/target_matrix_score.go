@@ -232,15 +232,19 @@ func (a *targetCandidateAccumulator) observe(result TargetSuiteRunResult) {
 }
 
 func targetCandidateScore(summary TargetCandidateSummary) int {
-	return summary.ContractViolations*4 +
-		summary.Confirmed*2 +
-		summary.ActivationProgressScore +
-		summary.ActivationReached +
-		summary.OracleInconclusive -
-		targetCandidateOutcomeCount(summary, corpus.TargetObservationTaskNoncompliant)*2 -
-		targetCandidateOutcomeCount(summary, corpus.TargetObservationExecutionNotReached)*2 -
-		summary.ComplianceViolated*2 -
-		summary.Errors*5
+	// Confirmation alone is weak evidence because it can include task drift.
+	// Favor evidence that reached activation under a compliant execution, and
+	// demote candidates that consume budget without completing the target run.
+	return summary.ContractViolations*8 +
+		summary.ComplianceCompliant*3 +
+		summary.Confirmed +
+		summary.ActivationProgressScore*2 +
+		summary.ActivationReached*3 -
+		targetCandidateOutcomeCount(summary, corpus.TargetObservationTaskNoncompliant)*6 -
+		targetCandidateOutcomeCount(summary, corpus.TargetObservationExecutionNotReached)*6 -
+		summary.ComplianceViolated*6 -
+		summary.ComplianceUnknown*2 -
+		summary.Errors*8
 }
 
 func targetCandidateMaxActivationStage(summaries []TargetSuiteActivationStats) TargetActivationStage {
