@@ -1006,6 +1006,7 @@ func targetMatrix(args []string) {
 	taskGroups := fs.String("groups", "", "comma-separated built-in target task groups to expand before explicit tasks")
 	promptProfile := fs.String("prompt-profile", "", "single built-in target prompt profile")
 	promptProfiles := fs.String("prompt-profiles", "", "comma-separated built-in target prompt profiles; use all for every built-in profile")
+	candidateScope := fs.String("candidate-scope", "all", "matrix candidate scope: all, seed-only, or seed-plus-prompts")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -1021,6 +1022,7 @@ func targetMatrix(args []string) {
 		TaskGroups:       groups,
 		SeedIDs:          seeds,
 		PromptProfileIDs: profileIDs,
+		CandidateScope:   scheduler.TargetCandidateScope(*candidateScope),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz target matrix failed: %v\n", err)
@@ -1039,6 +1041,7 @@ func targetMatrix(args []string) {
 	if len(result.PromptProfiles) > 0 {
 		fmt.Printf("prompt_profiles: %s\n", strings.Join(result.PromptProfiles, ","))
 	}
+	fmt.Printf("candidate_scope: %s\n", result.CandidateScope)
 	fmt.Printf("total_candidates: %d\n", result.TotalCandidates)
 	fmt.Printf("%-52s %-24s %-22s %-20s %-10s %-18s %-5s %s\n", "candidate_id", "seed", "primitive", "lifecycle_op", "prompt", "variant", "late", "description")
 	for _, candidate := range result.Candidates {
@@ -1351,6 +1354,7 @@ func targetSuite(args []string) {
 	objective := fs.String("objective", "", "optional shared objective override")
 	promptProfile := fs.String("prompt-profile", "", "single built-in target prompt profile")
 	promptProfiles := fs.String("prompt-profiles", "", "comma-separated built-in target prompt profiles; use all for every built-in profile")
+	candidateScope := fs.String("candidate-scope", "all", "matrix candidate scope: all, seed-only, or seed-plus-prompts")
 	prompt := fs.String("prompt", "", "inline prompt passed through SYNCFUZZ_PROMPT")
 	promptFile := fs.String("prompt-file", "", "optional shared prompt file")
 	command := fs.String("command", "", "target command to run inside the SyncFuzz workspace")
@@ -1385,6 +1389,7 @@ func targetSuite(args []string) {
 		Tasks:            tasks,
 		TaskGroups:       groups,
 		SeedIDs:          seeds,
+		CandidateScope:   scheduler.TargetCandidateScope(*candidateScope),
 		Objective:        *objective,
 		PromptProfileID:  *promptProfile,
 		PromptProfileIDs: profileIDs,
@@ -1513,6 +1518,7 @@ func targetCampaign(args []string) {
 	objective := fs.String("objective", "", "optional shared objective override")
 	promptProfile := fs.String("prompt-profile", "", "single built-in target prompt profile")
 	promptProfiles := fs.String("prompt-profiles", "", "comma-separated built-in target prompt profiles; use all for every built-in profile")
+	candidateScope := fs.String("candidate-scope", "all", "matrix candidate scope: all, seed-only, or seed-plus-prompts")
 	prompt := fs.String("prompt", "", "inline prompt passed through SYNCFUZZ_PROMPT")
 	promptFile := fs.String("prompt-file", "", "optional shared prompt file")
 	command := fs.String("command", "", "target command to run inside the SyncFuzz workspace")
@@ -1549,6 +1555,7 @@ func targetCampaign(args []string) {
 		Tasks:                tasks,
 		TaskGroups:           groups,
 		SeedIDs:              seeds,
+		CandidateScope:       scheduler.TargetCandidateScope(*candidateScope),
 		Objective:            *objective,
 		PromptProfileID:      *promptProfile,
 		PromptProfileIDs:     profileIDs,
@@ -1590,6 +1597,9 @@ func targetCampaign(args []string) {
 	}
 	if len(result.SeedIDs) > 0 {
 		fmt.Printf("seed_ids: %s\n", strings.Join(result.SeedIDs, ","))
+	}
+	if result.CandidateScope != "" {
+		fmt.Printf("candidate_scope: %s\n", result.CandidateScope)
 	}
 	fmt.Printf("candidate_limit: %d\n", result.CandidateLimit)
 	if result.SelectionPolicy != "" {

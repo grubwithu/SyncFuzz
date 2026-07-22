@@ -105,6 +105,7 @@ func summarizeTargetCoverageFrontier(
 	gaps := targetMissingDimensionValues(summarizeTargetDimensionCoverage(matrix.Candidates, results))
 	state := newTargetExplorationStateFromCandidates(executedCandidates)
 	repair := newTargetPromptRepairFeedbackFromResults(candidateByID, results)
+	penalties := newTargetExecutionPenaltyFeedbackFromResults(candidateByID, results)
 	variantExpansion := newTargetVariantExpansionFeedbackFromResults(candidateByID, results)
 	expansion := newTargetSeedExpansionFeedbackFromResults(candidateByID, results)
 	sort.SliceStable(remaining, func(i, j int) bool {
@@ -114,12 +115,14 @@ func summarizeTargetCoverageFrontier(
 	out := make([]TargetFrontierCandidate, 0, minInt(limit, len(remaining)))
 	for len(remaining) > 0 && len(out) < limit {
 		bestIdx := 0
+		bestPenalty := targetExecutionPenaltyScore(remaining[0], penalties)
 		bestRepair := targetPromptRepairScore(remaining[0], repair)
 		bestVariantExpansion := targetVariantExpansionScore(remaining[0], variantExpansion)
 		bestExpansion := targetSeedExpansionScore(remaining[0], expansion)
 		bestGapScore := targetGapCoverageScore(remaining[0], gaps)
 		bestNovelty := state.noveltyScore(remaining[0])
 		for i := 1; i < len(remaining); i++ {
+			penalty := targetExecutionPenaltyScore(remaining[i], penalties)
 			repairScore := targetPromptRepairScore(remaining[i], repair)
 			variantExpansionScore := targetVariantExpansionScore(remaining[i], variantExpansion)
 			expansionScore := targetSeedExpansionScore(remaining[i], expansion)
@@ -127,6 +130,10 @@ func summarizeTargetCoverageFrontier(
 			novelty := state.noveltyScore(remaining[i])
 			better := false
 			switch {
+			case penalty < bestPenalty:
+				better = true
+			case penalty > bestPenalty:
+				better = false
 			case repairScore > bestRepair:
 				better = true
 			case repairScore < bestRepair:
@@ -152,6 +159,7 @@ func summarizeTargetCoverageFrontier(
 			}
 			if better {
 				bestIdx = i
+				bestPenalty = penalty
 				bestRepair = repairScore
 				bestVariantExpansion = variantExpansionScore
 				bestExpansion = expansionScore

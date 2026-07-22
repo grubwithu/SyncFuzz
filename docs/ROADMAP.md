@@ -344,7 +344,7 @@ Phase 5B 主线：
 - 把当前 `LangGraph` / `MAF` 已共享的 same-run portable scenario 继续扩展到更高价值 family，并让 `MAF` 进入同一套 `campaign / replay / verify / minimize`；
 - minimization 已从 prompt / execution-plan reduction 起步扩展到 concrete command line reduction、optional `Scenario IR component reduction`、component summary reduction、mutation provenance reduction、plant metadata reduction、impact-mode lifecycle / activation / oracle metadata reduction、fork activation message line reduction，并提供 `exact / semantic / impact` 三档 fidelity；下一步继续覆盖 semantic activation-command rewriting 与完整 lifecycle command rewriting；
 - target suite / campaign 已支持 `--selection-policy fixed|random|explore|feedback` 与 deterministic `--random-seed`，并把选择策略写入 suite / matrix / campaign artifact；这让 `random / fixed enumeration / feedback-guided / full SyncFuzz` 能在同一候选宇宙和预算下对照；
-- 把 replay / verify 的失败原因细化成 taxonomy，同时尽快实际跑完对照实验验证 feedback 的方法贡献。
+- 把 replay / verify 的失败原因细化成 taxonomy；已在 `docs/PHASE5B_STRATEGY.md` 冻结三组 post-calibration policy repeat：feedback 在该配置的 activation 与 coverage 指标上最高，但尚无统计显著性主张。两组 mutator ablation 同时表明完整 semantic-mutator scope 尚未在固定 16-run 预算下超过 seed-only / seed-plus-prompts；后续优先校准 mutation-family compliance，而不是扩大 catalog。
 
 Phase 5B 优先级重排：
 

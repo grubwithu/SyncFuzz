@@ -20,6 +20,7 @@ type TargetSuiteOptions struct {
 	Tasks             []string
 	TaskGroups        []string
 	SeedIDs           []string
+	CandidateScope    TargetCandidateScope
 	Objective         string
 	PromptProfileID   string
 	PromptProfileIDs  []string
@@ -158,6 +159,7 @@ type TargetSuiteResult struct {
 	Tasks                []string                         `json:"tasks"`
 	TaskGroups           []string                         `json:"task_groups,omitempty"`
 	SeedIDs              []string                         `json:"seed_ids,omitempty"`
+	CandidateScope       TargetCandidateScope             `json:"candidate_scope,omitempty"`
 	PromptProfiles       []string                         `json:"prompt_profiles,omitempty"`
 	TimeoutMillis        int64                            `json:"timeout_ms"`
 	ObserveDelayMs       int64                            `json:"observe_delay_ms"`
@@ -200,6 +202,7 @@ type TargetMatrixResult struct {
 	GeneratedAt        string                           `json:"generated_at"`
 	ScheduleMatrix     string                           `json:"schedule_matrix"`
 	PromptProfiles     []string                         `json:"prompt_profiles,omitempty"`
+	CandidateScope     TargetCandidateScope             `json:"candidate_scope,omitempty"`
 	TotalCandidates    int                              `json:"total_candidates"`
 	OriginalCandidates int                              `json:"original_candidates,omitempty"`
 	CandidateLimit     int                              `json:"candidate_limit,omitempty"`
@@ -265,6 +268,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 			TaskGroups:       opts.TaskGroups,
 			SeedIDs:          opts.SeedIDs,
 			PromptProfileIDs: target.TargetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs),
+			CandidateScope:   opts.CandidateScope,
 		})
 		if err != nil {
 			return nil, err
@@ -328,6 +332,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 	}
 	if matrix != nil {
 		result.PromptProfiles = append([]string{}, matrix.PromptProfiles...)
+		result.CandidateScope = matrix.CandidateScope
 		result.SeedIDs = append([]string{}, matrix.SeedIDs...)
 		result.TotalCandidates = matrix.TotalCandidates
 		result.OriginalCandidates = originalCandidateCount
@@ -418,6 +423,7 @@ func RunTargetSuite(ctx context.Context, opts TargetSuiteOptions) (*TargetSuiteR
 			GeneratedAt:        time.Now().UTC().Format(time.RFC3339Nano),
 			ScheduleMatrix:     result.ScheduleMatrix,
 			PromptProfiles:     append([]string{}, result.PromptProfiles...),
+			CandidateScope:     result.CandidateScope,
 			TotalCandidates:    result.TotalCandidates,
 			OriginalCandidates: result.OriginalCandidates,
 			CandidateLimit:     result.CandidateLimit,

@@ -87,7 +87,7 @@ func TestSummarizeTargetCoverageFrontierHonorsExcludedCandidates(t *testing.T) {
 	}
 }
 
-func TestSummarizeTargetCoverageFrontierUsesPromptRepairForUnactivatedTask(t *testing.T) {
+func TestSummarizeTargetCoverageFrontierDoesNotRepairExecutionNotReached(t *testing.T) {
 	matrix := &TargetScheduleMatrix{
 		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
 		TargetID:      "test-target",
@@ -111,14 +111,14 @@ func TestSummarizeTargetCoverageFrontierUsesPromptRepairForUnactivatedTask(t *te
 	if len(frontier) != 2 {
 		t.Fatalf("expected 2 frontier candidates, got %#v", frontier)
 	}
-	if frontier[0].TaskID != "task-a" || frontier[0].PromptProfileID != target.TargetPromptProfileWorkflowID {
-		t.Fatalf("expected prompt-repair frontier candidate first, got %#v", frontier[0])
+	if frontier[0].TaskID != "task-b" || frontier[0].PromptProfileID != target.TargetPromptProfileBaselineID {
+		t.Fatalf("expected novel task before an execution-not-reached retry, got %#v", frontier[0])
 	}
-	if frontier[0].SelectionMode != targetFrontierSelectionPromptRepair {
-		t.Fatalf("expected prompt-repair selection mode, got %#v", frontier[0])
+	if frontier[0].SelectionMode == targetFrontierSelectionPromptRepair {
+		t.Fatalf("execution-not-reached must not become a prompt-repair frontier signal: %#v", frontier[0])
 	}
-	if frontier[1].TaskID != "task-b" {
-		t.Fatalf("expected remaining candidate second, got %#v", frontier[1])
+	if frontier[1].TaskID != "task-a" || frontier[1].PromptProfileID != target.TargetPromptProfileWorkflowID {
+		t.Fatalf("expected alternate prompt after novel task expansion, got %#v", frontier[1])
 	}
 }
 

@@ -19,6 +19,7 @@ type TargetCampaignOptions struct {
 	Tasks                []string
 	TaskGroups           []string
 	SeedIDs              []string
+	CandidateScope       TargetCandidateScope
 	Objective            string
 	PromptProfileID      string
 	PromptProfileIDs     []string
@@ -104,6 +105,7 @@ type TargetCampaignResult struct {
 	Tasks                []string                            `json:"tasks,omitempty"`
 	TaskGroups           []string                            `json:"task_groups,omitempty"`
 	SeedIDs              []string                            `json:"seed_ids,omitempty"`
+	CandidateScope       TargetCandidateScope                `json:"candidate_scope,omitempty"`
 	PromptProfiles       []string                            `json:"prompt_profiles,omitempty"`
 	TotalSuites          int                                 `json:"total_suites"`
 	TotalRuns            int                                 `json:"total_runs"`
@@ -196,6 +198,7 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 		Tasks:                append([]string{}, opts.Tasks...),
 		TaskGroups:           append([]string{}, opts.TaskGroups...),
 		SeedIDs:              append([]string{}, opts.SeedIDs...),
+		CandidateScope:       opts.CandidateScope,
 		PromptProfiles:       append([]string{}, target.TargetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs)...),
 		PivotHistory:         []TargetCampaignPivotEvent{},
 		RoundResults:         []TargetCampaignRoundResult{},
@@ -225,6 +228,7 @@ func RunTargetCampaign(ctx context.Context, opts TargetCampaignOptions) (*Target
 			Tasks:             runningOpts.Tasks,
 			TaskGroups:        runningOpts.TaskGroups,
 			SeedIDs:           runningOpts.SeedIDs,
+			CandidateScope:    runningOpts.CandidateScope,
 			Objective:         runningOpts.Objective,
 			PromptProfileID:   runningOpts.PromptProfileID,
 			PromptProfileIDs:  runningOpts.PromptProfileIDs,
@@ -362,6 +366,7 @@ func buildTargetCampaignUniverse(opts TargetCampaignOptions) (*TargetScheduleMat
 		Tasks:            opts.Tasks,
 		TaskGroups:       opts.TaskGroups,
 		SeedIDs:          opts.SeedIDs,
+		CandidateScope:   opts.CandidateScope,
 		PromptProfileIDs: target.TargetPromptProfileSelection(opts.PromptProfileID, opts.PromptProfileIDs),
 	})
 }

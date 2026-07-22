@@ -61,10 +61,18 @@ type targetExplorationState struct {
 }
 
 type targetPromptRepairFeedback struct {
-	taskScores        map[string]int
+	contextScores     map[string]int
 	preferredVariants map[string]string
 	seenRealizations  map[string]map[string]struct{}
 	selected          map[string]struct{}
+}
+
+// targetExecutionPenaltyFeedback carries historical evidence that a scenario
+// did not reach a trustworthy execution. Unlike prompt repair feedback, this
+// is negative evidence: alternate prompt variants of that scenario should be
+// deferred until unexplored scenarios have had a chance to run.
+type targetExecutionPenaltyFeedback struct {
+	contextPenalties map[string]int
 }
 
 type targetVariantExpansionContext struct {
@@ -135,7 +143,7 @@ func selectTargetMatrixCandidates(matrix *TargetScheduleMatrix, opts TargetFeedb
 	case len(summaryByCandidate) > 0:
 		candidates = orderTargetFeedbackCandidates(candidates, summaryByCandidate, dimensionCoverage)
 	default:
-		candidates = orderTargetExplorationCandidates(candidates, nil, nil, nil)
+		candidates = orderTargetExplorationCandidates(candidates, nil, nil, nil, nil)
 	}
 	if opts.Limit > 0 && len(candidates) > opts.Limit {
 		candidates = candidates[:opts.Limit]
@@ -264,12 +272,13 @@ func orderTargetFeedbackCandidates(candidates []TargetScheduleCandidate, summary
 	})
 	gaps := targetMissingDimensionValues(dimensionCoverage)
 	repair := newTargetPromptRepairFeedback(summaryByCandidate)
+	penalties := newTargetExecutionPenaltyFeedback(summaryByCandidate)
 	variantExpansion := newTargetVariantExpansionFeedback(summaryByCandidate)
 	expansion := newTargetSeedExpansionFeedback(summaryByCandidate)
 	if len(gaps) > 0 {
-		unranked = orderTargetGapCandidates(unranked, gaps, repair, variantExpansion, expansion)
+		unranked = orderTargetGapCandidates(unranked, gaps, repair, penalties, variantExpansion, expansion)
 	} else {
-		unranked = orderTargetExplorationCandidates(unranked, repair, variantExpansion, expansion)
+		unranked = orderTargetExplorationCandidates(unranked, repair, penalties, variantExpansion, expansion)
 	}
 	return append(ranked, unranked...)
 }
@@ -294,7 +303,7 @@ func targetMissingDimensionValues(summaries []TargetDimensionCoverageSummary) ta
 	return gaps
 }
 
-func orderTargetGapCandidates(candidates []TargetScheduleCandidate, gaps targetDimensionGapSet, repair *targetPromptRepairFeedback, variantExpansion *targetVariantExpansionFeedback, expansion *targetSeedExpansionFeedback) []TargetScheduleCandidate {
+func orderTargetGapCandidates(candidates []TargetScheduleCandidate, gaps targetDimensionGapSet, repair *targetPromptRepairFeedback, penalties *targetExecutionPenaltyFeedback, variantExpansion *targetVariantExpansionFeedback, expansion *targetSeedExpansionFeedback) []TargetScheduleCandidate {
 	if len(candidates) <= 1 {
 		return append([]TargetScheduleCandidate{}, candidates...)
 	}
@@ -309,12 +318,14 @@ func orderTargetGapCandidates(candidates []TargetScheduleCandidate, gaps targetD
 
 	for len(remaining) > 0 {
 		bestIdx := 0
+		bestPenalty := targetExecutionPenaltyScore(remaining[0], penalties)
 		bestRepair := targetPromptRepairScore(remaining[0], repair)
 		bestVariantExpansion := targetVariantExpansionScore(remaining[0], variantExpansion)
 		bestExpansion := targetSeedExpansionScore(remaining[0], expansion)
 		bestGapScore := targetGapCoverageScore(remaining[0], gaps)
 		bestNovelty := state.noveltyScore(remaining[0])
 		for i := 1; i < len(remaining); i++ {
+			penalty := targetExecutionPenaltyScore(remaining[i], penalties)
 			repairScore := targetPromptRepairScore(remaining[i], repair)
 			variantExpansionScore := targetVariantExpansionScore(remaining[i], variantExpansion)
 			expansionScore := targetSeedExpansionScore(remaining[i], expansion)
@@ -322,6 +333,10 @@ func orderTargetGapCandidates(candidates []TargetScheduleCandidate, gaps targetD
 			novelty := state.noveltyScore(remaining[i])
 			better := false
 			switch {
+			case penalty < bestPenalty:
+				better = true
+			case penalty > bestPenalty:
+				better = false
 			case repairScore > bestRepair:
 				better = true
 			case repairScore < bestRepair:
@@ -347,6 +362,7 @@ func orderTargetGapCandidates(candidates []TargetScheduleCandidate, gaps targetD
 			}
 			if better {
 				bestIdx = i
+				bestPenalty = penalty
 				bestRepair = repairScore
 				bestVariantExpansion = variantExpansionScore
 				bestExpansion = expansionScore
@@ -471,7 +487,7 @@ func targetDimensionGapWeight(dimension string) int {
 	}
 }
 
-func orderTargetExplorationCandidates(candidates []TargetScheduleCandidate, repair *targetPromptRepairFeedback, variantExpansion *targetVariantExpansionFeedback, expansion *targetSeedExpansionFeedback) []TargetScheduleCandidate {
+func orderTargetExplorationCandidates(candidates []TargetScheduleCandidate, repair *targetPromptRepairFeedback, penalties *targetExecutionPenaltyFeedback, variantExpansion *targetVariantExpansionFeedback, expansion *targetSeedExpansionFeedback) []TargetScheduleCandidate {
 	if len(candidates) <= 1 {
 		return append([]TargetScheduleCandidate{}, candidates...)
 	}
@@ -486,17 +502,23 @@ func orderTargetExplorationCandidates(candidates []TargetScheduleCandidate, repa
 
 	for len(remaining) > 0 {
 		bestIdx := 0
+		bestPenalty := targetExecutionPenaltyScore(remaining[0], penalties)
 		bestRepair := targetPromptRepairScore(remaining[0], repair)
 		bestVariantExpansion := targetVariantExpansionScore(remaining[0], variantExpansion)
 		bestExpansion := targetSeedExpansionScore(remaining[0], expansion)
 		bestScore := state.noveltyScore(remaining[0])
 		for i := 1; i < len(remaining); i++ {
+			penalty := targetExecutionPenaltyScore(remaining[i], penalties)
 			repairScore := targetPromptRepairScore(remaining[i], repair)
 			variantExpansionScore := targetVariantExpansionScore(remaining[i], variantExpansion)
 			expansionScore := targetSeedExpansionScore(remaining[i], expansion)
 			score := state.noveltyScore(remaining[i])
 			better := false
 			switch {
+			case penalty < bestPenalty:
+				better = true
+			case penalty > bestPenalty:
+				better = false
 			case repairScore > bestRepair:
 				better = true
 			case repairScore < bestRepair:
@@ -518,6 +540,7 @@ func orderTargetExplorationCandidates(candidates []TargetScheduleCandidate, repa
 			}
 			if better {
 				bestIdx = i
+				bestPenalty = penalty
 				bestRepair = repairScore
 				bestVariantExpansion = variantExpansionScore
 				bestExpansion = expansionScore
@@ -929,18 +952,19 @@ func newTargetPromptRepairFeedback(summaryByCandidate map[string]TargetCandidate
 		activationReached     int
 		repairScore           int
 	}
-	tasks := make(map[string]*taskState)
+	contexts := make(map[string]*taskState)
 	for _, summary := range summaryByCandidate {
 		if summary.TaskID == "" {
 			continue
 		}
-		state := tasks[summary.TaskID]
+		contextID := targetPromptRepairContextID(summary.TaskID, summary.ScenarioID)
+		state := contexts[contextID]
 		if state == nil {
 			state = &taskState{
 				seenRealizations:      make(map[string]struct{}),
 				preferredVariantScore: make(map[string]int),
 			}
-			tasks[summary.TaskID] = state
+			contexts[contextID] = state
 		}
 		state.seenRealizations[targetPromptRepairRealizationID(summary.PromptProfileID, summary.PromptVariantID)] = struct{}{}
 		state.activationReached += summary.ActivationReached
@@ -972,20 +996,20 @@ func newTargetPromptRepairFeedback(summaryByCandidate map[string]TargetCandidate
 	}
 
 	feedback := &targetPromptRepairFeedback{
-		taskScores:        make(map[string]int),
+		contextScores:     make(map[string]int),
 		preferredVariants: make(map[string]string),
 		seenRealizations:  make(map[string]map[string]struct{}),
 		selected:          make(map[string]struct{}),
 	}
-	for taskID, state := range tasks {
+	for contextID, state := range contexts {
 		if state.activationReached > 0 || state.repairScore <= 0 {
 			continue
 		}
-		feedback.taskScores[taskID] = state.repairScore
-		feedback.preferredVariants[taskID] = targetPromptRepairPreferredVariant(state.preferredVariantScore)
-		feedback.seenRealizations[taskID] = state.seenRealizations
+		feedback.contextScores[contextID] = state.repairScore
+		feedback.preferredVariants[contextID] = targetPromptRepairPreferredVariant(state.preferredVariantScore)
+		feedback.seenRealizations[contextID] = state.seenRealizations
 	}
-	if len(feedback.taskScores) == 0 {
+	if len(feedback.contextScores) == 0 {
 		return nil
 	}
 	return feedback
@@ -1001,14 +1025,18 @@ func newTargetPromptRepairFeedbackFromResults(candidateByID map[string]TargetSch
 		activationReached     int
 		repairScore           int
 	}
-	tasks := make(map[string]*taskState)
+	contexts := make(map[string]*taskState)
 	for _, result := range results {
 		taskID := result.TaskID
+		scenarioID := result.ScenarioID
 		profileID := result.PromptProfileID
 		variantID := result.PromptVariantID
 		if candidate, ok := candidateByID[result.CandidateID]; ok {
 			if taskID == "" {
 				taskID = candidate.TaskID
+			}
+			if scenarioID == "" {
+				scenarioID = candidate.ScenarioID
 			}
 			if profileID == "" {
 				profileID = candidate.PromptProfileID
@@ -1020,13 +1048,14 @@ func newTargetPromptRepairFeedbackFromResults(candidateByID map[string]TargetSch
 		if taskID == "" {
 			continue
 		}
-		state := tasks[taskID]
+		contextID := targetPromptRepairContextID(taskID, scenarioID)
+		state := contexts[contextID]
 		if state == nil {
 			state = &taskState{
 				seenRealizations:      make(map[string]struct{}),
 				preferredVariantScore: make(map[string]int),
 			}
-			tasks[taskID] = state
+			contexts[contextID] = state
 		}
 		state.seenRealizations[targetPromptRepairRealizationID(profileID, variantID)] = struct{}{}
 		if result.ActivationStage == TargetActivationStageActivationReached {
@@ -1045,20 +1074,20 @@ func newTargetPromptRepairFeedbackFromResults(candidateByID map[string]TargetSch
 	}
 
 	feedback := &targetPromptRepairFeedback{
-		taskScores:        make(map[string]int),
+		contextScores:     make(map[string]int),
 		preferredVariants: make(map[string]string),
 		seenRealizations:  make(map[string]map[string]struct{}),
 		selected:          make(map[string]struct{}),
 	}
-	for taskID, state := range tasks {
+	for contextID, state := range contexts {
 		if state.activationReached > 0 || state.repairScore <= 0 {
 			continue
 		}
-		feedback.taskScores[taskID] = state.repairScore
-		feedback.preferredVariants[taskID] = targetPromptRepairPreferredVariant(state.preferredVariantScore)
-		feedback.seenRealizations[taskID] = state.seenRealizations
+		feedback.contextScores[contextID] = state.repairScore
+		feedback.preferredVariants[contextID] = targetPromptRepairPreferredVariant(state.preferredVariantScore)
+		feedback.seenRealizations[contextID] = state.seenRealizations
 	}
-	if len(feedback.taskScores) == 0 {
+	if len(feedback.contextScores) == 0 {
 		return nil
 	}
 	return feedback
@@ -1066,10 +1095,6 @@ func newTargetPromptRepairFeedbackFromResults(candidateByID map[string]TargetSch
 
 func targetPromptRepairOutcomeWeight(category corpus.TargetObservationCategory) int {
 	switch category {
-	case corpus.TargetObservationExecutionNotReached:
-		return 8
-	case corpus.TargetObservationTaskNoncompliant:
-		return 7
 	case corpus.TargetObservationLifecycleNotTriggered:
 		return 5
 	case corpus.TargetObservationStateNotPlanted:
@@ -1098,10 +1123,6 @@ func targetPromptRepairVariantForOutcome(category corpus.TargetObservationCatego
 
 func targetPromptRepairCategoryForStage(stage TargetActivationStage) corpus.TargetObservationCategory {
 	switch stage {
-	case TargetActivationStageExecutionPending:
-		return corpus.TargetObservationExecutionNotReached
-	case TargetActivationStageTaskNoncompliant:
-		return corpus.TargetObservationTaskNoncompliant
 	case TargetActivationStageLifecyclePending:
 		return corpus.TargetObservationLifecycleNotTriggered
 	case TargetActivationStageStateNotPlanted:
@@ -1129,18 +1150,19 @@ func targetPromptRepairScore(candidate TargetScheduleCandidate, feedback *target
 	if feedback == nil || candidate.TaskID == "" {
 		return 0
 	}
-	if _, ok := feedback.selected[candidate.TaskID]; ok {
+	contextID := targetPromptRepairContextID(candidate.TaskID, candidate.ScenarioID)
+	if _, ok := feedback.selected[contextID]; ok {
 		return 0
 	}
-	score, ok := feedback.taskScores[candidate.TaskID]
+	score, ok := feedback.contextScores[contextID]
 	if !ok || score <= 0 {
 		return 0
 	}
-	seenRealizations := feedback.seenRealizations[candidate.TaskID]
+	seenRealizations := feedback.seenRealizations[contextID]
 	if _, ok := seenRealizations[targetPromptRepairRealizationID(candidate.PromptProfileID, candidate.PromptVariantID)]; ok {
 		return 0
 	}
-	if target.NormalizeTargetPromptVariantID(candidate.PromptVariantID) == feedback.preferredVariants[candidate.TaskID] {
+	if target.NormalizeTargetPromptVariantID(candidate.PromptVariantID) == feedback.preferredVariants[contextID] {
 		score += 3
 	}
 	return score
@@ -1150,7 +1172,7 @@ func targetPromptRepairPreferredVariantForCandidate(candidate TargetScheduleCand
 	if feedback == nil || candidate.TaskID == "" {
 		return ""
 	}
-	variantID := feedback.preferredVariants[candidate.TaskID]
+	variantID := feedback.preferredVariants[targetPromptRepairContextID(candidate.TaskID, candidate.ScenarioID)]
 	if variantID == "" || target.NormalizeTargetPromptVariantID(candidate.PromptVariantID) != variantID {
 		return ""
 	}
@@ -1164,7 +1186,92 @@ func targetConsumePromptRepair(feedback *targetPromptRepairFeedback, candidate T
 	if targetPromptRepairScore(candidate, feedback) <= 0 {
 		return
 	}
-	feedback.selected[candidate.TaskID] = struct{}{}
+	feedback.selected[targetPromptRepairContextID(candidate.TaskID, candidate.ScenarioID)] = struct{}{}
+}
+
+// targetPromptRepairContextID confines repair feedback to one executable
+// scenario. A task can host several mutated scenarios; a noncompliant prompt
+// for one must not cause the scheduler to spend another scenario's budget on
+// an unrelated alternate prompt.
+func targetPromptRepairContextID(taskID string, scenarioID string) string {
+	if scenarioID == "" {
+		return taskID
+	}
+	return taskID + "\x00" + scenarioID
+}
+
+func newTargetExecutionPenaltyFeedback(summaryByCandidate map[string]TargetCandidateSummary) *targetExecutionPenaltyFeedback {
+	if len(summaryByCandidate) == 0 {
+		return nil
+	}
+	feedback := &targetExecutionPenaltyFeedback{contextPenalties: make(map[string]int)}
+	for _, summary := range summaryByCandidate {
+		contextID := targetPromptRepairContextID(summary.TaskID, summary.ScenarioID)
+		penalty := targetCandidateExecutionPenalty(summary)
+		if penalty > feedback.contextPenalties[contextID] {
+			feedback.contextPenalties[contextID] = penalty
+		}
+	}
+	if len(feedback.contextPenalties) == 0 {
+		return nil
+	}
+	return feedback
+}
+
+func newTargetExecutionPenaltyFeedbackFromResults(candidateByID map[string]TargetScheduleCandidate, results []TargetSuiteRunResult) *targetExecutionPenaltyFeedback {
+	if len(results) == 0 {
+		return nil
+	}
+	feedback := &targetExecutionPenaltyFeedback{contextPenalties: make(map[string]int)}
+	for _, result := range results {
+		taskID := result.TaskID
+		scenarioID := result.ScenarioID
+		if candidate, ok := candidateByID[result.CandidateID]; ok {
+			if taskID == "" {
+				taskID = candidate.TaskID
+			}
+			if scenarioID == "" {
+				scenarioID = candidate.ScenarioID
+			}
+		}
+		if taskID == "" {
+			continue
+		}
+		penalty := 0
+		switch result.OutcomeCategory {
+		case corpus.TargetObservationTaskNoncompliant:
+			penalty = 16
+		case corpus.TargetObservationExecutionNotReached:
+			penalty = 12
+		}
+		if penalty == 0 {
+			continue
+		}
+		contextID := targetPromptRepairContextID(taskID, scenarioID)
+		if penalty > feedback.contextPenalties[contextID] {
+			feedback.contextPenalties[contextID] = penalty
+		}
+	}
+	if len(feedback.contextPenalties) == 0 {
+		return nil
+	}
+	return feedback
+}
+
+func targetCandidateExecutionPenalty(summary TargetCandidateSummary) int {
+	taskNoncompliant := targetCandidateOutcomeCount(summary, corpus.TargetObservationTaskNoncompliant)
+	if summary.ComplianceViolated > taskNoncompliant {
+		taskNoncompliant = summary.ComplianceViolated
+	}
+	executionNotReached := targetCandidateOutcomeCount(summary, corpus.TargetObservationExecutionNotReached)
+	return taskNoncompliant*16 + executionNotReached*12
+}
+
+func targetExecutionPenaltyScore(candidate TargetScheduleCandidate, feedback *targetExecutionPenaltyFeedback) int {
+	if feedback == nil {
+		return 0
+	}
+	return feedback.contextPenalties[targetPromptRepairContextID(candidate.TaskID, candidate.ScenarioID)]
 }
 
 func targetPromptRepairRealizationID(promptProfileID string, promptVariantID string) string {

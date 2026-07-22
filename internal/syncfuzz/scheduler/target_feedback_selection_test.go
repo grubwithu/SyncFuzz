@@ -239,7 +239,7 @@ func TestSelectTargetMatrixCandidatesUsesCoverageGapsToPrioritizeUnseenCandidate
 	}
 }
 
-func TestSelectTargetMatrixCandidatesUsesPromptRepairBeforeNewTaskExpansion(t *testing.T) {
+func TestSelectTargetMatrixCandidatesDoesNotRepairExecutionNotReached(t *testing.T) {
 	matrix := &TargetScheduleMatrix{
 		SchemaVersion: "syncfuzz.target-schedule-matrix.v1",
 		TargetID:      "test-target",
@@ -279,11 +279,69 @@ func TestSelectTargetMatrixCandidatesUsesPromptRepairBeforeNewTaskExpansion(t *t
 	if len(selected.Candidates) != 2 {
 		t.Fatalf("expected 2 selected candidates, got %d", len(selected.Candidates))
 	}
-	if selected.Candidates[0].TaskID != "task-a" || selected.Candidates[0].PromptProfileID != target.TargetPromptProfileWorkflowID {
-		t.Fatalf("expected prompt repair candidate first, got task=%q profile=%q", selected.Candidates[0].TaskID, selected.Candidates[0].PromptProfileID)
+	if selected.Candidates[0].TaskID != "task-b" || selected.Candidates[0].PromptProfileID != target.TargetPromptProfileBaselineID {
+		t.Fatalf("expected new task before an execution-not-reached retry, got task=%q profile=%q", selected.Candidates[0].TaskID, selected.Candidates[0].PromptProfileID)
 	}
-	if selected.Candidates[1].TaskID != "task-b" || selected.Candidates[1].PromptProfileID != target.TargetPromptProfileBaselineID {
-		t.Fatalf("expected new task expansion second, got task=%q profile=%q", selected.Candidates[1].TaskID, selected.Candidates[1].PromptProfileID)
+	if selected.Candidates[1].TaskID != "task-a" || selected.Candidates[1].PromptProfileID != target.TargetPromptProfileWorkflowID {
+		t.Fatalf("expected alternate prompt only after exploration, got task=%q profile=%q", selected.Candidates[1].TaskID, selected.Candidates[1].PromptProfileID)
+	}
+}
+
+func TestPromptRepairDoesNotLeakAcrossMutatedScenarios(t *testing.T) {
+	feedback := newTargetPromptRepairFeedback(map[string]TargetCandidateSummary{
+		"drift": {
+			TaskID:     "task-a",
+			ScenarioID: "scenario-drift",
+			OutcomeSummaries: []TargetSuiteOutcomeStats{
+				{Category: corpus.TargetObservationTaskNoncompliant, TotalRuns: 1},
+			},
+		},
+		"repairable": {
+			TaskID:     "task-a",
+			ScenarioID: "scenario-repairable",
+			OutcomeSummaries: []TargetSuiteOutcomeStats{
+				{Category: corpus.TargetObservationLifecycleNotTriggered, TotalRuns: 1},
+			},
+		},
+	})
+	if feedback == nil {
+		t.Fatal("expected lifecycle outcome to create scoped repair feedback")
+	}
+
+	drift := testTargetScheduleCandidate("task-a", target.TargetPromptProfileWorkflowID)
+	drift.ScenarioID = "scenario-drift"
+	if score := targetPromptRepairScore(drift, feedback); score != 0 {
+		t.Fatalf("task-noncompliant scenario must not trigger prompt repair: %d", score)
+	}
+	repairable := drift
+	repairable.ScenarioID = "scenario-repairable"
+	if score := targetPromptRepairScore(repairable, feedback); score <= 0 {
+		t.Fatalf("repairable scenario should retain its own feedback: %d", score)
+	}
+}
+
+func TestExecutionPenaltyIsScopedToTheFailedScenario(t *testing.T) {
+	penalties := newTargetExecutionPenaltyFeedback(map[string]TargetCandidateSummary{
+		"failed": {
+			TaskID:     "task-a",
+			ScenarioID: "scenario-failed",
+			OutcomeSummaries: []TargetSuiteOutcomeStats{
+				{Category: corpus.TargetObservationTaskNoncompliant, TotalRuns: 1},
+			},
+		},
+	})
+	if penalties == nil {
+		t.Fatal("expected noncompliant scenario to create an execution penalty")
+	}
+	failedSibling := testTargetScheduleCandidate("task-a", target.TargetPromptProfileWorkflowID)
+	failedSibling.ScenarioID = "scenario-failed"
+	if score := targetExecutionPenaltyScore(failedSibling, penalties); score <= 0 {
+		t.Fatalf("failed scenario sibling should be demoted: %d", score)
+	}
+	unseenScenario := failedSibling
+	unseenScenario.ScenarioID = "scenario-unseen"
+	if score := targetExecutionPenaltyScore(unseenScenario, penalties); score != 0 {
+		t.Fatalf("penalty must not leak to a distinct scenario: %d", score)
 	}
 }
 

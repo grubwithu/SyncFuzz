@@ -87,6 +87,48 @@ func TestBuildTargetScheduleMatrixExpandsSeeds(t *testing.T) {
 	}
 }
 
+func TestBuildTargetScheduleMatrixScopesGeneratedCandidates(t *testing.T) {
+	base := TargetMatrixOptions{
+		TargetID: "langgraph-shell-react",
+		SeedIDs:  []string{"shell-path-residue"},
+	}
+	all, err := BuildTargetScheduleMatrix(base)
+	if err != nil {
+		t.Fatalf("build full matrix: %v", err)
+	}
+	if all.CandidateScope != TargetCandidateScopeAll {
+		t.Fatalf("expected default all scope, got %q", all.CandidateScope)
+	}
+
+	base.CandidateScope = TargetCandidateScopeSeedOnly
+	seedOnly, err := BuildTargetScheduleMatrix(base)
+	if err != nil {
+		t.Fatalf("build seed-only matrix: %v", err)
+	}
+	if seedOnly.TotalCandidates == 0 || seedOnly.TotalCandidates >= all.TotalCandidates {
+		t.Fatalf("seed-only scope should retain fewer candidates: seed-only=%d all=%d", seedOnly.TotalCandidates, all.TotalCandidates)
+	}
+	for _, candidate := range seedOnly.Candidates {
+		if candidate.Generated {
+			t.Fatalf("seed-only scope retained generated candidate: %#v", candidate)
+		}
+	}
+
+	base.CandidateScope = TargetCandidateScopeSeedPlusPrompts
+	promptOnly, err := BuildTargetScheduleMatrix(base)
+	if err != nil {
+		t.Fatalf("build seed-plus-prompts matrix: %v", err)
+	}
+	if promptOnly.TotalCandidates <= seedOnly.TotalCandidates || promptOnly.TotalCandidates >= all.TotalCandidates {
+		t.Fatalf("expected prompt-only scope between seed-only and all: seed-only=%d prompt-only=%d all=%d", seedOnly.TotalCandidates, promptOnly.TotalCandidates, all.TotalCandidates)
+	}
+	for _, candidate := range promptOnly.Candidates {
+		if candidate.Generated && target.NormalizeTargetPromptVariantID(candidate.PromptVariantID) == target.TargetPromptVariantBaseID {
+			t.Fatalf("seed-plus-prompts scope retained semantic candidate: %#v", candidate)
+		}
+	}
+}
+
 func TestBuildTargetScheduleMatrixAddsMutationFocusDerivedCandidates(t *testing.T) {
 	matrix, err := BuildTargetScheduleMatrix(TargetMatrixOptions{
 		TargetID: "langgraph-shell-react",

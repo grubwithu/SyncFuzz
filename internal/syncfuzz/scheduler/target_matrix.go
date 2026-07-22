@@ -15,7 +15,19 @@ type TargetMatrixOptions struct {
 	TaskGroups       []string
 	SeedIDs          []string
 	PromptProfileIDs []string
+	CandidateScope   TargetCandidateScope
 }
+
+// TargetCandidateScope controls which parts of the generated target matrix
+// are eligible for an experiment. It makes seed-only and semantic-mutation
+// ablations reproducible without changing the underlying seed selection.
+type TargetCandidateScope string
+
+const (
+	TargetCandidateScopeAll             TargetCandidateScope = "all"
+	TargetCandidateScopeSeedOnly        TargetCandidateScope = "seed-only"
+	TargetCandidateScopeSeedPlusPrompts TargetCandidateScope = "seed-plus-prompts"
+)
 
 type TargetScheduleCandidate struct {
 	CandidateID              string                              `json:"candidate_id"`
@@ -65,11 +77,16 @@ type TargetScheduleMatrix struct {
 	TaskGroups      []string                  `json:"task_groups,omitempty"`
 	SeedIDs         []string                  `json:"seed_ids,omitempty"`
 	PromptProfiles  []string                  `json:"prompt_profiles,omitempty"`
+	CandidateScope  TargetCandidateScope      `json:"candidate_scope"`
 	TotalCandidates int                       `json:"total_candidates"`
 	Candidates      []TargetScheduleCandidate `json:"candidates"`
 }
 
 func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix, error) {
+	candidateScope, err := normalizeTargetCandidateScope(opts.CandidateScope)
+	if err != nil {
+		return nil, err
+	}
 	targetID := strings.TrimSpace(opts.TargetID)
 	if targetID == "" {
 		targetID = target.DefaultTargetAdapterID
@@ -79,7 +96,6 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 		tasks      []string
 		taskGroups []string
 		seedIDs    []string
-		err        error
 	)
 	if len(opts.Tasks) == 0 && len(opts.TaskGroups) == 0 && len(opts.SeedIDs) == 0 {
 		tasks = allTargetTaskIDs()
@@ -207,6 +223,7 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 		}
 	}
 
+	candidates = targetFilterCandidatesByScope(candidates, candidateScope)
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].CandidateID < candidates[j].CandidateID
 	})
@@ -217,9 +234,40 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 		TaskGroups:      append([]string{}, taskGroups...),
 		SeedIDs:         append([]string{}, seedIDs...),
 		PromptProfiles:  targetPromptProfileIDs(promptProfiles),
+		CandidateScope:  candidateScope,
 		TotalCandidates: len(candidates),
 		Candidates:      candidates,
 	}, nil
+}
+
+func normalizeTargetCandidateScope(scope TargetCandidateScope) (TargetCandidateScope, error) {
+	normalized := TargetCandidateScope(strings.TrimSpace(string(scope)))
+	if normalized == "" {
+		return TargetCandidateScopeAll, nil
+	}
+	switch normalized {
+	case TargetCandidateScopeAll, TargetCandidateScopeSeedOnly, TargetCandidateScopeSeedPlusPrompts:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("unknown target candidate scope %q; expected all, seed-only, or seed-plus-prompts", scope)
+	}
+}
+
+func targetFilterCandidatesByScope(candidates []TargetScheduleCandidate, scope TargetCandidateScope) []TargetScheduleCandidate {
+	if scope == TargetCandidateScopeAll {
+		return candidates
+	}
+	out := make([]TargetScheduleCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		keep := !candidate.Generated
+		if scope == TargetCandidateScopeSeedPlusPrompts && candidate.Generated {
+			keep = target.NormalizeTargetPromptVariantID(candidate.PromptVariantID) != target.TargetPromptVariantBaseID
+		}
+		if keep {
+			out = append(out, candidate)
+		}
+	}
+	return out
 }
 
 func targetScheduleCandidateID(targetID string, taskID string, promptProfileID string) string {
