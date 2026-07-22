@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // CompilePlan applies a small, explicit dependency closure. V1 deliberately
@@ -169,5 +170,10 @@ func ValidatePlan(plan *ObservationPlan) error {
 	if len(plan.ProbePlans) == 0 {
 		return fmt.Errorf("observation plan requires at least one probe family")
 	}
+	if plan.ExpansionCount < 0 {
+		return fmt.Errorf("observation plan expansion_count must not be negative")
+	}
+	plan.LastExpansionSource = strings.TrimSpace(plan.LastExpansionSource)
+	plan.LastExpansionPaths = uniqueSortedStrings(plan.LastExpansionPaths)
 	return nil
 }

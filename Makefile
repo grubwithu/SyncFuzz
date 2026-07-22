@@ -56,6 +56,8 @@ TARGET_OBSERVATION_RUN ?=
 TARGET_FOOTPRINT ?=
 TARGET_OBSERVATION_PLAN ?=
 TARGET_OBSERVATION_MODE ?=
+TARGET_FALLBACK_REPORT ?=
+TARGET_REFINED_OBSERVATION_PLAN ?=
 EXPECT_FILES ?=
 
 # Phase 5B feedback experiment v3
@@ -152,7 +154,7 @@ SUITE_ARGS = --out $(OUT) --corpus $(CORPUS) --repeat $(REPEAT) --delay $(DELAY)
 CAMPAIGN_ARGS = --out $(OUT) --corpus $(CORPUS) --rounds $(ROUNDS) --repeat $(REPEAT) --delay $(DELAY) $(ENV_ARGS) $(CONTAINER_ARGS) $(CASE_ARGS) $(MOCK_ARGS) $(DIFFERENTIAL_ARGS) $(TIMING_ARGS) $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS)
 TARGET_RUN_ARGS = --out $(OUT) --timeout $(TARGET_TIMEOUT) --observe-delay $(TARGET_OBSERVE_DELAY) $(TARGET_LATE_OBSERVE_ARGS) $(TARGET_OBSERVATION_PLAN_ARGS) $(TARGET_OBSERVATION_MODE_ARGS) $(ENV_ARGS) $(CONTAINER_ARGS) $(TARGET_PROMPT_ARGS) $(TARGET_PROMPT_FILE_ARGS) $(TARGET_EXPECT_ARGS)
 
-.PHONY: help list fault-plans timing-profiles primitives matrix run-case run-pair run-mvp run-action run-authority run-shell run-fs run-branch run-suite run-diff-suite run-matrix-suite run-campaign target-list target-tasks target-seeds target-scenarios target-groups target-prompt-profiles target-footprint target-plan-probes target-matrix target-minimize target-run target-suite target-matrix-suite target-campaign target-langgraph-shell-react target-langgraph-shell-react-suite target-langgraph-shell-react-matrix-suite target-langgraph-shell-react-campaign target-langgraph-shell-react-check target-maf-github-copilot-shell target-maf-github-copilot-shell-suite target-maf-github-copilot-shell-matrix-suite target-maf-github-copilot-shell-campaign target-maf-github-copilot-shell-check target-maf-workflow-checkpoint target-maf-workflow-checkpoint-suite target-maf-workflow-checkpoint-check phase5b-v3-fixed phase5b-v3-random phase5b-v3-feedback phase5b-v3-full corpus-list corpus-analyze corpus-show corpus-verify replay test-go fmt-go mock-build mock-start
+.PHONY: help list fault-plans timing-profiles primitives matrix run-case run-pair run-mvp run-action run-authority run-shell run-fs run-branch run-suite run-diff-suite run-matrix-suite run-campaign target-list target-tasks target-seeds target-scenarios target-groups target-prompt-profiles target-footprint target-plan-probes target-refine-plan target-matrix target-minimize target-run target-suite target-matrix-suite target-campaign target-langgraph-shell-react target-langgraph-shell-react-suite target-langgraph-shell-react-matrix-suite target-langgraph-shell-react-campaign target-langgraph-shell-react-check target-maf-github-copilot-shell target-maf-github-copilot-shell-suite target-maf-github-copilot-shell-matrix-suite target-maf-github-copilot-shell-campaign target-maf-github-copilot-shell-check target-maf-workflow-checkpoint target-maf-workflow-checkpoint-suite target-maf-workflow-checkpoint-check phase5b-v3-fixed phase5b-v3-random phase5b-v3-feedback phase5b-v3-full corpus-list corpus-analyze corpus-show corpus-verify replay test-go fmt-go mock-build mock-start
 
 help:
 	@echo "SyncFuzz targets:"
@@ -229,6 +231,7 @@ help:
 	@echo "  make replay ENTRY_ID=<entry_id_or_unique_prefix>"
 	@echo "  make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id>"
 	@echo "  make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json"
+	@echo "  make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<target-run-id>/targeted-probe-report.json"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem"
 	@echo "  make run-case CASE=orphan-process ENV=container CONTAINER_IMAGE=ubuntu:latest"
@@ -310,6 +313,11 @@ target-footprint:
 target-plan-probes:
 	@test -n "$(TARGET_FOOTPRINT)" || (echo "usage: make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json [TARGET_OBSERVATION_PLAN=path]"; exit 2)
 	$(SYNCFUZZ) target plan-probes --footprint $(TARGET_FOOTPRINT) $(if $(TARGET_OBSERVATION_PLAN),--out $(TARGET_OBSERVATION_PLAN),)
+
+target-refine-plan:
+	@test -n "$(TARGET_OBSERVATION_PLAN)" || (echo "usage: make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<target-run-id>/targeted-probe-report.json [TARGET_REFINED_OBSERVATION_PLAN=path]"; exit 2)
+	@test -n "$(TARGET_FALLBACK_REPORT)" || (echo "usage: make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<target-run-id>/targeted-probe-report.json [TARGET_REFINED_OBSERVATION_PLAN=path]"; exit 2)
+	$(SYNCFUZZ) target refine-plan --plan $(TARGET_OBSERVATION_PLAN) --fallback-report $(TARGET_FALLBACK_REPORT) $(if $(TARGET_REFINED_OBSERVATION_PLAN),--out $(TARGET_REFINED_OBSERVATION_PLAN),)
 
 target-matrix:
 	$(SYNCFUZZ) target matrix --target $(TARGET_ID) --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS)

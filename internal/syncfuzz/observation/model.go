@@ -15,6 +15,7 @@ const (
 	ObservationPlanSchemaVersion   = "syncfuzz.observation-plan.v1"
 	ResourceFootprintArtifact      = "resource-footprint.json"
 	ObservationPlanArtifact        = "observation-plan.json"
+	ObservationRefinedPlanArtifact = "observation-plan-refined.json"
 )
 
 // ResourceClass identifies an artifact-visible state family in the A–O
@@ -122,6 +123,9 @@ type ObservationPlan struct {
 	ProbePlans              []ProbePlan        `json:"probe_plans"`
 	FallbackFullProbe       bool               `json:"fallback_full_probe"`
 	UnplannedResourcePolicy string             `json:"unplanned_resource_policy"`
+	ExpansionCount          int                `json:"expansion_count,omitempty"`
+	LastExpansionSource     string             `json:"last_expansion_source,omitempty"`
+	LastExpansionPaths      []string           `json:"last_expansion_paths,omitempty"`
 }
 
 func NormalizeFootprint(footprint *ResourceFootprint) error {

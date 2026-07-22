@@ -40,9 +40,11 @@ path/process/FD selection 投影 broad snapshot。默认保持 shadow mode；可
 planned paths，再用一次最终 full snapshot 作为 fallback，并把未规划对象
 写入 report。generic command adapter 仍会把没有 semantic plant marker 的
 P5 filesystem coverage 明确标为 partial，process/FD 也仍是 broad collection。
-接下来的直接目标是将 fallback evidence 反馈给 compiler，并安全地将
-process/FD collection 切到真正的 plan-selected probe；完成后才评估
-time-boxed、特权环境可用的 OS trace/eBPF evidence source。
+`target refine-plan` 已将 fallback evidence 接入 compiler：未规划路径可
+扩展一次；socket 会自动补齐 filesystem/process/FD dependency，并把 added
+paths 固化到 refined plan。接下来的直接目标是安全地将 process/FD collection
+切到真正的 plan-selected probe，并评估 refine-once 的 fallback coverage；
+完成后才评估 time-boxed、特权环境可用的 OS trace/eBPF evidence source。
 
 ## 当前判断
 

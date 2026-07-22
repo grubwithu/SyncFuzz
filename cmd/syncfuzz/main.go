@@ -89,6 +89,7 @@ Usage:
   syncfuzz target prompt-variants
   syncfuzz target footprint --run runs/<target-run-id> [--out resource-footprint.json]
   syncfuzz target plan-probes --footprint resource-footprint.json [--out observation-plan.json]
+  syncfuzz target refine-plan --plan observation-plan.json --fallback-report targeted-probe-report.json [--out observation-plan-refined.json]
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--fidelity exact|semantic|impact] [--out runs]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--observation-plan observation-plan.json] [--observation-mode shadow|pruned-filesystem] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
@@ -473,7 +474,7 @@ func campaign(args []string) {
 
 func runTarget(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, matrix, minimize, run, suite, or campaign")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, matrix, minimize, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -495,6 +496,8 @@ func runTarget(args []string) {
 		targetFootprint(args[1:])
 	case "plan-probes":
 		targetPlanProbes(args[1:])
+	case "refine-plan":
+		targetRefinePlan(args[1:])
 	case "matrix":
 		targetMatrix(args[1:])
 	case "minimize":
@@ -667,6 +670,52 @@ func targetPlanProbes(args []string) {
 	fmt.Printf("query_id: %s\n", plan.QueryID)
 	fmt.Printf("probe_families: %s\n", strings.Join(families, ","))
 	fmt.Printf("fallback_full_probe: %t\n", plan.FallbackFullProbe)
+	fmt.Printf("artifact: %s\n", output)
+}
+
+func targetRefinePlan(args []string) {
+	fs := flag.NewFlagSet("target refine-plan", flag.ExitOnError)
+	planPath := fs.String("plan", "", "observation-plan.json input path")
+	reportPath := fs.String("fallback-report", "", "targeted-probe-report.json from a pruned-filesystem run")
+	outPath := fs.String("out", "", "refined observation plan output path; defaults beside --plan")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*planPath) == "" || strings.TrimSpace(*reportPath) == "" {
+		fmt.Fprintln(os.Stderr, "target refine-plan requires --plan and --fallback-report")
+		os.Exit(2)
+	}
+	plan, err := observation.ReadPlan(*planPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target refine-plan failed: %v\n", err)
+		os.Exit(1)
+	}
+	report, err := observation.ReadTargetedProbeReport(*reportPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target refine-plan failed: %v\n", err)
+		os.Exit(1)
+	}
+	fallback, err := observation.ReadFallbackSnapshot(*reportPath, report)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target refine-plan failed: %v\n", err)
+		os.Exit(1)
+	}
+	refined, err := observation.RefinePlanFromFallback(plan, report, fallback)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target refine-plan failed: %v\n", err)
+		os.Exit(1)
+	}
+	output := strings.TrimSpace(*outPath)
+	if output == "" {
+		output = filepath.Join(filepath.Dir(*planPath), observation.ObservationRefinedPlanArtifact)
+	}
+	if err := observation.WritePlan(output, refined); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target refine-plan failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("query_id: %s\n", refined.QueryID)
+	fmt.Printf("expansion_count: %d\n", refined.ExpansionCount)
+	fmt.Printf("added_paths: %s\n", strings.Join(refined.LastExpansionPaths, ","))
 	fmt.Printf("artifact: %s\n", output)
 }
 

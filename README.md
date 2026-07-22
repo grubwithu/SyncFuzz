@@ -47,6 +47,7 @@ go run ./cmd/syncfuzz target groups
 go run ./cmd/syncfuzz target prompt-profiles
 go run ./cmd/syncfuzz target footprint --run runs/<target-run-id>
 go run ./cmd/syncfuzz target plan-probes --footprint runs/<target-run-id>/resource-footprint.json
+go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-plan.json --fallback-report runs/<pruned-run>/targeted-probe-report.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --group phase5a-baseline --prompt-profiles all
@@ -100,6 +101,7 @@ make target-groups
 make target-prompt-profiles
 make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id>
 make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json
+make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<pilot-run>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<pruned-run>/targeted-probe-report.json
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
 make target-matrix TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=all
@@ -196,6 +198,7 @@ Phase 5 target runs add a parallel artifact set for real agent/runtime observati
 - `target-contract-profile.json`: optional target-specific recovery contract profile used to interpret a real-target run
 - `snapshot-late.json` / `process-late.json` / `filesystem-late-metadata.json`: optional late observation artifacts when `--late-observe-delay` is set
 - `observation-plan.json`: validated query-specific plan copied into a rerun that uses `--observation-plan`
+- `observation-plan-refined.json`: optional one-time expansion from a pruned run's fallback evidence
 - `targeted-probe-report.json`: objects selected by that plan at each adapter-visible checkpoint
 - `snapshot-full-fallback.json`: final broad filesystem fallback for a `pruned-filesystem` rerun
 
@@ -217,6 +220,9 @@ This reduces repeated workspace walking/hashing while retaining a final
 full-state check. Process collection remains broad in this increment. The
 generic command adapter has no semantic `after-plant` marker, so its P5
 filesystem probe is explicitly partial rather than a fabricated boundary.
+`target refine-plan` can consume that fallback once, adding observed paths
+(and socket dependency probes when applicable) to a deterministic refined
+plan; a second expansion is rejected by policy.
 
 Both artifacts preserve the same typed `query` (`syncfuzz.lifecycle-query.v1`):
 `q = <Init, Plant, Boundary, Recovery, Activation, Witness>`. Its embedded

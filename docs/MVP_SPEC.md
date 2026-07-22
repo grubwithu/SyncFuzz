@@ -63,6 +63,7 @@ go run ./cmd/syncfuzz target scenarios
 go run ./cmd/syncfuzz target prompt-profiles
 go run ./cmd/syncfuzz target footprint --run runs/<target-run-id>
 go run ./cmd/syncfuzz target plan-probes --footprint runs/<target-run-id>/resource-footprint.json
+go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-plan.json --fallback-report runs/<pruned-run>/targeted-probe-report.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --group phase5a-baseline --prompt-profiles all
@@ -99,6 +100,7 @@ make target-tasks
 make target-scenarios
 make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id>
 make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json
+make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<pilot-run>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<pruned-run>/targeted-probe-report.json
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
 make target-run TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh EXPECT_FILES=late-effect
@@ -269,6 +271,7 @@ runs/<run_id>/
   filesystem-metadata.json
   resource-footprint.json              # emitted by `target footprint`
   observation-plan.json                 # emitted by `target plan-probes`
+  observation-plan-refined.json         # emitted by `target refine-plan`
   targeted-probe-report.json            # emitted when a rerun consumes a plan
   snapshot-full-fallback.json           # final fallback for pruned-filesystem mode
   workspace/
@@ -321,6 +324,14 @@ Process snapshots remain broad in this increment. It neither installs eBPF
 probes nor claims causal tracing. The generic command adapter reports its P5
 filesystem probe as unavailable rather than treating command return as a
 fabricated semantic plant boundary.
+
+`syncfuzz target refine-plan --plan <plan> --fallback-report <report>` reads
+the report's adjacent fallback snapshot and produces
+`observation-plan-refined.json`. It admits each unplanned target path once;
+an unplanned socket also enables its filesystem, process, and FD dependency
+probes. The refined plan records `expansion_count`, source artifact, and added
+paths. A second expansion is rejected, preserving the explicit
+`expand-once-then-full-probe` policy rather than allowing silent plan drift.
 
 For `orphan-process-long-delay`, the target oracle requires the command to return successfully, a workspace-related process to appear at the command boundary, that process to remain through immediate observation, and, when late observation is enabled, `late-effect` to appear during the late snapshot window.
 

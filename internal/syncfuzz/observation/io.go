@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 )
@@ -56,4 +58,46 @@ func WritePlan(path string, plan *ObservationPlan) error {
 		return fmt.Errorf("write observation plan %s: %w", path, err)
 	}
 	return nil
+}
+
+func ReadTargetedProbeReport(path string) (TargetedProbeReport, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return TargetedProbeReport{}, fmt.Errorf("read targeted probe report %s: %w", path, err)
+	}
+	var report TargetedProbeReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return TargetedProbeReport{}, fmt.Errorf("decode targeted probe report %s: %w", path, err)
+	}
+	if report.SchemaVersion == "" {
+		report.SchemaVersion = TargetedProbeReportSchemaVersion
+	}
+	if report.SchemaVersion != TargetedProbeReportSchemaVersion {
+		return TargetedProbeReport{}, fmt.Errorf("unsupported targeted probe report schema %q", report.SchemaVersion)
+	}
+	report.QueryID = strings.TrimSpace(report.QueryID)
+	if report.QueryID == "" {
+		return TargetedProbeReport{}, fmt.Errorf("targeted probe report query_id is required")
+	}
+	return report, nil
+}
+
+func ReadFallbackSnapshot(reportPath string, report TargetedProbeReport) (core.Snapshot, error) {
+	artifact := strings.TrimSpace(report.FallbackFilesystemArtifact)
+	if artifact == "" {
+		return core.Snapshot{}, fmt.Errorf("targeted probe report has no fallback filesystem artifact")
+	}
+	if filepath.IsAbs(artifact) || filepath.Base(artifact) != artifact {
+		return core.Snapshot{}, fmt.Errorf("invalid fallback filesystem artifact %q", artifact)
+	}
+	path := filepath.Join(filepath.Dir(reportPath), artifact)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return core.Snapshot{}, fmt.Errorf("read fallback filesystem snapshot %s: %w", path, err)
+	}
+	var snapshot core.Snapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return core.Snapshot{}, fmt.Errorf("decode fallback filesystem snapshot %s: %w", path, err)
+	}
+	return snapshot, nil
 }

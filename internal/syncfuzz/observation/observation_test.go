@@ -190,6 +190,52 @@ func TestCaptureTargetedProbeCheckpointSelectsOnlyPlannedObjects(t *testing.T) {
 	}
 }
 
+func TestRefinePlanFromFallbackExpandsOnceWithSocketDependencies(t *testing.T) {
+	plan := ObservationPlan{
+		QueryID:                 "refine-query",
+		Checkpoints:             []ObservationPoint{ObservationBeforePlant, ObservationAfterRecovery},
+		FallbackFullProbe:       true,
+		UnplannedResourcePolicy: "expand-once-then-full-probe",
+		ProbePlans:              []ProbePlan{{Family: ProbeFilesystem, Enabled: true, Paths: []string{"known.txt"}, Fields: []string{"exists"}}},
+	}
+	report := TargetedProbeReport{
+		SchemaVersion:                    TargetedProbeReportSchemaVersion,
+		QueryID:                          "refine-query",
+		FullProbeFallbackUsed:            true,
+		FallbackFilesystemArtifact:       "snapshot-full-fallback.json",
+		UnplannedFallbackFilesystemPaths: []string{"listener.sock", "unexpected.txt"},
+	}
+	fallback := core.Snapshot{Files: []core.FileEntry{
+		{Path: "known.txt", Type: "file"},
+		{Path: "listener.sock", Type: "socket"},
+		{Path: "unexpected.txt", Type: "file"},
+	}}
+	refined, err := RefinePlanFromFallback(plan, report, fallback)
+	if err != nil {
+		t.Fatalf("RefinePlanFromFallback failed: %v", err)
+	}
+	if refined.ExpansionCount != 1 || refined.LastExpansionSource != "snapshot-full-fallback.json" || !containsString(refined.LastExpansionPaths, "listener.sock") || !containsString(refined.LastExpansionPaths, "unexpected.txt") {
+		t.Fatalf("unexpected refined plan metadata: %#v", refined)
+	}
+	filesystem, _ := findProbePlan(refined.ProbePlans, ProbeFilesystem)
+	if !containsString(filesystem.Paths, "listener.sock") || !containsString(filesystem.Paths, "unexpected.txt") {
+		t.Fatalf("expected filesystem expansion: %#v", filesystem)
+	}
+	socket, socketOK := findProbePlan(refined.ProbePlans, ProbeUnixSocket)
+	if !socketOK || !containsString(socket.Paths, "listener.sock") {
+		t.Fatalf("expected socket expansion: %#v", refined.ProbePlans)
+	}
+	if _, ok := findProbePlan(refined.ProbePlans, ProbeProcess); !ok {
+		t.Fatalf("expected process dependency: %#v", refined.ProbePlans)
+	}
+	if _, ok := findProbePlan(refined.ProbePlans, ProbeFD); !ok {
+		t.Fatalf("expected fd dependency: %#v", refined.ProbePlans)
+	}
+	if _, err := RefinePlanFromFallback(*refined, report, fallback); err == nil {
+		t.Fatal("expected a second fallback expansion to be rejected")
+	}
+}
+
 func writeObservationJSON(t *testing.T, path string, value any) {
 	t.Helper()
 	if err := core.WriteJSON(path, value); err != nil {
