@@ -21,6 +21,9 @@ func TestTargetScenariosConformToScenarioIRV1(t *testing.T) {
 		if scenario.SchemaVersion != TargetScenarioSchemaVersion {
 			t.Fatalf("scenario %q has unexpected schema version %q", scenario.ScenarioID, scenario.SchemaVersion)
 		}
+		if scenario.QueryGenealogySchemaVersion != TargetQueryGenealogySchemaVersion {
+			t.Fatalf("scenario %q has unexpected query genealogy schema %q", scenario.ScenarioID, scenario.QueryGenealogySchemaVersion)
+		}
 		if err := ValidateTargetScenarioInfo(&scenario); err != nil {
 			t.Fatalf("scenario %q failed Scenario IR validation: %v", scenario.ScenarioID, err)
 		}
@@ -47,6 +50,17 @@ func TestTargetScenariosConformToScenarioIRV1(t *testing.T) {
 			!scenarioHasComponentKind(scenario, TargetScenarioComponentLifecycle, scenario.ExecutionPlan.LifecycleOperationID) {
 			t.Fatalf("scenario %q is missing lifecycle component %q", scenario.ScenarioID, scenario.ExecutionPlan.LifecycleOperationID)
 		}
+		if scenario.QueryID != scenario.ScenarioID || scenario.ParentQueryID != "" || scenario.RootQueryID != scenario.QueryID {
+			t.Fatalf("expected built-in root query lineage for %q: %#v", scenario.ScenarioID, scenario)
+		}
+		for _, mutation := range scenario.Mutations {
+			if mutation.Kind == "" {
+				continue
+			}
+			if mutation.Operator == "" || len(mutation.Parameters) == 0 || len(mutation.SemanticDiff) == 0 {
+				t.Fatalf("scenario %q has incomplete mutation provenance: %#v", scenario.ScenarioID, mutation)
+			}
+		}
 	}
 }
 
@@ -71,6 +85,63 @@ func TestNormalizeTargetScenarioInfoRejectsDuplicateComponentIDs(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected duplicate component IDs to be rejected")
 	}
+}
+
+func TestScenarioIRRecordsQueryGenealogyAndAtomicSemanticDiff(t *testing.T) {
+	scenario, err := NormalizeTargetScenarioInfo(&TargetScenarioInfo{
+		TaskID:           "operation-query",
+		ScenarioID:       "operation-query/replace-endpoint",
+		QueryID:          "operation-query/replace-endpoint",
+		ParentQueryID:    "operation-query",
+		RootQueryID:      "operation-query",
+		PlantPrimitiveID: "workspace-unix-listener",
+		LifecycleEdge:    "checkpoint->fork",
+		ActivationKindID: "unix-socket-connect",
+		OracleKindID:     "workspace-unix-listener-residue",
+		Mutations: []TargetScenarioMutation{{
+			MutationID: "operation-substitution.create-endpoint->replace-existing-endpoint",
+			Kind:       TargetScenarioMutationOperationSubstitution,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeTargetScenarioInfo failed: %v", err)
+	}
+	if scenario.QueryID != "operation-query/replace-endpoint" || scenario.ParentQueryID != "operation-query" || scenario.RootQueryID != "operation-query" {
+		t.Fatalf("unexpected query genealogy: %#v", scenario)
+	}
+	if len(scenario.Mutations) != 1 {
+		t.Fatalf("expected one mutation step: %#v", scenario.Mutations)
+	}
+	mutation := scenario.Mutations[0]
+	if mutation.Operator != TargetScenarioMutationOperatorOperation || mutation.Parameters["from_operation"] != "create-endpoint" || mutation.Parameters["to_operation"] != "replace-existing-endpoint" || !targetScenarioTestContainsString(mutation.SemanticDiff, "Plant.operation") {
+		t.Fatalf("expected explicit operation mutation provenance: %#v", mutation)
+	}
+}
+
+func TestGeneratedScenarioDerivesParentQueryGenealogy(t *testing.T) {
+	scenario, _, err := GeneratedTrustedActionActivationSubstitution()
+	if err != nil {
+		t.Fatalf("GeneratedTrustedActionActivationSubstitution failed: %v", err)
+	}
+	if scenario.QueryID != GeneratedTrustedActionActivationScenarioID || scenario.ParentQueryID != UnixListenerResidueForkTargetTaskID || scenario.RootQueryID != UnixListenerResidueForkTargetTaskID {
+		t.Fatalf("expected generated scenario parent lineage: %#v", scenario)
+	}
+	if len(scenario.Mutations) != 1 {
+		t.Fatalf("expected generated mutation step: %#v", scenario.Mutations)
+	}
+	mutation := scenario.Mutations[0]
+	if mutation.Operator != TargetScenarioMutationOperatorActivation || mutation.Parameters["to_activation"] != "trusted-action-effect" || !targetScenarioTestContainsString(mutation.SemanticDiff, "Activation.kind") || !targetScenarioTestContainsString(mutation.SemanticDiff, "Witness.oracle") {
+		t.Fatalf("expected activation mutation semantic diff: %#v", mutation)
+	}
+}
+
+func targetScenarioTestContainsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGeneratedEnvContinuationPrimitiveSubstitutionIsExecutableScenarioIR(t *testing.T) {

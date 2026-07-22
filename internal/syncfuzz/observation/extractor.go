@@ -27,6 +27,9 @@ type targetTaskArtifact struct {
 
 type targetScenarioArtifact struct {
 	ScenarioID           string                            `json:"scenario_id"`
+	QueryID              string                            `json:"query_id,omitempty"`
+	ParentQueryID        string                            `json:"parent_query_id,omitempty"`
+	RootQueryID          string                            `json:"root_query_id,omitempty"`
 	TaskID               string                            `json:"task_id"`
 	StateSurface         string                            `json:"state_surface,omitempty"`
 	LifecycleEdge        string                            `json:"lifecycle_edge,omitempty"`

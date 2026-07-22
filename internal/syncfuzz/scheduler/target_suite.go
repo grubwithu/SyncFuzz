@@ -47,6 +47,9 @@ type TargetSuiteOptions struct {
 type TargetSuiteRunResult struct {
 	CandidateID            string                               `json:"candidate_id,omitempty"`
 	ScenarioID             string                               `json:"scenario_id,omitempty"`
+	QueryID                string                               `json:"query_id,omitempty"`
+	ParentQueryID          string                               `json:"parent_query_id,omitempty"`
+	RootQueryID            string                               `json:"root_query_id,omitempty"`
 	SeedID                 string                               `json:"seed_id,omitempty"`
 	TaskID                 string                               `json:"task_id"`
 	TargetID               string                               `json:"target_id,omitempty"`
@@ -469,6 +472,9 @@ func runTargetSuiteTask(
 	item := TargetSuiteRunResult{
 		CandidateID:          candidate.CandidateID,
 		ScenarioID:           candidate.ScenarioID,
+		QueryID:              candidate.QueryID,
+		ParentQueryID:        candidate.ParentQueryID,
+		RootQueryID:          candidate.RootQueryID,
 		SeedID:               candidate.SeedID,
 		TaskID:               taskID,
 		TargetID:             opts.TargetID,
@@ -586,6 +592,15 @@ func targetScenarioForCandidate(candidate TargetScheduleCandidate) *target.Targe
 	if candidate.ScenarioID != "" {
 		scenario.ScenarioID = candidate.ScenarioID
 	}
+	if candidate.QueryID != "" {
+		scenario.QueryID = candidate.QueryID
+	}
+	if candidate.ParentQueryID != "" {
+		scenario.ParentQueryID = candidate.ParentQueryID
+	}
+	if candidate.RootQueryID != "" {
+		scenario.RootQueryID = candidate.RootQueryID
+	}
 	if candidate.ScenarioSchemaVersion != "" {
 		scenario.SchemaVersion = candidate.ScenarioSchemaVersion
 	}
@@ -653,6 +668,9 @@ func targetScheduledTaskCandidate(targetID string, taskID string, promptProfileI
 	if taskInfo, ok := targetTaskInfoByID(taskID); ok {
 		item.ScenarioSchemaVersion = taskInfo.ScenarioSchemaVersion
 		item.ScenarioID = taskInfo.ScenarioID
+		item.QueryID = taskInfo.QueryID
+		item.ParentQueryID = taskInfo.ParentQueryID
+		item.RootQueryID = taskInfo.RootQueryID
 		item.SeedID = taskInfo.SeedID
 		item.Description = taskInfo.Description
 		item.StateSurface = taskInfo.StateSurface

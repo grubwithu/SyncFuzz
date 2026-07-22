@@ -8,7 +8,8 @@ import (
 type TargetScenarioComponentRole string
 
 const (
-	TargetScenarioSchemaVersion = "syncfuzz.target-scenario.v1"
+	TargetScenarioSchemaVersion       = "syncfuzz.target-scenario.v1"
+	TargetQueryGenealogySchemaVersion = "syncfuzz.target-query-genealogy.v1"
 
 	TargetScenarioComponentSetup      TargetScenarioComponentRole = "setup"
 	TargetScenarioComponentPlant      TargetScenarioComponentRole = "plant"
@@ -32,6 +33,22 @@ const (
 	TargetScenarioMutationActivationSubstitution TargetScenarioMutationKind = "activation-substitution"
 	TargetScenarioMutationPhaseShift             TargetScenarioMutationKind = "phase-shift"
 	TargetScenarioMutationCrossSeedCrossover     TargetScenarioMutationKind = "cross-seed-crossover"
+	TargetScenarioMutationOperationSubstitution  TargetScenarioMutationKind = "operation-substitution"
+	TargetScenarioMutationTopologySubstitution   TargetScenarioMutationKind = "topology-substitution"
+)
+
+// TargetScenarioMutationOperator identifies the atomic transformation applied
+// to a Query. Kind is retained as the scheduler-facing mutation family.
+type TargetScenarioMutationOperator string
+
+const (
+	TargetScenarioMutationOperatorPrimitive  TargetScenarioMutationOperator = "primitive-substitution"
+	TargetScenarioMutationOperatorOperation  TargetScenarioMutationOperator = "operation-substitution"
+	TargetScenarioMutationOperatorLifecycle  TargetScenarioMutationOperator = "lifecycle-splice"
+	TargetScenarioMutationOperatorPhase      TargetScenarioMutationOperator = "phase-shift"
+	TargetScenarioMutationOperatorTopology   TargetScenarioMutationOperator = "topology-substitution"
+	TargetScenarioMutationOperatorActivation TargetScenarioMutationOperator = "activation-substitution"
+	TargetScenarioMutationOperatorCrossSeed  TargetScenarioMutationOperator = "cross-seed-crossover"
 )
 
 type TargetScenarioComponent struct {
@@ -42,9 +59,12 @@ type TargetScenarioComponent struct {
 }
 
 type TargetScenarioMutation struct {
-	MutationID string                     `json:"mutation_id"`
-	Kind       TargetScenarioMutationKind `json:"kind"`
-	Summary    string                     `json:"summary,omitempty"`
+	MutationID   string                         `json:"mutation_id"`
+	Kind         TargetScenarioMutationKind     `json:"kind"`
+	Operator     TargetScenarioMutationOperator `json:"operator,omitempty"`
+	Parameters   map[string]string              `json:"parameters,omitempty"`
+	SemanticDiff []string                       `json:"semantic_diff,omitempty"`
+	Summary      string                         `json:"summary,omitempty"`
 }
 
 func TargetScenarioMutationFocus(mutations []TargetScenarioMutation) (TargetScenarioMutation, bool) {
@@ -74,7 +94,11 @@ func targetScenarioMutationFocusRank(kind TargetScenarioMutationKind) int {
 		return 4
 	case TargetScenarioMutationPrimitiveSubstitution:
 		return 3
+	case TargetScenarioMutationOperationSubstitution:
+		return 3
 	case TargetScenarioMutationLifecycleSplice:
+		return 2
+	case TargetScenarioMutationTopologySubstitution:
 		return 2
 	case TargetScenarioMutationPhaseShift:
 		return 1
@@ -94,25 +118,29 @@ type TargetScenarioExecutionPlan struct {
 }
 
 type TargetScenarioInfo struct {
-	SchemaVersion        string                       `json:"schema_version"`
-	ScenarioID           string                       `json:"scenario_id"`
-	TaskID               string                       `json:"task_id"`
-	SeedID               string                       `json:"seed_id,omitempty"`
-	Description          string                       `json:"description"`
-	Objective            string                       `json:"objective"`
-	StateSurface         string                       `json:"state_surface,omitempty"`
-	LifecycleEdge        string                       `json:"lifecycle_edge,omitempty"`
-	PlantPrimitiveID     string                       `json:"plant_primitive_id,omitempty"`
-	ActivationKindID     string                       `json:"activation_kind_id,omitempty"`
-	OracleKindID         string                       `json:"oracle_kind_id,omitempty"`
-	DefaultExpectedFiles []string                     `json:"default_expected_files,omitempty"`
-	LateExpectedFiles    []string                     `json:"late_expected_files,omitempty"`
-	UsesLateObservation  bool                         `json:"uses_late_observation,omitempty"`
-	LateObserveDelayMs   int64                        `json:"late_observe_delay_ms,omitempty"`
-	ViolationSignature   TargetViolationSignature     `json:"violation_signature"`
-	Components           []TargetScenarioComponent    `json:"components,omitempty"`
-	Mutations            []TargetScenarioMutation     `json:"mutations,omitempty"`
-	ExecutionPlan        *TargetScenarioExecutionPlan `json:"execution_plan,omitempty"`
+	SchemaVersion               string                       `json:"schema_version"`
+	QueryGenealogySchemaVersion string                       `json:"query_genealogy_schema_version"`
+	ScenarioID                  string                       `json:"scenario_id"`
+	QueryID                     string                       `json:"query_id"`
+	ParentQueryID               string                       `json:"parent_query_id,omitempty"`
+	RootQueryID                 string                       `json:"root_query_id"`
+	TaskID                      string                       `json:"task_id"`
+	SeedID                      string                       `json:"seed_id,omitempty"`
+	Description                 string                       `json:"description"`
+	Objective                   string                       `json:"objective"`
+	StateSurface                string                       `json:"state_surface,omitempty"`
+	LifecycleEdge               string                       `json:"lifecycle_edge,omitempty"`
+	PlantPrimitiveID            string                       `json:"plant_primitive_id,omitempty"`
+	ActivationKindID            string                       `json:"activation_kind_id,omitempty"`
+	OracleKindID                string                       `json:"oracle_kind_id,omitempty"`
+	DefaultExpectedFiles        []string                     `json:"default_expected_files,omitempty"`
+	LateExpectedFiles           []string                     `json:"late_expected_files,omitempty"`
+	UsesLateObservation         bool                         `json:"uses_late_observation,omitempty"`
+	LateObserveDelayMs          int64                        `json:"late_observe_delay_ms,omitempty"`
+	ViolationSignature          TargetViolationSignature     `json:"violation_signature"`
+	Components                  []TargetScenarioComponent    `json:"components,omitempty"`
+	Mutations                   []TargetScenarioMutation     `json:"mutations,omitempty"`
+	ExecutionPlan               *TargetScenarioExecutionPlan `json:"execution_plan,omitempty"`
 }
 
 func CloneTargetScenarioInfo(info *TargetScenarioInfo) *TargetScenarioInfo {
@@ -123,7 +151,7 @@ func CloneTargetScenarioInfo(info *TargetScenarioInfo) *TargetScenarioInfo {
 	clone.DefaultExpectedFiles = append([]string{}, info.DefaultExpectedFiles...)
 	clone.LateExpectedFiles = append([]string{}, info.LateExpectedFiles...)
 	clone.Components = append([]TargetScenarioComponent{}, info.Components...)
-	clone.Mutations = append([]TargetScenarioMutation{}, info.Mutations...)
+	clone.Mutations = cloneTargetScenarioMutations(info.Mutations)
 	if info.ExecutionPlan != nil {
 		plan := *info.ExecutionPlan
 		clone.ExecutionPlan = &plan
@@ -142,6 +170,13 @@ func NormalizeTargetScenarioInfo(info *TargetScenarioInfo) (*TargetScenarioInfo,
 	if normalized.SchemaVersion != TargetScenarioSchemaVersion {
 		return nil, fmt.Errorf("unsupported target scenario schema %q", normalized.SchemaVersion)
 	}
+	normalized.QueryGenealogySchemaVersion = strings.TrimSpace(normalized.QueryGenealogySchemaVersion)
+	if normalized.QueryGenealogySchemaVersion == "" {
+		normalized.QueryGenealogySchemaVersion = TargetQueryGenealogySchemaVersion
+	}
+	if normalized.QueryGenealogySchemaVersion != TargetQueryGenealogySchemaVersion {
+		return nil, fmt.Errorf("unsupported target query genealogy schema %q", normalized.QueryGenealogySchemaVersion)
+	}
 	normalized.TaskID = strings.TrimSpace(normalized.TaskID)
 	if normalized.TaskID == "" {
 		return nil, fmt.Errorf("target scenario task_id is required")
@@ -149,6 +184,21 @@ func NormalizeTargetScenarioInfo(info *TargetScenarioInfo) (*TargetScenarioInfo,
 	normalized.ScenarioID = strings.TrimSpace(normalized.ScenarioID)
 	if normalized.ScenarioID == "" {
 		normalized.ScenarioID = normalized.TaskID
+	}
+	normalized.QueryID = strings.TrimSpace(normalized.QueryID)
+	if normalized.QueryID == "" {
+		normalized.QueryID = normalized.ScenarioID
+	}
+	normalized.ParentQueryID = strings.TrimSpace(normalized.ParentQueryID)
+	if normalized.ParentQueryID == "" && normalized.QueryID != normalized.TaskID && strings.HasPrefix(normalized.QueryID, normalized.TaskID+"/") {
+		normalized.ParentQueryID = normalized.TaskID
+	}
+	normalized.RootQueryID = strings.TrimSpace(normalized.RootQueryID)
+	if normalized.RootQueryID == "" {
+		normalized.RootQueryID = normalized.QueryID
+		if normalized.ParentQueryID != "" {
+			normalized.RootQueryID = normalized.TaskID
+		}
 	}
 
 	requiredKinds := targetScenarioRequiredComponentKinds(normalized)
@@ -199,6 +249,7 @@ func NormalizeTargetScenarioInfo(info *TargetScenarioInfo) (*TargetScenarioInfo,
 		components = append(components, component)
 	}
 	normalized.Components = components
+	normalized.Mutations = normalizeTargetScenarioMutations(normalized, normalized.Mutations)
 	normalized.ViolationSignature = DeriveTargetViolationSignature(normalized)
 	return normalized, ValidateTargetScenarioInfo(normalized)
 }
@@ -210,8 +261,17 @@ func ValidateTargetScenarioInfo(info *TargetScenarioInfo) error {
 	if info.SchemaVersion != TargetScenarioSchemaVersion {
 		return fmt.Errorf("target scenario %q must use schema %q", info.ScenarioID, TargetScenarioSchemaVersion)
 	}
-	if strings.TrimSpace(info.ScenarioID) == "" || strings.TrimSpace(info.TaskID) == "" {
-		return fmt.Errorf("target scenario identity requires scenario_id and task_id")
+	if info.QueryGenealogySchemaVersion != TargetQueryGenealogySchemaVersion {
+		return fmt.Errorf("target scenario %q must use query genealogy schema %q", info.ScenarioID, TargetQueryGenealogySchemaVersion)
+	}
+	if strings.TrimSpace(info.ScenarioID) == "" || strings.TrimSpace(info.QueryID) == "" || strings.TrimSpace(info.RootQueryID) == "" || strings.TrimSpace(info.TaskID) == "" {
+		return fmt.Errorf("target scenario identity requires scenario_id, query_id, root_query_id, and task_id")
+	}
+	if info.ParentQueryID == info.QueryID {
+		return fmt.Errorf("target scenario %q cannot name itself as parent_query_id", info.ScenarioID)
+	}
+	if info.ParentQueryID == "" && info.RootQueryID != info.QueryID {
+		return fmt.Errorf("root target scenario %q must use its query_id as root_query_id", info.ScenarioID)
 	}
 	if info.ViolationSignature.SchemaVersion != "" {
 		if _, err := NormalizeTargetViolationSignature(info.ViolationSignature); err != nil {
@@ -241,7 +301,247 @@ func ValidateTargetScenarioInfo(info *TargetScenarioInfo) error {
 			return fmt.Errorf("target scenario %q is missing %s component kind %q", info.ScenarioID, required.role, required.kindID)
 		}
 	}
+	mutationIDs := make(map[string]struct{}, len(info.Mutations))
+	for _, mutation := range info.Mutations {
+		if strings.TrimSpace(mutation.MutationID) == "" {
+			return fmt.Errorf("target scenario %q has a mutation without mutation_id", info.ScenarioID)
+		}
+		if _, exists := mutationIDs[mutation.MutationID]; exists {
+			return fmt.Errorf("target scenario %q has duplicate mutation_id %q", info.ScenarioID, mutation.MutationID)
+		}
+		mutationIDs[mutation.MutationID] = struct{}{}
+		if mutation.Kind != "" && !validTargetScenarioMutationKind(mutation.Kind) {
+			return fmt.Errorf("target scenario %q mutation %q has unsupported kind %q", info.ScenarioID, mutation.MutationID, mutation.Kind)
+		}
+		if mutation.Operator != "" && !validTargetScenarioMutationOperator(mutation.Operator) {
+			return fmt.Errorf("target scenario %q mutation %q has unsupported operator %q", info.ScenarioID, mutation.MutationID, mutation.Operator)
+		}
+		if mutation.Kind != "" && (mutation.Operator == "" || len(mutation.Parameters) == 0 || len(mutation.SemanticDiff) == 0) {
+			return fmt.Errorf("target scenario %q mutation %q must record operator, parameters, and semantic_diff", info.ScenarioID, mutation.MutationID)
+		}
+	}
 	return nil
+}
+
+func cloneTargetScenarioMutations(mutations []TargetScenarioMutation) []TargetScenarioMutation {
+	if mutations == nil {
+		return nil
+	}
+	clone := make([]TargetScenarioMutation, 0, len(mutations))
+	for _, mutation := range mutations {
+		copyMutation := mutation
+		if mutation.Parameters != nil {
+			copyMutation.Parameters = make(map[string]string, len(mutation.Parameters))
+			for key, value := range mutation.Parameters {
+				copyMutation.Parameters[key] = value
+			}
+		}
+		if mutation.SemanticDiff != nil {
+			copyMutation.SemanticDiff = append([]string{}, mutation.SemanticDiff...)
+		}
+		clone = append(clone, copyMutation)
+	}
+	return clone
+}
+
+func normalizeTargetScenarioMutations(info *TargetScenarioInfo, mutations []TargetScenarioMutation) []TargetScenarioMutation {
+	normalized := cloneTargetScenarioMutations(mutations)
+	for index := range normalized {
+		mutation := &normalized[index]
+		mutation.MutationID = strings.TrimSpace(mutation.MutationID)
+		mutation.Kind = TargetScenarioMutationKind(strings.TrimSpace(string(mutation.Kind)))
+		mutation.Operator = TargetScenarioMutationOperator(strings.TrimSpace(string(mutation.Operator)))
+		if mutation.Operator == "" {
+			mutation.Operator = targetScenarioMutationOperatorFor(mutation.Kind, mutation.MutationID)
+		}
+		if mutation.Parameters == nil {
+			mutation.Parameters = targetScenarioMutationDefaultParameters(info, *mutation)
+		} else {
+			parameters := make(map[string]string, len(mutation.Parameters))
+			for key, value := range mutation.Parameters {
+				key = strings.TrimSpace(key)
+				value = strings.TrimSpace(value)
+				if key != "" && value != "" {
+					parameters[key] = value
+				}
+			}
+			mutation.Parameters = parameters
+		}
+		if mutation.SemanticDiff == nil {
+			mutation.SemanticDiff = targetScenarioMutationSemanticDiff(*mutation)
+		} else {
+			mutation.SemanticDiff = targetScenarioUniqueStrings(mutation.SemanticDiff)
+		}
+	}
+	return normalized
+}
+
+func targetScenarioMutationOperatorFor(kind TargetScenarioMutationKind, mutationID string) TargetScenarioMutationOperator {
+	if kind == TargetScenarioMutationPhaseShift && strings.Contains(mutationID, "process-mode") {
+		return TargetScenarioMutationOperatorTopology
+	}
+	switch kind {
+	case TargetScenarioMutationPrimitiveSubstitution:
+		return TargetScenarioMutationOperatorPrimitive
+	case TargetScenarioMutationOperationSubstitution:
+		return TargetScenarioMutationOperatorOperation
+	case TargetScenarioMutationLifecycleSplice:
+		return TargetScenarioMutationOperatorLifecycle
+	case TargetScenarioMutationPhaseShift:
+		return TargetScenarioMutationOperatorPhase
+	case TargetScenarioMutationTopologySubstitution:
+		return TargetScenarioMutationOperatorTopology
+	case TargetScenarioMutationActivationSubstitution:
+		return TargetScenarioMutationOperatorActivation
+	case TargetScenarioMutationCrossSeedCrossover:
+		return TargetScenarioMutationOperatorCrossSeed
+	default:
+		return ""
+	}
+}
+
+func targetScenarioMutationDefaultParameters(info *TargetScenarioInfo, mutation TargetScenarioMutation) map[string]string {
+	if info == nil || mutation.Operator == "" {
+		return nil
+	}
+	from, to := targetScenarioMutationIDEndpoints(mutation.MutationID)
+	parameters := make(map[string]string, 2)
+	switch mutation.Operator {
+	case TargetScenarioMutationOperatorPrimitive:
+		parameters["from_plant"] = from
+		parameters["to_plant"] = targetScenarioMutationValue(to, info.PlantPrimitiveID)
+	case TargetScenarioMutationOperatorOperation:
+		parameters["from_operation"] = from
+		parameters["to_operation"] = targetScenarioMutationValue(to, info.PlantPrimitiveID)
+	case TargetScenarioMutationOperatorLifecycle:
+		parameters["from_boundary"] = from
+		parameters["to_boundary"] = targetScenarioMutationValue(to, targetScenarioInfoLifecycleOperationID(info))
+	case TargetScenarioMutationOperatorPhase:
+		parameters["from_phase"] = from
+		parameters["to_checkpoint"] = targetScenarioMutationValue(to, targetScenarioCheckpointSelector(info))
+	case TargetScenarioMutationOperatorTopology:
+		parameters["from_topology"] = from
+		parameters["to_topology"] = targetScenarioMutationValue(to, targetScenarioProcessMode(info))
+	case TargetScenarioMutationOperatorActivation:
+		parameters["from_activation"] = from
+		parameters["to_activation"] = targetScenarioMutationValue(to, info.ActivationKindID)
+	case TargetScenarioMutationOperatorCrossSeed:
+		parameters["plant_seed"] = info.SeedID
+		parameters["activation"] = info.ActivationKindID
+	}
+	for key, value := range parameters {
+		if strings.TrimSpace(value) == "" {
+			delete(parameters, key)
+		}
+	}
+	return parameters
+}
+
+func targetScenarioMutationIDEndpoints(mutationID string) (string, string) {
+	value := mutationID
+	if separator := strings.Index(value, "."); separator >= 0 {
+		value = value[separator+1:]
+	}
+	parts := strings.SplitN(value, "->", 2)
+	if len(parts) == 2 {
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	return "base-query", strings.TrimSpace(value)
+}
+
+func targetScenarioMutationValue(preferred string, fallback string) string {
+	if value := strings.TrimSpace(preferred); value != "" {
+		return value
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func targetScenarioMutationSemanticDiff(mutation TargetScenarioMutation) []string {
+	switch mutation.Operator {
+	case TargetScenarioMutationOperatorPrimitive:
+		return []string{"Plant.primitive"}
+	case TargetScenarioMutationOperatorOperation:
+		return []string{"Plant.operation"}
+	case TargetScenarioMutationOperatorLifecycle:
+		return []string{"Boundary.lifecycle", "Recovery.execution_plan"}
+	case TargetScenarioMutationOperatorPhase:
+		return []string{"Boundary.timing", "Recovery.checkpoint_selector"}
+	case TargetScenarioMutationOperatorTopology:
+		return []string{"Recovery.process_mode"}
+	case TargetScenarioMutationOperatorActivation:
+		return []string{"Activation.kind", "Witness.oracle"}
+	case TargetScenarioMutationOperatorCrossSeed:
+		return []string{"Plant.seed", "Activation.kind", "Witness.oracle"}
+	default:
+		return nil
+	}
+}
+
+func targetScenarioUniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
+}
+
+func targetScenarioInfoLifecycleOperationID(info *TargetScenarioInfo) string {
+	if info != nil && info.ExecutionPlan != nil {
+		if value := strings.TrimSpace(info.ExecutionPlan.LifecycleOperationID); value != "" {
+			return value
+		}
+	}
+	if info == nil {
+		return ""
+	}
+	return strings.TrimSpace(info.LifecycleEdge)
+}
+
+func targetScenarioCheckpointSelector(info *TargetScenarioInfo) string {
+	if info == nil || info.ExecutionPlan == nil {
+		return ""
+	}
+	return strings.TrimSpace(info.ExecutionPlan.CheckpointSelector)
+}
+
+func targetScenarioProcessMode(info *TargetScenarioInfo) string {
+	if info == nil || info.ExecutionPlan == nil {
+		return ""
+	}
+	return strings.TrimSpace(info.ExecutionPlan.ProcessMode)
+}
+
+func validTargetScenarioMutationKind(kind TargetScenarioMutationKind) bool {
+	switch kind {
+	case TargetScenarioMutationPrimitiveSubstitution, TargetScenarioMutationOperationSubstitution,
+		TargetScenarioMutationLifecycleSplice, TargetScenarioMutationActivationSubstitution,
+		TargetScenarioMutationPhaseShift, TargetScenarioMutationTopologySubstitution,
+		TargetScenarioMutationCrossSeedCrossover:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTargetScenarioMutationOperator(operator TargetScenarioMutationOperator) bool {
+	switch operator {
+	case TargetScenarioMutationOperatorPrimitive, TargetScenarioMutationOperatorOperation,
+		TargetScenarioMutationOperatorLifecycle, TargetScenarioMutationOperatorPhase,
+		TargetScenarioMutationOperatorTopology, TargetScenarioMutationOperatorActivation,
+		TargetScenarioMutationOperatorCrossSeed:
+		return true
+	default:
+		return false
+	}
 }
 
 type targetScenarioRequiredComponent struct {

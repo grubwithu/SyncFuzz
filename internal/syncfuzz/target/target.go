@@ -341,6 +341,9 @@ type TargetRunResult struct {
 	AdapterID                      string                        `json:"adapter_id"`
 	TargetID                       string                        `json:"target_id"`
 	TaskID                         string                        `json:"task_id"`
+	QueryID                        string                        `json:"query_id,omitempty"`
+	ParentQueryID                  string                        `json:"parent_query_id,omitempty"`
+	RootQueryID                    string                        `json:"root_query_id,omitempty"`
 	Objective                      string                        `json:"objective"`
 	PromptProfileID                string                        `json:"prompt_profile_id,omitempty"`
 	PromptVariantID                string                        `json:"prompt_variant_id,omitempty"`
@@ -1118,12 +1121,16 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 
 	finished := time.Now().UTC()
+	queryID, parentQueryID, rootQueryID := targetScenarioQueryLineage(opts.TaskID, opts.Scenario)
 	result := &TargetRunResult{
 		SchemaVersion:                  "syncfuzz.target-result.v1",
 		RunID:                          run.RunID,
 		AdapterID:                      opts.AdapterID,
 		TargetID:                       opts.TargetID,
 		TaskID:                         opts.TaskID,
+		QueryID:                        queryID,
+		ParentQueryID:                  parentQueryID,
+		RootQueryID:                    rootQueryID,
 		Objective:                      opts.Objective,
 		PromptProfileID:                opts.PromptProfileID,
 		PromptVariantID:                opts.PromptVariantID,
@@ -1171,6 +1178,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"contract_rule_id":            TargetContractInterpretationRuleIDValue(contractInterpretation),
 		"prompt_profile":              opts.PromptProfileID,
 		"prompt_variant":              opts.PromptVariantID,
+		"query_id":                    queryID,
+		"parent_query_id":             parentQueryID,
+		"root_query_id":               rootQueryID,
 		"oracle_confirmed":            targetOracle.Confirmed,
 		"workspace_remaining_after":   processLineage.Summary.WorkspaceRemainingAfter,
 		"late_observed":               lateObserved,
@@ -1187,8 +1197,22 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	return result, nil
 }
 
+func targetScenarioQueryLineage(taskID string, scenario *TargetScenarioInfo) (string, string, string) {
+	if scenario == nil {
+		var ok bool
+		scenario, ok = TargetScenarioByTaskID(taskID)
+		if !ok {
+			return "", "", ""
+		}
+	}
+	return strings.TrimSpace(scenario.QueryID), strings.TrimSpace(scenario.ParentQueryID), strings.TrimSpace(scenario.RootQueryID)
+}
+
 func targetObservationQueryID(task TargetTask) string {
 	if task.Scenario != nil {
+		if queryID := strings.TrimSpace(task.Scenario.QueryID); queryID != "" {
+			return queryID
+		}
 		if scenarioID := strings.TrimSpace(task.Scenario.ScenarioID); scenarioID != "" {
 			return scenarioID
 		}

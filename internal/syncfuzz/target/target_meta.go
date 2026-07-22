@@ -12,6 +12,9 @@ type TargetTaskInfo struct {
 	TaskID                string                       `json:"task_id"`
 	ScenarioSchemaVersion string                       `json:"scenario_schema_version,omitempty"`
 	ScenarioID            string                       `json:"scenario_id,omitempty"`
+	QueryID               string                       `json:"query_id,omitempty"`
+	ParentQueryID         string                       `json:"parent_query_id,omitempty"`
+	RootQueryID           string                       `json:"root_query_id,omitempty"`
 	SeedID                string                       `json:"seed_id,omitempty"`
 	Description           string                       `json:"description"`
 	Objective             string                       `json:"objective,omitempty"`
@@ -55,6 +58,9 @@ func TargetTasks() []TargetTaskInfo {
 		tasks = append(tasks, TargetTaskInfo{
 			ScenarioSchemaVersion: scenario.SchemaVersion,
 			ScenarioID:            scenario.ScenarioID,
+			QueryID:               scenario.QueryID,
+			ParentQueryID:         scenario.ParentQueryID,
+			RootQueryID:           scenario.RootQueryID,
 			TaskID:                scenario.TaskID,
 			SeedID:                scenario.SeedID,
 			Description:           scenario.Description,

@@ -229,6 +229,13 @@ func collectTargetDimensionCoverage(universe []TargetScheduleCandidate, results 
 func targetDimensionCoverageDescriptors() []targetDimensionDescriptor {
 	return []targetDimensionDescriptor{
 		{name: "scenario_id", values: func(candidate TargetScheduleCandidate) []string { return targetDimensionSingle(candidate.ScenarioID) }},
+		{name: "query_root_id", values: func(candidate TargetScheduleCandidate) []string { return targetDimensionSingle(candidate.RootQueryID) }},
+		{name: "mutation_operator", values: func(candidate TargetScheduleCandidate) []string {
+			return targetScenarioMutationOperators(candidate.Mutations)
+		}},
+		{name: "mutation_semantic_diff", values: func(candidate TargetScheduleCandidate) []string {
+			return targetScenarioMutationSemanticDiff(candidate.Mutations)
+		}},
 		{name: "seed_id", values: func(candidate TargetScheduleCandidate) []string { return targetDimensionSingle(candidate.SeedID) }},
 		{name: "task_id", values: func(candidate TargetScheduleCandidate) []string { return targetDimensionSingle(candidate.TaskID) }},
 		{name: "prompt_profile_id", values: func(candidate TargetScheduleCandidate) []string {
@@ -323,6 +330,42 @@ func targetViolationRelations(signature target.TargetViolationSignature) []strin
 		values = append(values, string(value))
 	}
 	return values
+}
+
+func targetScenarioMutationOperators(mutations []target.TargetScenarioMutation) []string {
+	values := make([]string, 0, len(mutations))
+	for _, mutation := range mutations {
+		if mutation.Operator != "" {
+			values = append(values, string(mutation.Operator))
+		}
+	}
+	return targetDimensionUniqueValues(values)
+}
+
+func targetScenarioMutationSemanticDiff(mutations []target.TargetScenarioMutation) []string {
+	values := make([]string, 0)
+	for _, mutation := range mutations {
+		values = append(values, mutation.SemanticDiff...)
+	}
+	return targetDimensionUniqueValues(values)
+}
+
+func targetDimensionUniqueValues(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	sort.Strings(unique)
+	return unique
 }
 
 func targetViolationResourceClasses(signature target.TargetViolationSignature) []string {

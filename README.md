@@ -317,6 +317,17 @@ category.
 for compatibility with existing MAF probes, but are outside the primary FSE
 `<A,O>` evaluation scope.
 
+Scenario IR also records a versioned query genealogy
+(`syncfuzz.target-query-genealogy.v1`). A root query has matching `query_id`
+and `root_query_id`; every derived query records its `parent_query_id` and each
+atomic mutation records an operator, structured parameters, and a
+`semantic_diff` over `Plant`, `Boundary`, `Recovery`, `Activation`, or
+`Witness`. For example, a process-mode change is a topology mutation over
+`Recovery.process_mode`; a trusted-action change covers `Activation.kind` and
+`Witness.oracle`. The lineage is retained in `target-task.json`, target result,
+matrix, suite, candidate summary, and frontier artifacts, and its root,
+operator, and semantic-diff axes participate in scheduler coverage gaps.
+
 `target contract-candidates --input <path> --source-root <directory> --out
 <path>` validates structured contract proposals before any human profile
 review. The input schema is `syncfuzz.target-contract-candidates.v1`; every

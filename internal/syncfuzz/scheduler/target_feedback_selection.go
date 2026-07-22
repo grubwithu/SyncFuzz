@@ -412,6 +412,10 @@ func targetDimensionGapWeight(dimension string) int {
 		return 14
 	case "scenario_id":
 		return 12
+	case "query_root_id":
+		return 10
+	case "mutation_operator", "mutation_semantic_diff":
+		return 8
 	case "task_id":
 		return 8
 	case "lifecycle_operation_id":

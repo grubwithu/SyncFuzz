@@ -41,8 +41,15 @@ func TestTargetViolationSignatureDimensionsContributeCoverage(t *testing.T) {
 		t.Fatalf("normalize signature: %v", err)
 	}
 	candidate := TargetScheduleCandidate{
-		CandidateID:        "target/socket-fork",
-		TaskID:             "socket-fork",
+		CandidateID: "target/socket-fork",
+		TaskID:      "socket-fork",
+		RootQueryID: "socket-root",
+		Mutations: []target.TargetScenarioMutation{{
+			MutationID:   "activation-substitution.socket->trusted-action",
+			Kind:         target.TargetScenarioMutationActivationSubstitution,
+			Operator:     target.TargetScenarioMutationOperatorActivation,
+			SemanticDiff: []string{"Activation.kind", "Witness.oracle"},
+		}},
 		ViolationSignature: signature,
 	}
 	summaries := summarizeTargetDimensionCoverage([]TargetScheduleCandidate{candidate}, []TargetSuiteRunResult{{
@@ -63,6 +70,9 @@ func TestTargetViolationSignatureDimensionsContributeCoverage(t *testing.T) {
 		"violation_persistence_mechanism",
 		"violation_consequence",
 		"violation_signature_id",
+		"query_root_id",
+		"mutation_operator",
+		"mutation_semantic_diff",
 	} {
 		summary, ok := coverage[dimension]
 		if !ok || summary.ExecutedValues != summary.TotalValues || summary.ConfirmedValues != summary.TotalValues || summary.ActivationReachedValues != summary.TotalValues {

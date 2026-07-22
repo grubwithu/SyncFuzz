@@ -419,6 +419,15 @@ Existing MAF external-effect and authority probes retain explicit labels for
 compatibility, while the principal FSE study filters to the OS-facing `<A,O>`
 classes.
 
+Every Scenario IR also carries `syncfuzz.target-query-genealogy.v1`: a root
+query has `query_id == root_query_id`, while a derived query names its
+`parent_query_id`. Its atomic mutation records carry an operator, structured
+parameters, and a semantic diff over `Plant`, `Boundary`, `Recovery`,
+`Activation`, or `Witness`. These fields survive the target task/result,
+matrix, suite, candidate-summary, and frontier artifacts. Coverage selection
+also treats query root, mutation operator, and semantic-diff fields as explicit
+novelty axes; a prompt-profile variant alone is not a new semantic query.
+
 `syncfuzz target contract-candidates --input <path> --source-root <directory>
 --out <path>` is the source-grounding boundary for future human or LLM contract
 proposals. Its `syncfuzz.target-contract-candidates.v1` input requires a

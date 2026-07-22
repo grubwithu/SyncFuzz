@@ -137,6 +137,13 @@ func TestBuildTargetScheduleMatrixAddsMutationFocusDerivedCandidates(t *testing.
 			if len(scenario.Mutations) == 0 || scenario.Mutations[len(scenario.Mutations)-1].MutationID != "phase-shift.process-mode.single-process" {
 				t.Fatalf("expected generated scenario IR to retain mutation provenance: %#v", scenario)
 			}
+			if candidate.ParentQueryID != target.PersistentShellReplayTargetTaskID || candidate.RootQueryID != target.PersistentShellReplayTargetTaskID || scenario.QueryID != candidate.QueryID || scenario.ParentQueryID != candidate.ParentQueryID {
+				t.Fatalf("expected derived phase-shift query genealogy: candidate=%#v scenario=%#v", candidate, scenario)
+			}
+			mutation := scenario.Mutations[len(scenario.Mutations)-1]
+			if mutation.Operator != target.TargetScenarioMutationOperatorTopology || mutation.Parameters["to_topology"] != "single" || len(mutation.SemanticDiff) != 1 || mutation.SemanticDiff[0] != "Recovery.process_mode" {
+				t.Fatalf("expected phase-shift topology semantic diff: %#v", mutation)
+			}
 		}
 	}
 }

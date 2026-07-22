@@ -46,6 +46,17 @@ mutation/coverage 的 query label，不能替代 artifact evidence、contract
 interpretation 或 oracle verdict。为避免误扩论文范围，已有 MAF
 external-effect / authority probes 仍会被显式标注，但不属于主 `<A,O>` 结论。
 
+Scenario IR 同时用 `syncfuzz.target-query-genealogy.v1` 固化 Query 谱系：root
+query 的 `query_id == root_query_id`，derived query 必须写出
+`parent_query_id`；每个原子 mutation 带有 `operator`、结构化
+`parameters` 与 `semantic_diff`，后者明确影响 `Plant`、`Boundary`、
+`Recovery`、`Activation` 或 `Witness` 的哪一部分。因而改变 process mode
+被记为 `topology-substitution` / `Recovery.process_mode`，将 passive witness
+提升为 trusted action 被记为 `Activation.kind` 与 `Witness.oracle`；不能再把
+多个语义变化混成一条不可追溯的 prompt。该 lineage 随 task/result、matrix、
+suite、candidate summary、frontier 流转，并进入 root/operator/semantic-diff
+coverage gap，供后续 campaign 使用。
+
 target runner 现已通过 `--observation-plan` 消费该 schema：它把验证后的
 plan 复制进新 run，并生成 `targeted-probe-report.json`，以 query-specific
 path/process/FD selection 投影 broad snapshot。默认保持 shadow mode；可选的

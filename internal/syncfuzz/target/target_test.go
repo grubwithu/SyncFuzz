@@ -94,6 +94,12 @@ printf target-output`,
 	if recorded.ViolationSignature == nil || recorded.ViolationSignature.SignatureID != result.ViolationSignature.SignatureID {
 		t.Fatalf("expected persisted violation signature: %#v", recorded.ViolationSignature)
 	}
+	if result.QueryID != "orphan-process" || result.ParentQueryID != "" || result.RootQueryID != "orphan-process" {
+		t.Fatalf("expected persisted root-query lineage: %#v", result)
+	}
+	if recorded.QueryID != result.QueryID || recorded.ParentQueryID != result.ParentQueryID || recorded.RootQueryID != result.RootQueryID {
+		t.Fatalf("expected recorded query lineage: %#v", recorded)
+	}
 }
 
 func TestRunTargetConsumesObservationPlanInShadowMode(t *testing.T) {

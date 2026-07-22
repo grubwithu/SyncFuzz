@@ -57,6 +57,8 @@ type ViolationHypothesis struct {
 type LifecycleQuery struct {
 	SchemaVersion string              `json:"schema_version"`
 	QueryID       string              `json:"query_id"`
+	ParentQueryID string              `json:"parent_query_id,omitempty"`
+	RootQueryID   string              `json:"root_query_id,omitempty"`
 	ScenarioID    string              `json:"scenario_id,omitempty"`
 	TaskID        string              `json:"task_id,omitempty"`
 	Init          QueryStage          `json:"init"`
@@ -93,7 +95,9 @@ func lifecycleQueryFromTargetTask(task targetTaskArtifact) (*LifecycleQuery, err
 	}
 
 	scenario := task.Scenario
-	query.QueryID = firstNonEmpty(scenario.ScenarioID, scenario.TaskID, taskID)
+	query.QueryID = firstNonEmpty(scenario.QueryID, scenario.ScenarioID, scenario.TaskID, taskID)
+	query.ParentQueryID = strings.TrimSpace(scenario.ParentQueryID)
+	query.RootQueryID = firstNonEmpty(scenario.RootQueryID, query.QueryID)
 	query.ScenarioID = scenario.ScenarioID
 	query.TaskID = firstNonEmpty(scenario.TaskID, taskID)
 	query.Init = queryStageForRoles(scenario, "setup")
@@ -189,6 +193,17 @@ func NormalizeLifecycleQuery(query *LifecycleQuery) error {
 		return fmt.Errorf("lifecycle query id is required")
 	}
 	query.ScenarioID = strings.TrimSpace(query.ScenarioID)
+	query.ParentQueryID = strings.TrimSpace(query.ParentQueryID)
+	query.RootQueryID = strings.TrimSpace(query.RootQueryID)
+	if query.RootQueryID == "" {
+		query.RootQueryID = query.QueryID
+	}
+	if query.ParentQueryID == query.QueryID {
+		return fmt.Errorf("lifecycle query %q cannot name itself as parent_query_id", query.QueryID)
+	}
+	if query.ParentQueryID == "" && query.RootQueryID != query.QueryID {
+		return fmt.Errorf("root lifecycle query %q must use its query_id as root_query_id", query.QueryID)
+	}
 	query.TaskID = strings.TrimSpace(query.TaskID)
 	normalizeQueryStage(&query.Init)
 	normalizeQueryStage(&query.Plant)

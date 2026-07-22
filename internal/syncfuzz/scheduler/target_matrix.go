@@ -22,6 +22,9 @@ type TargetScheduleCandidate struct {
 	TargetID                 string                              `json:"target_id"`
 	ScenarioSchemaVersion    string                              `json:"scenario_schema_version,omitempty"`
 	ScenarioID               string                              `json:"scenario_id,omitempty"`
+	QueryID                  string                              `json:"query_id,omitempty"`
+	ParentQueryID            string                              `json:"parent_query_id,omitempty"`
+	RootQueryID              string                              `json:"root_query_id,omitempty"`
 	SeedID                   string                              `json:"seed_id,omitempty"`
 	TaskID                   string                              `json:"task_id"`
 	PromptProfileID          string                              `json:"prompt_profile_id,omitempty"`
@@ -112,6 +115,9 @@ func BuildTargetScheduleMatrix(opts TargetMatrixOptions) (*TargetScheduleMatrix,
 			if ok {
 				candidate.ScenarioSchemaVersion = taskInfo.ScenarioSchemaVersion
 				candidate.ScenarioID = taskInfo.ScenarioID
+				candidate.QueryID = taskInfo.QueryID
+				candidate.ParentQueryID = taskInfo.ParentQueryID
+				candidate.RootQueryID = taskInfo.RootQueryID
 				candidate.SeedID = taskInfo.SeedID
 				candidate.Description = taskInfo.Description
 				candidate.Objective = taskInfo.Objective
@@ -344,11 +350,15 @@ func targetDerivedProcessModePhaseShiftCandidate(base TargetScheduleCandidate) (
 	derived.MutationFocusID = mutationID
 	derived.MutationFocusKind = target.TargetScenarioMutationPhaseShift
 	derived.Mutations = append(append([]target.TargetScenarioMutation{}, base.Mutations...), target.TargetScenarioMutation{
-		MutationID: mutationID,
-		Kind:       target.TargetScenarioMutationPhaseShift,
-		Summary:    "run the same checkpoint operation in one runtime process instead of splitting initial and resumed phases",
+		MutationID:   mutationID,
+		Kind:         target.TargetScenarioMutationPhaseShift,
+		Operator:     target.TargetScenarioMutationOperatorTopology,
+		Parameters:   map[string]string{"from_topology": "split-process", "to_topology": "single"},
+		SemanticDiff: []string{"Recovery.process_mode"},
+		Summary:      "run the same checkpoint operation in one runtime process instead of splitting initial and resumed phases",
 	})
 	derived.CandidateID = base.CandidateID + "/phase-shift-single-process"
+	targetDerivedCandidateQuery(&derived, base, "phase-shift-process-mode-single")
 	return derived, true
 }
 
@@ -548,6 +558,9 @@ func targetDerivedGeneratedScenarioCandidate(base TargetScheduleCandidate, gener
 	derived.Prompt = generated.Prompt
 	derived.ScenarioSchemaVersion = scenario.SchemaVersion
 	derived.ScenarioID = scenario.ScenarioID
+	derived.QueryID = scenario.QueryID
+	derived.ParentQueryID = scenario.ParentQueryID
+	derived.RootQueryID = scenario.RootQueryID
 	derived.SeedID = scenario.SeedID
 	derived.Description = scenario.Description
 	derived.Objective = scenario.Objective
@@ -586,6 +599,33 @@ func targetDerivedGeneratedScenarioCandidate(base TargetScheduleCandidate, gener
 		}
 	}
 	return derived
+}
+
+func targetDerivedCandidateQuery(derived *TargetScheduleCandidate, base TargetScheduleCandidate, suffix string) {
+	if derived == nil {
+		return
+	}
+	parentQueryID := strings.TrimSpace(base.QueryID)
+	if parentQueryID == "" {
+		parentQueryID = strings.TrimSpace(base.ScenarioID)
+	}
+	if parentQueryID == "" {
+		parentQueryID = strings.TrimSpace(base.TaskID)
+	}
+	if parentQueryID == "" {
+		return
+	}
+	suffix = strings.Trim(strings.TrimSpace(suffix), "/")
+	if suffix == "" {
+		return
+	}
+	derived.QueryID = parentQueryID + "/" + suffix
+	derived.ScenarioID = derived.QueryID
+	derived.ParentQueryID = parentQueryID
+	derived.RootQueryID = strings.TrimSpace(base.RootQueryID)
+	if derived.RootQueryID == "" {
+		derived.RootQueryID = parentQueryID
+	}
 }
 
 func findTargetMatrixCandidate(matrix *TargetScheduleMatrix, taskID string) (TargetScheduleCandidate, error) {

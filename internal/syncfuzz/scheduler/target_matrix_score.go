@@ -12,6 +12,9 @@ type TargetCandidateSummary struct {
 	CandidateID             string                                      `json:"candidate_id"`
 	TargetID                string                                      `json:"target_id"`
 	ScenarioID              string                                      `json:"scenario_id,omitempty"`
+	QueryID                 string                                      `json:"query_id,omitempty"`
+	ParentQueryID           string                                      `json:"parent_query_id,omitempty"`
+	RootQueryID             string                                      `json:"root_query_id,omitempty"`
 	SeedID                  string                                      `json:"seed_id,omitempty"`
 	TaskID                  string                                      `json:"task_id"`
 	PromptProfileID         string                                      `json:"prompt_profile_id,omitempty"`
@@ -84,6 +87,9 @@ func summarizeTargetCandidates(results []TargetSuiteRunResult) []TargetCandidate
 					CandidateID:          result.CandidateID,
 					TargetID:             result.TargetID,
 					ScenarioID:           result.ScenarioID,
+					QueryID:              result.QueryID,
+					ParentQueryID:        result.ParentQueryID,
+					RootQueryID:          result.RootQueryID,
 					SeedID:               result.SeedID,
 					TaskID:               result.TaskID,
 					PromptProfileID:      result.PromptProfileID,

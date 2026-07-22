@@ -241,11 +241,12 @@ interpretation。
 
 紧接着的开发顺序是：
 
-1. lifecycle query 与 `syncfuzz.target-violation-signature.v1` 已固化：每个
-   executable Scenario IR 都会带有
-   `<relation, resource, boundary, mechanism, consequence>` 映射，并进入
-   matrix/suite/frontier 的 coverage taxonomy；下一步以这些 signature 分层
-   真实 runtime counterfactual campaign；
+1. lifecycle query、`syncfuzz.target-violation-signature.v1` 与
+   `syncfuzz.target-query-genealogy.v1` 已固化：每个 executable Scenario IR
+   都会带有 `<relation, resource, boundary, mechanism, consequence>` 映射，且
+   每个 derived query 记录 parent/root、atomic operator、parameters 与
+   semantic diff；它们进入 matrix/suite/frontier 的 coverage taxonomy。下一步
+   以 signature 与 mutation lineage 分层真实 runtime counterfactual campaign；
 2. 在 controlled campaign 中量化 local plan-selected process/FD probe、三类 lifecycle marker 与 refine-once 后的 fallback coverage，并量化无 marker 时 P5 partial coverage；
 3. `target compare` 已将 checkpoint-bound root-cause hypothesis 收紧为 contract-calibrated 条件：同一 profile/rule 的 task-compliant pair 必须呈现 target violation / control consistency；`target pair-campaign` 将 fresh-runtime、branch-cleanup、namespace-restore 等 counterfactual control 固化为可复现 manifest，`target calibration-summary` 已汇总 campaign 的 calibration coverage、unresolved reason 与 provenance，并仅在独立 candidate-level review manifest 存在时量化 reviewed hypothesis precision；下一步收集真实 runtime 的 counterfactual labels；
 4. 仅在环境和评估支持时，加入作为同一 evidence source 的 eBPF trace；

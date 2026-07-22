@@ -283,6 +283,25 @@ func TestRefinePlanFromFallbackExpandsOnceWithSocketDependencies(t *testing.T) {
 	}
 }
 
+func TestLifecycleQueryPreservesScenarioGenealogy(t *testing.T) {
+	query, err := lifecycleQueryFromTargetTask(targetTaskArtifact{
+		TaskID: "unix-listener-residue-fork",
+		Scenario: &targetScenarioArtifact{
+			ScenarioID:    "unix-listener-residue-fork/activation-trusted-action",
+			QueryID:       "unix-listener-residue-fork/activation-trusted-action",
+			ParentQueryID: "unix-listener-residue-fork",
+			RootQueryID:   "unix-listener-residue-fork",
+			TaskID:        "unix-listener-residue-fork",
+		},
+	})
+	if err != nil {
+		t.Fatalf("lifecycleQueryFromTargetTask failed: %v", err)
+	}
+	if query.QueryID != "unix-listener-residue-fork/activation-trusted-action" || query.ParentQueryID != "unix-listener-residue-fork" || query.RootQueryID != "unix-listener-residue-fork" {
+		t.Fatalf("expected scenario genealogy in lifecycle query: %#v", query)
+	}
+}
+
 func writeObservationJSON(t *testing.T, path string, value any) {
 	t.Helper()
 	if err := core.WriteJSON(path, value); err != nil {
