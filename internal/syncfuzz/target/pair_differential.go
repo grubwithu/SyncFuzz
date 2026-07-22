@@ -276,6 +276,9 @@ func compareTargetPairFilesystem(control core.Snapshot, target core.Snapshot) Ta
 	targetPaths := target.Paths()
 	delta := TargetPairFilesystemDelta{}
 	for path, targetEntry := range targetPaths {
+		if isTargetPairControlPath(path) {
+			continue
+		}
 		controlEntry, exists := controlPaths[path]
 		if !exists {
 			delta.TargetOnly = append(delta.TargetOnly, path)
@@ -286,6 +289,9 @@ func compareTargetPairFilesystem(control core.Snapshot, target core.Snapshot) Ta
 		}
 	}
 	for path := range controlPaths {
+		if isTargetPairControlPath(path) {
+			continue
+		}
 		if _, exists := targetPaths[path]; !exists {
 			delta.ControlOnly = append(delta.ControlOnly, path)
 		}
@@ -294,6 +300,22 @@ func compareTargetPairFilesystem(control core.Snapshot, target core.Snapshot) Ta
 	sort.Strings(delta.ControlOnly)
 	sort.Slice(delta.Changed, func(i, j int) bool { return delta.Changed[i].Path < delta.Changed[j].Path })
 	return delta
+}
+
+// isTargetPairControlPath excludes artifacts injected by SyncFuzz itself from
+// cross-run evidence. Their task/run ids and command text legitimately differ
+// between a control and a target run and cannot explain target state drift.
+func isTargetPairControlPath(path string) bool {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	if strings.HasPrefix(path, TargetLifecycleMarkerArtifact+".") {
+		return true
+	}
+	switch path {
+	case TargetTaskArtifact, TargetPromptArtifact, TargetLifecycleMarkerArtifact, TargetLifecycleMarkerHelperArtifact:
+		return true
+	default:
+		return false
+	}
 }
 
 func targetPairFileEntryChanges(control core.FileEntry, target core.FileEntry) []string {

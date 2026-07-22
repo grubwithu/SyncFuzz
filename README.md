@@ -256,6 +256,8 @@ not a causal verdict and not a replacement for the target oracle.
 checkpoint reports and writes `target-pair-differential.json` beside the target
 run by default. It compares filesystem objects without treating run timestamps
 as state and compares process name/cmdline multiplicities without using PIDs.
+It excludes SyncFuzz's prompt/task/marker control artifacts before generating
+evidence, since those legitimately vary across runs.
 Its `evidence_candidates` list only target-only paths/processes and target/control
 path changes. When the target oracle is confirmed and its paired control is not,
 it additionally derives checkpoint-bound `root_cause_candidates` with

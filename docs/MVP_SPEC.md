@@ -364,7 +364,8 @@ causal classifier or an oracle verdict.
 query identities and writes `target-pair-differential.json` beside the target
 run unless `--out` is specified. It compares checkpoint filesystem state while
 ignoring run timestamps and compares process name/cmdline multiplicities while
-ignoring PIDs. `evidence_candidates` reports target-only paths/processes and
+ignoring PIDs, and excludes SyncFuzz prompt/task/marker control artifacts.
+`evidence_candidates` reports target-only paths/processes and
 target/control path differences for review; it must not be interpreted as a
 root-cause verdict. Only when the target oracle is confirmed while its paired
 control is not does the report add checkpoint-bound `root_cause_candidates`.

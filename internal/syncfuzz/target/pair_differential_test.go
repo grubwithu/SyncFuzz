@@ -13,8 +13,8 @@ func TestCompareTargetRunsReportsTargetOnlyCheckpointState(t *testing.T) {
 	tmp := t.TempDir()
 	controlDir := filepath.Join(tmp, "control")
 	targetDir := filepath.Join(tmp, "target")
-	writePairRunArtifact(t, controlDir, "control-run", core.Snapshot{Files: []core.FileEntry{{Path: "shared.txt", Type: "file", SHA256: "same"}}}, core.ProcessSnapshot{Processes: []core.ProcessEntry{{PID: 10, Name: "bash", RawCmdline: "bash agent"}}})
-	writePairRunArtifact(t, targetDir, "target-run", core.Snapshot{Files: []core.FileEntry{{Path: "shared.txt", Type: "file", SHA256: "same"}, {Path: "residue.txt", Type: "file", SHA256: "target"}}}, core.ProcessSnapshot{Processes: []core.ProcessEntry{{PID: 11, Name: "bash", RawCmdline: "bash agent"}, {PID: 12, Name: "listener", RawCmdline: "listener --socket residue.sock"}}})
+	writePairRunArtifact(t, controlDir, "control-run", core.Snapshot{Files: []core.FileEntry{{Path: "shared.txt", Type: "file", SHA256: "same"}, {Path: TargetTaskArtifact, Type: "file", SHA256: "control-task"}}}, core.ProcessSnapshot{Processes: []core.ProcessEntry{{PID: 10, Name: "bash", RawCmdline: "bash agent"}}})
+	writePairRunArtifact(t, targetDir, "target-run", core.Snapshot{Files: []core.FileEntry{{Path: "shared.txt", Type: "file", SHA256: "same"}, {Path: TargetTaskArtifact, Type: "file", SHA256: "target-task"}, {Path: "residue.txt", Type: "file", SHA256: "target"}}}, core.ProcessSnapshot{Processes: []core.ProcessEntry{{PID: 11, Name: "bash", RawCmdline: "bash agent"}, {PID: 12, Name: "listener", RawCmdline: "listener --socket residue.sock"}}})
 	writePairRunOracle(t, targetDir, true)
 
 	result, err := CompareTargetRuns(TargetPairDifferentialOptions{ControlRunDir: controlDir, TargetRunDir: targetDir})
