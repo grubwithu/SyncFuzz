@@ -474,11 +474,19 @@ the command receives request/output file paths through environment variables
 and must write the existing candidate-set schema. The generator's output is
 then passed through the same validator with `allowed_source_paths` set to the
 exact request bundle, so it cannot turn an unseen local file into accepted
-support. The run records a hash—not the text—of the configured command, and
+support. A source is capped at 64 KiB and the complete bundle at 128 KiB. The
+run records a hash—not the text—of the configured command, and
 still fixes `automatic_profile_adoption=disabled`. The bundled shell example
 only tests this I/O contract and does not call an LLM. The command is explicitly
 caller-supplied and unsandboxed; SyncFuzz never adopts its output as a profile
 or oracle input.
+
+`examples/target-contract-proposal-openai.py` is the first real wrapper. It
+uses `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, and an explicit
+`CONTRACT_PROPOSAL_MODEL`, then makes one OpenAI-compatible Chat Completions
+request with JSON-object output. It is opt-in through
+`--generator-command 'python3 target-contract-proposal-openai.py'`; no test or
+default command invokes it.
 
 `syncfuzz target refine-plan --plan <plan> --fallback-report <report>` reads
 the report's adjacent fallback snapshot and produces

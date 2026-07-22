@@ -256,8 +256,9 @@ interpretation。
    profile 或 oracle；`target contract-propose` 已提供受评估的源码/契约 proposal
    generator boundary：它只把显式 allowlist 的 task context / UTF-8 source bundle
    交给调用者指定的 generator command，再用同一 allowlist 回验输出 citation，且
-   只记录 command hash。下一步针对固定 target/source bundle 运行真实 LLM wrapper
-   并与人工 proposal 比较 accepted-support 与 review 后的 profile utility。
+   只记录 command hash。`examples/target-contract-proposal-openai.py` 已提供一条
+   opt-in OpenAI-compatible wrapper；下一步针对固定 target/source bundle 运行真实
+   LLM 与人工 proposal，并比较 accepted-support 与 review 后的 profile utility。
 
 最新校准：
 

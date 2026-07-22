@@ -381,13 +381,32 @@ bounded UTF-8 source bundle under `--source-root`; SyncFuzz writes
 source contents and SHA-256 values, while the result records only a hash of the
 generator command, not its potentially sensitive provider configuration. The
 subsequent source-grounding validation restricts accepted citations to the
-exact source files supplied in the request. It always writes the request,
+exact source files supplied in the request. A source file is capped at 64 KiB
+and the complete bundle at 128 KiB. It always writes the request,
 candidate set, validation report, and proposal-run result with
 `automatic_profile_adoption=disabled`; no provider is contacted unless the
 user's command does so. `examples/target-contract-proposal-generator.example.sh`
 is a deterministic interface fixture, not an LLM. The generator command is
 caller-supplied and not sandboxed; the proposal pipeline nevertheless never
 loads its output as a contract profile or oracle input.
+
+For an actual OpenAI-compatible call, use the checked-in wrapper only after
+exporting `OPENAI_API_KEY` and choosing `CONTRACT_PROPOSAL_MODEL` (with optional
+`OPENAI_BASE_URL`):
+
+```bash
+CONTRACT_PROPOSAL_MODEL=<model> \
+go run ./cmd/syncfuzz target contract-propose \
+  --target langgraph-shell-react \
+  --tasks persistent-shell-poisoning-replay \
+  --source-root examples \
+  --sources target-contract-candidate-source.example.md \
+  --generator-command 'python3 target-contract-proposal-openai.py' \
+  --out runs
+```
+
+The wrapper makes one `POST /chat/completions` request with JSON-object output
+and fails closed on missing credentials, malformed responses, or HTTP errors.
 
 `target refine-plan` can consume that fallback once, adding observed paths
 (and socket dependency probes when applicable) to a deterministic refined

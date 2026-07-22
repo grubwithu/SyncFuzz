@@ -79,6 +79,7 @@ TARGET_CONTRACT_PROPOSAL_TASKS ?=
 TARGET_CONTRACT_PROPOSAL_SOURCE_ROOT ?=
 TARGET_CONTRACT_PROPOSAL_SOURCES ?=
 TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND ?=
+CONTRACT_PROPOSAL_MODEL ?=
 EXPECT_FILES ?=
 
 # Phase 5B feedback experiment v3
@@ -142,6 +143,7 @@ TARGET_COMMAND_FILE_ARGS := $(if $(TARGET_COMMAND_FILE),--command-file $(TARGET_
 TARGET_RUNTIME_PAIR_CONTROL_COMMAND_ARGS := $(if $(TARGET_RUNTIME_PAIR_CONTROL_COMMAND),--control-command '$(subst ','"'"',$(TARGET_RUNTIME_PAIR_CONTROL_COMMAND))',)
 TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE_ARGS := $(if $(TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE),--control-command-file $(TARGET_RUNTIME_PAIR_CONTROL_COMMAND_FILE),)
 TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND_ARGS := $(if $(TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND),--generator-command '$(subst ','"'"',$(TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND))',)
+CONTRACT_PROPOSAL_MODEL_ENV := $(if $(CONTRACT_PROPOSAL_MODEL),CONTRACT_PROPOSAL_MODEL='$(subst ','"'"',$(CONTRACT_PROPOSAL_MODEL))',)
 TARGET_TASKS_ARGS := $(if $(TARGET_TASKS),--tasks $(TARGET_TASKS),)
 TARGET_SEED_ARGS := $(if $(TARGET_SEED),--seed $(TARGET_SEED),)
 TARGET_SEEDS_ARGS := $(if $(TARGET_SEEDS),--seeds $(TARGET_SEEDS),)
@@ -262,6 +264,7 @@ help:
 	@echo "  make target-pair-campaign TARGET_RUNTIME_PAIR_RESULTS=runs/<runtime-pair>/target-runtime-pair.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"
 	@echo "  make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign> TARGET_PAIR_CALIBRATION_SUMMARY=runs/<pair-campaign>/target-pair-calibration-summary.json [TARGET_PAIR_REVIEW_MANIFESTS=reviews.json]"
 	@echo "  make target-contract-propose TARGET_CONTRACT_PROPOSAL_TASKS=persistent-shell-poisoning-replay TARGET_CONTRACT_PROPOSAL_SOURCE_ROOT=examples TARGET_CONTRACT_PROPOSAL_SOURCES=target-contract-candidate-source.example.md TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND='bash target-contract-proposal-generator.example.sh'"
+	@echo "  make target-contract-propose CONTRACT_PROPOSAL_MODEL=<model> TARGET_CONTRACT_PROPOSAL_TASKS=persistent-shell-poisoning-replay TARGET_CONTRACT_PROPOSAL_SOURCE_ROOT=examples TARGET_CONTRACT_PROPOSAL_SOURCES=target-contract-candidate-source.example.md TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND='python3 target-contract-proposal-openai.py'"
 	@echo "  make target-contract-candidates TARGET_CONTRACT_CANDIDATES=contract-candidates.json TARGET_CONTRACT_SOURCE_ROOT=<source-root> TARGET_CONTRACT_CANDIDATE_REPORT=runs/target-contract-candidate-validation.json"
 	@echo "  make target-signatures"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json"
@@ -382,7 +385,7 @@ target-contract-propose:
 	@test -n "$(TARGET_CONTRACT_PROPOSAL_SOURCE_ROOT)" || (echo "usage: make target-contract-propose TARGET_CONTRACT_PROPOSAL_TASKS=persistent-shell-poisoning-replay TARGET_CONTRACT_PROPOSAL_SOURCE_ROOT=examples TARGET_CONTRACT_PROPOSAL_SOURCES=target-contract-candidate-source.example.md TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND='bash target-contract-proposal-generator.example.sh'"; exit 2)
 	@test -n "$(TARGET_CONTRACT_PROPOSAL_SOURCES)" || (echo "usage: make target-contract-propose TARGET_CONTRACT_PROPOSAL_TASKS=persistent-shell-poisoning-replay TARGET_CONTRACT_PROPOSAL_SOURCE_ROOT=examples TARGET_CONTRACT_PROPOSAL_SOURCES=target-contract-candidate-source.example.md TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND='bash target-contract-proposal-generator.example.sh'"; exit 2)
 	@test -n "$(TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND)" || (echo "usage: make target-contract-propose TARGET_CONTRACT_PROPOSAL_TASKS=persistent-shell-poisoning-replay TARGET_CONTRACT_PROPOSAL_SOURCE_ROOT=examples TARGET_CONTRACT_PROPOSAL_SOURCES=target-contract-candidate-source.example.md TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND='bash target-contract-proposal-generator.example.sh'"; exit 2)
-	$(SYNCFUZZ) target contract-propose --target $(TARGET_CONTRACT_PROPOSAL_TARGET) --tasks $(TARGET_CONTRACT_PROPOSAL_TASKS) --source-root $(TARGET_CONTRACT_PROPOSAL_SOURCE_ROOT) --sources $(TARGET_CONTRACT_PROPOSAL_SOURCES) $(TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND_ARGS) --out $(OUT) --timeout $(TARGET_TIMEOUT)
+	$(LOAD_DOTENV); $(CONTRACT_PROPOSAL_MODEL_ENV) $(SYNCFUZZ) target contract-propose --target $(TARGET_CONTRACT_PROPOSAL_TARGET) --tasks $(TARGET_CONTRACT_PROPOSAL_TASKS) --source-root $(TARGET_CONTRACT_PROPOSAL_SOURCE_ROOT) --sources $(TARGET_CONTRACT_PROPOSAL_SOURCES) $(TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND_ARGS) --out $(OUT) --timeout $(TARGET_TIMEOUT)
 
 target-contract-candidates:
 	@test -n "$(TARGET_CONTRACT_CANDIDATES)" || (echo "usage: make target-contract-candidates TARGET_CONTRACT_CANDIDATES=contract-candidates.json TARGET_CONTRACT_SOURCE_ROOT=<source-root> TARGET_CONTRACT_CANDIDATE_REPORT=path"; exit 2)

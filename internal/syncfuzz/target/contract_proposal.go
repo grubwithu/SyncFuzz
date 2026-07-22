@@ -22,7 +22,8 @@ const (
 	TargetContractProposalCandidateArtifact    = "target-contract-candidates.json"
 	TargetContractProposalResultArtifact       = "target-contract-proposal-run.json"
 
-	targetContractProposalMaxSourceBytes = 256 * 1024
+	targetContractProposalMaxSourceBytes = 64 * 1024
+	targetContractProposalMaxBundleBytes = 128 * 1024
 )
 
 // TargetContractProposalOptions runs a user-selected proposal generator over
@@ -278,6 +279,7 @@ func targetContractProposalSources(sourceRoot string, sourcePaths []string) ([]T
 	}
 	sort.Strings(normalized)
 	sources := make([]TargetContractProposalSource, 0, len(normalized))
+	bundleBytes := int64(0)
 	for _, sourcePath := range normalized {
 		resolved, err := filepath.EvalSymlinks(filepath.Join(sourceRoot, sourcePath))
 		if err != nil {
@@ -296,6 +298,10 @@ func targetContractProposalSources(sourceRoot string, sourcePaths []string) ([]T
 		}
 		if info.Size() > targetContractProposalMaxSourceBytes {
 			return nil, fmt.Errorf("contract proposal source %s exceeds %d byte limit", sourcePath, targetContractProposalMaxSourceBytes)
+		}
+		bundleBytes += info.Size()
+		if bundleBytes > targetContractProposalMaxBundleBytes {
+			return nil, fmt.Errorf("contract proposal source bundle exceeds %d byte limit", targetContractProposalMaxBundleBytes)
 		}
 		content, err := os.ReadFile(resolved)
 		if err != nil {
