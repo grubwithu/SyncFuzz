@@ -5,15 +5,13 @@ import (
 	"testing"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
-	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
 func TestExtractTargetRunFootprintAndCompilePlanForUnixSocket(t *testing.T) {
 	runDir := t.TempDir()
-	task := target.TargetTask{
+	task := targetTaskArtifact{
 		TaskID: "unix-listener-residue-fork",
-		Scenario: &target.TargetScenarioInfo{
-			SchemaVersion:        target.TargetScenarioSchemaVersion,
+		Scenario: &targetScenarioArtifact{
 			ScenarioID:           "unix-listener-residue-fork",
 			TaskID:               "unix-listener-residue-fork",
 			PlantPrimitiveID:     "workspace-unix-listener",
@@ -21,11 +19,11 @@ func TestExtractTargetRunFootprintAndCompilePlanForUnixSocket(t *testing.T) {
 			LifecycleEdge:        "checkpoint->fork",
 			ActivationKindID:     "unix-socket-connect",
 			OracleKindID:         "unix-listener-residue",
-			ExecutionPlan:        &target.TargetScenarioExecutionPlan{LifecycleOperationID: "checkpoint-fork"},
+			ExecutionPlan:        &targetExecutionPlanArtifact{LifecycleOperationID: "checkpoint-fork"},
 			DefaultExpectedFiles: []string{"unix-listener-residue-fork-check.txt"},
 		},
 	}
-	writeObservationJSON(t, filepath.Join(runDir, target.TargetTaskArtifact), task)
+	writeObservationJSON(t, filepath.Join(runDir, targetTaskArtifactName), task)
 	writeObservationJSON(t, filepath.Join(runDir, "snapshot-before.json"), core.Snapshot{Files: []core.FileEntry{}})
 	writeObservationJSON(t, filepath.Join(runDir, "snapshot-after.json"), core.Snapshot{Files: []core.FileEntry{
 		{Path: "branch-listener.sock", Type: "socket", Mode: "Srwxr-xr-x"},
@@ -70,7 +68,7 @@ func TestExtractTargetRunFootprintAndCompilePlanForUnixSocket(t *testing.T) {
 		}
 	}
 	path := findFootprintPath(footprint.Paths, "branch-listener.sock", ResourceUnixSocket)
-	if path.Path == "" || !containsString(path.Operations, "create") {
+	if path.Path == "" || path.OriginPhase != "after-recovery" || !containsString(path.Operations, "create") {
 		t.Fatalf("expected socket create footprint: %#v", footprint.Paths)
 	}
 	if len(footprint.Processes) != 1 || footprint.Processes[0].Executable != "python3" {
@@ -154,6 +152,44 @@ func TestPlanRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCaptureTargetedProbeCheckpointSelectsOnlyPlannedObjects(t *testing.T) {
+	plan := ObservationPlan{
+		QueryID:     "probe-query",
+		Checkpoints: []ObservationPoint{ObservationAfterRecovery},
+		ProbePlans: []ProbePlan{
+			{Family: ProbeFilesystem, Enabled: true, Paths: []string{"wanted.txt", "missing.txt"}, Fields: []string{"exists"}},
+			{Family: ProbeUnixSocket, Enabled: true, Paths: []string{"listener.sock"}, Fields: []string{"exists"}},
+			{Family: ProbeProcess, Enabled: true, ProcessSelectors: []ProcessFootprint{{Executable: "listener", CommandLine: "listener --socket listener.sock"}}, Fields: []string{"alive"}},
+		},
+	}
+	snapshot := core.Snapshot{Files: []core.FileEntry{
+		{Path: "wanted.txt", Type: "file"},
+		{Path: "listener.sock", Type: "socket"},
+		{Path: "unplanned.txt", Type: "file"},
+	}}
+	processes := core.ProcessSnapshot{Processes: []core.ProcessEntry{
+		{PID: 10, Name: "listener", RawCmdline: "listener --socket listener.sock", WorkspaceRelated: true},
+		{PID: 11, Name: "other", RawCmdline: "other", WorkspaceRelated: true},
+	}}
+
+	checkpoint, err := CaptureTargetedProbeCheckpoint(plan, ObservationAfterRecovery, "P6", &snapshot, &processes, "test")
+	if err != nil {
+		t.Fatalf("CaptureTargetedProbeCheckpoint failed: %v", err)
+	}
+	filesystem, ok := findTargetedProbeFamily(checkpoint.Families, ProbeFilesystem)
+	if !ok || len(filesystem.MatchedPaths) != 1 || filesystem.MatchedPaths[0].Path != "wanted.txt" || !containsString(filesystem.MissingPaths, "missing.txt") {
+		t.Fatalf("unexpected filesystem targeted probe: %#v", filesystem)
+	}
+	socket, ok := findTargetedProbeFamily(checkpoint.Families, ProbeUnixSocket)
+	if !ok || len(socket.MatchedPaths) != 1 || socket.MatchedPaths[0].Path != "listener.sock" {
+		t.Fatalf("unexpected socket targeted probe: %#v", socket)
+	}
+	process, ok := findTargetedProbeFamily(checkpoint.Families, ProbeProcess)
+	if !ok || len(process.MatchedProcesses) != 1 || process.MatchedProcesses[0].PID != 10 {
+		t.Fatalf("unexpected process targeted probe: %#v", process)
+	}
+}
+
 func writeObservationJSON(t *testing.T, path string, value any) {
 	t.Helper()
 	if err := core.WriteJSON(path, value); err != nil {
@@ -204,4 +240,13 @@ func findProbePlan(plans []ProbePlan, family ProbeFamily) (ProbePlan, bool) {
 		}
 	}
 	return ProbePlan{}, false
+}
+
+func findTargetedProbeFamily(families []TargetedProbeFamilyResult, want ProbeFamily) (TargetedProbeFamilyResult, bool) {
+	for _, family := range families {
+		if family.Family == want {
+			return family, true
+		}
+	}
+	return TargetedProbeFamilyResult{}, false
 }

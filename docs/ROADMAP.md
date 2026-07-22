@@ -208,8 +208,10 @@ state-probe plan -> deterministic differential/root-cause evidence**。
 `observation-plan.json`：它从 Scenario IR、filesystem snapshot、process
 lineage 与 state trace 推导 query-specific state surfaces，并对 socket/FD
 等资源施加显式 dependency closure。当前计划是 artifact/IR-guided，保留
-`expand-once-then-full-probe` fallback；它不是 eBPF collector，也还没有由
-target runner 在执行期消费。
+`expand-once-then-full-probe` fallback；它不是 eBPF collector。target runner
+现已可通过 `--observation-plan` 在 shadow mode 消费计划，将 plan-selected
+path/process/FD objects 写入 `targeted-probe-report.json`，同时保留 broad
+snapshot 作为 correctness fallback。
 
 两份 artifact 现在共享 `syncfuzz.lifecycle-query.v1`：
 `q = <Init, Plant, Boundary, Recovery, Activation, Witness>`。每个阶段保留
@@ -220,7 +222,7 @@ interpretation。
 紧接着的开发顺序是：
 
 1. 固化 lifecycle query 与 violation signature 的 typed schema；
-2. 让 target runner 在 `before-plant`、`after-plant`、`after-recovery`、`after-activation` 消费 observation plan，并用全量 probe fallback 校验漏报；
+2. 用 shadow report 校验 plan coverage 后，将 target runner 的 filesystem / process collection 从 broad snapshot 逐步切换到 plan-selected probe；为 generic command adapter 补 lifecycle marker，消除当前 P5 `after-plant` 的 partial coverage；
 3. 将差分与 root-cause 输出绑定到这些 checkpoint；
 4. 仅在环境和评估支持时，加入作为同一 evidence source 的 eBPF trace；
 5. 让 LLM 仅从源码/契约生成 probe 或 contract 候选，绝不担当 oracle。

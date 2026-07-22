@@ -33,9 +33,14 @@ Scenario IR 的 component identity、kind 与 summary；`violation_hypothesis`
 只描述要由后续 differential oracle 回答的 recovery-consistency relation，
 不是一个自动判定或 LLM judge。
 
-接下来的直接目标是让 target runner 消费 observation plan，并将
-query-specific probe 与 full-probe fallback 的差分结果写回统一 artifact。
-完成后才评估 time-boxed、特权环境可用的 OS trace/eBPF evidence source。
+target runner 现已通过 `--observation-plan` 消费该 schema：它把验证后的
+plan 复制进新 run，并生成 `targeted-probe-report.json`，以 query-specific
+path/process/FD selection 投影 broad snapshot。当前刻意保持 shadow mode：
+broad artifact 仍是 correctness fallback，generic command adapter 也会把
+没有 semantic plant marker 的 P5 filesystem coverage 明确标为 partial。
+接下来的直接目标是使用这些 coverage report 安全地把 collection 切到
+真正的 plan-selected probe；完成后才评估 time-boxed、特权环境可用的 OS
+trace/eBPF evidence source。
 
 ## 当前判断
 

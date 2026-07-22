@@ -15,6 +15,7 @@ import (
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/environment"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/observation"
 )
 
 const (
@@ -194,26 +195,27 @@ type TargetAdapterInfo struct {
 }
 
 type TargetRunOptions struct {
-	AdapterID        string
-	TargetID         string
-	TaskID           string
-	Objective        string
-	Scenario         *TargetScenarioInfo
-	ExecutionPlan    *TargetScenarioExecutionPlan
-	PromptProfileID  string
-	PromptVariantID  string
-	Prompt           string
-	PromptFile       string
-	Command          string
-	CommandFile      string
-	OutDir           string
-	Workspace        string
-	Timeout          time.Duration
-	ObserveDelay     time.Duration
-	LateObserveDelay time.Duration
-	EnvKind          string
-	ContainerImage   string
-	ExpectedFiles    []string
+	AdapterID           string
+	TargetID            string
+	TaskID              string
+	Objective           string
+	Scenario            *TargetScenarioInfo
+	ExecutionPlan       *TargetScenarioExecutionPlan
+	PromptProfileID     string
+	PromptVariantID     string
+	Prompt              string
+	PromptFile          string
+	Command             string
+	CommandFile         string
+	OutDir              string
+	Workspace           string
+	Timeout             time.Duration
+	ObserveDelay        time.Duration
+	LateObserveDelay    time.Duration
+	ObservationPlanPath string
+	EnvKind             string
+	ContainerImage      string
+	ExpectedFiles       []string
 }
 
 type TargetTask struct {
@@ -297,6 +299,9 @@ type TargetRunResult struct {
 	LateExpectedFiles        []string                      `json:"late_expected_files,omitempty"`
 	LateExpectedFilesPresent []string                      `json:"late_expected_files_present,omitempty"`
 	LateExpectedFilesMissing []string                      `json:"late_expected_files_missing,omitempty"`
+	ObservationPlanArtifact  string                        `json:"observation_plan_artifact,omitempty"`
+	ObservationPlanQueryID   string                        `json:"observation_plan_query_id,omitempty"`
+	TargetedProbeArtifact    string                        `json:"targeted_probe_artifact,omitempty"`
 	CommandResult            TargetCommandResult           `json:"command_result"`
 	ProcessLineage           core.ProcessLineageSummary    `json:"process_lineage"`
 	TargetOracle             TargetOracleResult            `json:"target_oracle"`
@@ -315,7 +320,7 @@ func TargetAdapters() []TargetAdapterInfo {
 			AdapterID:    DefaultTargetAdapterID,
 			Implemented:  true,
 			Description:  "run any local or container-visible agent command inside a SyncFuzz workspace",
-			Capabilities: []string{"run", "reset-by-workspace", "workspace-binding", "stdout-stderr-capture", "filesystem-snapshot", "process-snapshot"},
+			Capabilities: []string{"run", "reset-by-workspace", "workspace-binding", "stdout-stderr-capture", "filesystem-snapshot", "process-snapshot", "observation-plan-shadow"},
 		},
 		{
 			AdapterID:    "langgraph",
@@ -356,6 +361,14 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 	if opts.TaskID == "" {
 		opts.TaskID = DefaultTargetTaskID
+	}
+	var observationPlan *observation.ObservationPlan
+	if path := strings.TrimSpace(opts.ObservationPlanPath); path != "" {
+		plan, err := observation.ReadPlan(path)
+		if err != nil {
+			return nil, fmt.Errorf("read observation plan: %w", err)
+		}
+		observationPlan = &plan
 	}
 	if opts.Scenario != nil {
 		scenario := CloneTargetScenarioInfo(opts.Scenario)
@@ -495,12 +508,27 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err := core.WriteJSON(filepath.Join(run.Workspace, TargetTaskArtifact), task); err != nil {
 		return nil, err
 	}
+	var targetedProbeReport *observation.TargetedProbeReport
+	if observationPlan != nil {
+		queryID := targetObservationQueryID(task)
+		if observationPlan.QueryID != queryID {
+			return nil, fmt.Errorf("observation plan query %q does not match target task query %q", observationPlan.QueryID, queryID)
+		}
+		if err := observation.WritePlan(filepath.Join(run.RunDir, observation.ObservationPlanArtifact), observationPlan); err != nil {
+			return nil, err
+		}
+		targetedProbeReport, err = observation.NewTargetedProbeReport(*observationPlan, observation.ObservationPlanArtifact)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := run.Trace.Write(core.NewEvent(run, "P1", "target_task_prepared", map[string]any{
-		"artifact":       TargetTaskArtifact,
-		"prompt_file":    TargetPromptArtifact,
-		"prompt_profile": opts.PromptProfileID,
-		"prompt_variant": opts.PromptVariantID,
-		"command":        opts.Command,
+		"artifact":         TargetTaskArtifact,
+		"prompt_file":      TargetPromptArtifact,
+		"prompt_profile":   opts.PromptProfileID,
+		"prompt_variant":   opts.PromptVariantID,
+		"command":          opts.Command,
+		"observation_plan": observationPlan != nil,
 	})); err != nil {
 		return nil, err
 	}
@@ -514,6 +542,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 	processBefore, err := core.RecordProcessSnapshot(ctx, env, run, "P0", "process-before.json")
 	if err != nil {
+		return nil, err
+	}
+	if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationBeforePlant, "P0", &before, &processBefore, "adapter pre-command observation"); err != nil {
 		return nil, err
 	}
 
@@ -537,12 +568,18 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err != nil {
 		return nil, err
 	}
+	if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterPlant, "P5", nil, &processAfterCommand, "the command adapter has no semantic plant marker; only its command-return process snapshot is available"); err != nil {
+		return nil, err
+	}
 
 	if err := waitForTargetObservation(ctx, run, "P6", "target_observation_delay", opts.ObserveDelay); err != nil {
 		return nil, err
 	}
 	after, processAfter, err := observeTargetWorkspace(ctx, env, run, "P6", "snapshot-after.json", "process-after.json")
 	if err != nil {
+		return nil, err
+	}
+	if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterRecovery, "P6", &after, &processAfter, "adapter immediate post-recovery observation"); err != nil {
 		return nil, err
 	}
 	processLineage, err := core.RecordProcessLineage(run, "P6", "process-lineage.json", processBefore, processAfterCommand, processAfter, "process-before.json", "process-after-command.json", "process-after.json")
@@ -558,11 +595,15 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 
 	lateObserved := opts.LateObserveDelay > 0
 	var late core.Snapshot
+	var processLate core.ProcessSnapshot
 	if lateObserved {
 		if err := waitForTargetObservation(ctx, run, "P7", "target_late_observation_delay", opts.LateObserveDelay); err != nil {
 			return nil, err
 		}
-		if late, _, err = observeTargetWorkspace(ctx, env, run, "P7", TargetSnapshotLateArtifact, TargetProcessLateArtifact); err != nil {
+		if late, processLate, err = observeTargetWorkspace(ctx, env, run, "P7", TargetSnapshotLateArtifact, TargetProcessLateArtifact); err != nil {
+			return nil, err
+		}
+		if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterActivation, "P7", &late, &processLate, "adapter late observation used as activation checkpoint"); err != nil {
 			return nil, err
 		}
 		if _, err := core.RecordFilesystemMetadata(run, "P7", TargetFilesystemLateArtifact, []core.FilesystemSnapshotArtifact{
@@ -570,6 +611,13 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 			{Phase: "P6", Artifact: "snapshot-after.json", Snapshot: after},
 			{Phase: "P7", Artifact: TargetSnapshotLateArtifact, Snapshot: late},
 		}); err != nil {
+			return nil, err
+		}
+	} else if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterActivation, "P6", &after, &processAfter, "no separate late activation observation was requested; reusing the immediate post-recovery artifact"); err != nil {
+		return nil, err
+	}
+	if targetedProbeReport != nil {
+		if err := core.WriteJSON(filepath.Join(run.RunDir, observation.TargetedProbeReportArtifact), targetedProbeReport); err != nil {
 			return nil, err
 		}
 	}
@@ -599,6 +647,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	evidence := targetEvidence(completed, expectationsMet, present, missing, commandResult)
 	evidence = append(evidence, targetOracle.Evidence...)
 	evidence = append(evidence, targetOracleMissingEvidence(targetOracle)...)
+	if observationPlan != nil {
+		evidence = append(evidence, "observation plan consumed in shadow mode with broad artifacts retained as fallback")
+	}
 	if contractInterpretation != nil {
 		if contractInterpretation.Summary != "" {
 			evidence = append(evidence, "contract interpretation: "+contractInterpretation.Summary)
@@ -619,6 +670,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"filesystem-metadata.json",
 		TargetResultArtifact,
 	}
+	if observationPlan != nil {
+		artifacts = append(artifacts, observation.ObservationPlanArtifact, observation.TargetedProbeReportArtifact)
+	}
 	observations := []core.StateObservation{
 		{Layer: "agent", StateClass: "target-task", Phase: "P1", Artifact: TargetTaskArtifact, Kind: "target-task", Description: "prompt and command contract passed to the real target adapter"},
 		{Layer: "agent", StateClass: "target-output", Phase: "P5", Artifact: TargetOutputArtifact, Kind: "stdout-stderr", Description: "combined stdout/stderr from the target command"},
@@ -629,6 +683,12 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-after.json", Kind: "process-snapshot"},
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-lineage.json", Kind: "process-lineage"},
 		{Layer: "os", StateClass: "filesystem-metadata", Phase: "P6", Artifact: "filesystem-metadata.json", Kind: "filesystem-metadata"},
+	}
+	if observationPlan != nil {
+		observations = append(observations,
+			core.StateObservation{Layer: "agent", StateClass: "observation-plan", Phase: "P1", Artifact: observation.ObservationPlanArtifact, Kind: "query-specific-probe-plan", Description: "validated query-specific plan copied into the target run"},
+			core.StateObservation{Layer: "os", StateClass: "targeted-probe", Phase: "P6", Artifact: observation.TargetedProbeReportArtifact, Kind: "shadow-probe-report", Description: "plan-selected objects projected from retained broad artifacts"},
+		)
 	}
 	if contractProfile != nil {
 		artifacts = append(artifacts, TargetContractProfileArtifact)
@@ -654,10 +714,14 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	adapterArtifacts, adapterObservations := targetAdapterRuntimeObservations(run.Workspace)
 	artifacts = append(artifacts, adapterArtifacts...)
 	observations = append(observations, adapterObservations...)
+	stateClasses := []string{"workspace", "process", "target-command"}
+	if observationPlan != nil {
+		stateClasses = append(stateClasses, "query-specific-targeted-probe")
+	}
 
 	manifest := core.CaseManifest{
 		Objective:         opts.Objective,
-		StateClasses:      []string{"workspace", "process", "target-command"},
+		StateClasses:      stateClasses,
 		FaultPhases:       faultPhases,
 		Primitives:        []string{"real target command adapter", opts.AdapterID, opts.TaskID},
 		ExpectedSignature: signature,
@@ -695,6 +759,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		LateExpectedFiles:        lateExpected,
 		LateExpectedFilesPresent: latePresent,
 		LateExpectedFilesMissing: lateMissing,
+		ObservationPlanArtifact:  targetObservationPlanArtifactValue(observationPlan),
+		ObservationPlanQueryID:   targetObservationPlanQueryIDValue(observationPlan),
+		TargetedProbeArtifact:    targetedProbeArtifactValue(targetedProbeReport),
 		CommandResult:            commandResult,
 		ProcessLineage:           processLineage.Summary,
 		TargetOracle:             targetOracle,
@@ -730,6 +797,59 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		return nil, err
 	}
 	return result, nil
+}
+
+func targetObservationQueryID(task TargetTask) string {
+	if task.Scenario != nil {
+		if scenarioID := strings.TrimSpace(task.Scenario.ScenarioID); scenarioID != "" {
+			return scenarioID
+		}
+		if scenarioTaskID := strings.TrimSpace(task.Scenario.TaskID); scenarioTaskID != "" {
+			return scenarioTaskID
+		}
+	}
+	return strings.TrimSpace(task.TaskID)
+}
+
+func captureTargetedProbeCheckpoint(report *observation.TargetedProbeReport, plan *observation.ObservationPlan, point observation.ObservationPoint, runnerPhase string, filesystem *core.Snapshot, processes *core.ProcessSnapshot, reason string) error {
+	if report == nil || plan == nil || !observationPlanIncludes(*plan, point) {
+		return nil
+	}
+	checkpoint, err := observation.CaptureTargetedProbeCheckpoint(*plan, point, runnerPhase, filesystem, processes, reason)
+	if err != nil {
+		return err
+	}
+	return report.AddCheckpoint(checkpoint)
+}
+
+func observationPlanIncludes(plan observation.ObservationPlan, point observation.ObservationPoint) bool {
+	for _, candidate := range plan.Checkpoints {
+		if candidate == point {
+			return true
+		}
+	}
+	return false
+}
+
+func targetObservationPlanArtifactValue(plan *observation.ObservationPlan) string {
+	if plan == nil {
+		return ""
+	}
+	return observation.ObservationPlanArtifact
+}
+
+func targetObservationPlanQueryIDValue(plan *observation.ObservationPlan) string {
+	if plan == nil {
+		return ""
+	}
+	return plan.QueryID
+}
+
+func targetedProbeArtifactValue(report *observation.TargetedProbeReport) string {
+	if report == nil {
+		return ""
+	}
+	return observation.TargetedProbeReportArtifact
 }
 
 func resolveTargetPrompt(opts TargetRunOptions) (string, string, string, error) {

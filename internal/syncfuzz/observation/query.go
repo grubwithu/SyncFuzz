@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
 const LifecycleQuerySchemaVersion = "syncfuzz.lifecycle-query.v1"
@@ -70,10 +68,10 @@ type LifecycleQuery struct {
 	Hypothesis    ViolationHypothesis `json:"violation_hypothesis"`
 }
 
-// LifecycleQueryFromTargetTask derives a portable query from a persisted
+// lifecycleQueryFromTargetTask derives a portable query from a persisted
 // target task. Historical ad-hoc tasks still receive a minimal query so they
 // can use the same footprint and plan schemas.
-func LifecycleQueryFromTargetTask(task target.TargetTask) (*LifecycleQuery, error) {
+func lifecycleQueryFromTargetTask(task targetTaskArtifact) (*LifecycleQuery, error) {
 	taskID := strings.TrimSpace(task.TaskID)
 	if taskID == "" {
 		return nil, fmt.Errorf("target task id is required for lifecycle query")
@@ -94,25 +92,23 @@ func LifecycleQueryFromTargetTask(task target.TargetTask) (*LifecycleQuery, erro
 		return query, NormalizeLifecycleQuery(query)
 	}
 
-	scenario, err := target.NormalizeTargetScenarioInfo(task.Scenario)
-	if err != nil {
-		return nil, fmt.Errorf("normalize scenario for lifecycle query: %w", err)
-	}
+	scenario := task.Scenario
 	query.QueryID = firstNonEmpty(scenario.ScenarioID, scenario.TaskID, taskID)
 	query.ScenarioID = scenario.ScenarioID
 	query.TaskID = firstNonEmpty(scenario.TaskID, taskID)
-	query.Init = queryStageForRoles(scenario, target.TargetScenarioComponentSetup)
-	query.Plant = queryStageForRoles(scenario, target.TargetScenarioComponentPlant)
+	query.Init = queryStageForRoles(scenario, "setup")
+	query.Plant = ensureQueryStage(queryStageForRoles(scenario, "plant"), "plant."+scenario.PlantPrimitiveID, scenario.PlantPrimitiveID, "declared plant primitive")
 	query.Boundary = QueryBoundary{
 		LifecycleEdge: scenario.LifecycleEdge,
 		Stage: queryStageForRoles(
 			scenario,
-			target.TargetScenarioComponentLifecycle,
-			target.TargetScenarioComponentFault,
+			"lifecycle",
+			"fault",
 		),
 	}
-	query.Activation = queryStageForRoles(scenario, target.TargetScenarioComponentActivation)
-	query.Witness = queryStageForRoles(scenario, target.TargetScenarioComponentOracle)
+	query.Boundary.Stage = ensureQueryStage(query.Boundary.Stage, "lifecycle."+scenario.LifecycleEdge, scenario.LifecycleEdge, "declared lifecycle boundary")
+	query.Activation = ensureQueryStage(queryStageForRoles(scenario, "activation"), "activation."+scenario.ActivationKindID, scenario.ActivationKindID, "declared activation")
+	query.Witness = ensureQueryStage(queryStageForRoles(scenario, "oracle"), "oracle."+scenario.OracleKindID, scenario.OracleKindID, "declared witness oracle")
 	query.Hypothesis = ViolationHypothesis{
 		Kind:             "recovery-consistency",
 		StateSurface:     scenario.StateSurface,
@@ -133,17 +129,17 @@ func LifecycleQueryFromTargetTask(task target.TargetTask) (*LifecycleQuery, erro
 	return query, NormalizeLifecycleQuery(query)
 }
 
-func queryStageForRoles(scenario *target.TargetScenarioInfo, roles ...target.TargetScenarioComponentRole) QueryStage {
+func queryStageForRoles(scenario *targetScenarioArtifact, roles ...string) QueryStage {
 	if scenario == nil {
 		return QueryStage{}
 	}
-	wanted := make(map[target.TargetScenarioComponentRole]struct{}, len(roles))
+	wanted := make(map[string]struct{}, len(roles))
 	for _, role := range roles {
-		wanted[role] = struct{}{}
+		wanted[strings.TrimSpace(role)] = struct{}{}
 	}
-	components := make([]target.TargetScenarioComponent, 0, len(scenario.Components))
+	components := make([]targetScenarioComponentArtifact, 0, len(scenario.Components))
 	for _, component := range scenario.Components {
-		if _, ok := wanted[component.Role]; ok {
+		if _, ok := wanted[strings.TrimSpace(component.Role)]; ok {
 			components = append(components, component)
 		}
 	}
@@ -161,6 +157,19 @@ func queryStageForRoles(scenario *target.TargetScenarioInfo, roles ...target.Tar
 			Summary:     component.Summary,
 		})
 	}
+	normalizeQueryStage(&stage)
+	return stage
+}
+
+func ensureQueryStage(stage QueryStage, componentID string, kindID string, summary string) QueryStage {
+	if len(stage.Components) > 0 || strings.TrimSpace(kindID) == "" {
+		return stage
+	}
+	stage.Components = []QueryComponent{{
+		ComponentID: strings.TrimSpace(componentID),
+		KindID:      strings.TrimSpace(kindID),
+		Summary:     summary,
+	}}
 	normalizeQueryStage(&stage)
 	return stage
 }

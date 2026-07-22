@@ -8,8 +8,52 @@ import (
 	"strings"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
-	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
+
+const (
+	targetTaskArtifactName         = "target-task.json"
+	targetSnapshotLateArtifactName = "snapshot-late.json"
+)
+
+// These structures intentionally mirror only the persisted target-task JSON
+// fields needed for footprint extraction. Keeping the artifact reader free of
+// a target-package import lets the target runner later consume ObservationPlan
+// without an import cycle.
+type targetTaskArtifact struct {
+	TaskID        string                  `json:"task_id"`
+	ExpectedFiles []string                `json:"expected_files,omitempty"`
+	Scenario      *targetScenarioArtifact `json:"scenario,omitempty"`
+}
+
+type targetScenarioArtifact struct {
+	ScenarioID           string                            `json:"scenario_id"`
+	TaskID               string                            `json:"task_id"`
+	StateSurface         string                            `json:"state_surface,omitempty"`
+	LifecycleEdge        string                            `json:"lifecycle_edge,omitempty"`
+	PlantPrimitiveID     string                            `json:"plant_primitive_id,omitempty"`
+	ActivationKindID     string                            `json:"activation_kind_id,omitempty"`
+	OracleKindID         string                            `json:"oracle_kind_id,omitempty"`
+	DefaultExpectedFiles []string                          `json:"default_expected_files,omitempty"`
+	LateExpectedFiles    []string                          `json:"late_expected_files,omitempty"`
+	Components           []targetScenarioComponentArtifact `json:"components,omitempty"`
+	ExecutionPlan        *targetExecutionPlanArtifact      `json:"execution_plan,omitempty"`
+}
+
+type targetScenarioComponentArtifact struct {
+	ComponentID string `json:"component_id"`
+	Role        string `json:"role"`
+	KindID      string `json:"kind_id"`
+	Summary     string `json:"summary"`
+}
+
+type targetExecutionPlanArtifact struct {
+	LifecycleOperationID string `json:"lifecycle_operation_id,omitempty"`
+	CheckpointSelector   string `json:"checkpoint_selector,omitempty"`
+	Replay               bool   `json:"replay,omitempty"`
+	ForkFollowup         bool   `json:"fork_followup,omitempty"`
+	CheckpointBackend    string `json:"checkpoint_backend,omitempty"`
+	ProcessMode          string `json:"process_mode,omitempty"`
+}
 
 // ExtractTargetRunFootprint builds a deterministic resource footprint from a
 // completed target run. It consumes normalized artifacts rather than parsing
@@ -20,12 +64,12 @@ func ExtractTargetRunFootprint(runDir string) (*ResourceFootprint, error) {
 	if runDir == "" {
 		return nil, fmt.Errorf("target run directory is required")
 	}
-	task, err := readTargetTask(filepath.Join(runDir, target.TargetTaskArtifact))
+	task, err := readTargetTask(filepath.Join(runDir, targetTaskArtifactName))
 	if err != nil {
 		return nil, err
 	}
 
-	query, err := LifecycleQueryFromTargetTask(task)
+	query, err := lifecycleQueryFromTargetTask(task)
 	if err != nil {
 		return nil, err
 	}
@@ -52,29 +96,29 @@ func ExtractTargetRunFootprint(runDir string) (*ResourceFootprint, error) {
 	return footprint, nil
 }
 
-func readTargetTask(path string) (target.TargetTask, error) {
+func readTargetTask(path string) (targetTaskArtifact, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return target.TargetTask{}, fmt.Errorf("read target task %s: %w", path, err)
+		return targetTaskArtifact{}, fmt.Errorf("read target task %s: %w", path, err)
 	}
-	var task target.TargetTask
+	var task targetTaskArtifact
 	if err := json.Unmarshal(raw, &task); err != nil {
-		return target.TargetTask{}, fmt.Errorf("decode target task %s: %w", path, err)
+		return targetTaskArtifact{}, fmt.Errorf("decode target task %s: %w", path, err)
 	}
 	if strings.TrimSpace(task.TaskID) == "" {
-		return target.TargetTask{}, fmt.Errorf("target task %s is missing task_id", path)
+		return targetTaskArtifact{}, fmt.Errorf("target task %s is missing task_id", path)
 	}
 	return task, nil
 }
 
-func addScenarioEvidence(footprint *ResourceFootprint, task target.TargetTask) {
+func addScenarioEvidence(footprint *ResourceFootprint, task targetTaskArtifact) {
 	scenario := task.Scenario
 	if scenario == nil {
 		return
 	}
 	evidence := FootprintEvidence{
 		Source:   EvidenceScenarioIR,
-		Artifact: target.TargetTaskArtifact,
+		Artifact: targetTaskArtifactName,
 		Phase:    "declared",
 		Detail:   "scenario IR declaration",
 	}
@@ -101,7 +145,7 @@ func addScenarioEvidence(footprint *ResourceFootprint, task target.TargetTask) {
 	}
 }
 
-func resourceClassesForScenario(scenario *target.TargetScenarioInfo) []ResourceClass {
+func resourceClassesForScenario(scenario *targetScenarioArtifact) []ResourceClass {
 	if scenario == nil {
 		return nil
 	}
@@ -130,8 +174,8 @@ func addSnapshotEvidence(footprint *ResourceFootprint, runDir string) error {
 	}
 	artifacts := []snapshotArtifact{
 		{name: "snapshot-before.json", phase: "before-plant"},
-		{name: "snapshot-after.json", phase: "after-activation"},
-		{name: target.TargetSnapshotLateArtifact, phase: "after-activation"},
+		{name: "snapshot-after.json", phase: "after-recovery"},
+		{name: targetSnapshotLateArtifactName, phase: "after-activation"},
 	}
 	var previous *core.Snapshot
 	for _, item := range artifacts {

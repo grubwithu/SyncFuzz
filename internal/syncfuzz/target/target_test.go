@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/observation"
 )
 
 func TestRunTargetCommandAdapterRecordsArtifacts(t *testing.T) {
@@ -86,6 +87,101 @@ printf target-output`,
 	if recorded.TaskCompliance.Status != TargetTaskComplianceStatusNotApplicable {
 		t.Fatalf("expected default orphan-process task to skip compliance checks: %#v", recorded.TaskCompliance)
 	}
+}
+
+func TestRunTargetConsumesObservationPlanInShadowMode(t *testing.T) {
+	tmp := t.TempDir()
+	planPath := filepath.Join(tmp, observation.ObservationPlanArtifact)
+	plan := &observation.ObservationPlan{
+		QueryID:           "orphan-process",
+		Checkpoints:       []observation.ObservationPoint{observation.ObservationBeforePlant, observation.ObservationAfterPlant, observation.ObservationAfterRecovery, observation.ObservationAfterActivation},
+		FallbackFullProbe: true,
+		ProbePlans: []observation.ProbePlan{
+			{Family: observation.ProbeFilesystem, Enabled: true, Paths: []string{"late-effect"}, Fields: []string{"exists", "content_hash"}},
+			{Family: observation.ProbeProcess, Enabled: true, Fields: []string{"alive", "command_line"}},
+		},
+	}
+	if err := observation.WritePlan(planPath, plan); err != nil {
+		t.Fatalf("WritePlan failed: %v", err)
+	}
+
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:              filepath.Join(tmp, "runs"),
+		TargetID:            "planned-probe-smoke",
+		TaskID:              "orphan-process",
+		Command:             "printf planned > late-effect",
+		ObserveDelay:        10 * time.Millisecond,
+		ObservationPlanPath: planPath,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget with observation plan failed: %v", err)
+	}
+	if result.ObservationPlanArtifact != observation.ObservationPlanArtifact || result.ObservationPlanQueryID != "orphan-process" {
+		t.Fatalf("expected observation plan metadata: %#v", result)
+	}
+	if result.TargetedProbeArtifact != observation.TargetedProbeReportArtifact {
+		t.Fatalf("expected targeted probe artifact: %#v", result)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(result.ArtifactDir, observation.TargetedProbeReportArtifact))
+	if err != nil {
+		t.Fatalf("read targeted probe report: %v", err)
+	}
+	var report observation.TargetedProbeReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode targeted probe report: %v", err)
+	}
+	if !report.FullProbeFallbackUsed || len(report.Checkpoints) != 4 {
+		t.Fatalf("unexpected targeted probe report: %#v", report)
+	}
+	afterRecovery := findTargetedProbeCheckpoint(report.Checkpoints, observation.ObservationAfterRecovery)
+	if len(afterRecovery.Families) != 2 {
+		t.Fatalf("expected filesystem and process probe results: %#v", afterRecovery)
+	}
+	if !targetedProbeContainsPath(afterRecovery.Families, "late-effect") {
+		t.Fatalf("expected planned late-effect path in after-recovery probe: %#v", afterRecovery)
+	}
+}
+
+func TestRunTargetRejectsObservationPlanForDifferentQuery(t *testing.T) {
+	tmp := t.TempDir()
+	planPath := filepath.Join(tmp, observation.ObservationPlanArtifact)
+	if err := observation.WritePlan(planPath, &observation.ObservationPlan{
+		QueryID:     "different-query",
+		Checkpoints: []observation.ObservationPoint{observation.ObservationBeforePlant},
+		ProbePlans:  []observation.ProbePlan{{Family: observation.ProbeFilesystem, Enabled: true, Fields: []string{"exists"}}},
+	}); err != nil {
+		t.Fatalf("WritePlan failed: %v", err)
+	}
+	_, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:              filepath.Join(tmp, "runs"),
+		TaskID:              "orphan-process",
+		Command:             "true",
+		ObservationPlanPath: planPath,
+	})
+	if err == nil {
+		t.Fatal("expected mismatched observation plan to be rejected")
+	}
+}
+
+func findTargetedProbeCheckpoint(checkpoints []observation.TargetedProbeCheckpoint, point observation.ObservationPoint) observation.TargetedProbeCheckpoint {
+	for _, checkpoint := range checkpoints {
+		if checkpoint.Point == point {
+			return checkpoint
+		}
+	}
+	return observation.TargetedProbeCheckpoint{}
+}
+
+func targetedProbeContainsPath(families []observation.TargetedProbeFamilyResult, want string) bool {
+	for _, family := range families {
+		for _, path := range family.MatchedPaths {
+			if path.Path == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestRunTargetSupportsCommandFile(t *testing.T) {
