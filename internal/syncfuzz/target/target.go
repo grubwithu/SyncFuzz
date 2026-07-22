@@ -26,6 +26,7 @@ const (
 	TargetOutputArtifact                         = "target-output.txt"
 	TargetResultArtifact                         = "target-result.json"
 	TargetCheckpointDifferentialArtifact         = "target-checkpoint-differential.json"
+	TargetCheckpointDifferentialSchemaVersion    = "syncfuzz.target-checkpoint-differential.v1"
 	TargetLifecycleMarkerArtifact                = "target-lifecycle-markers.jsonl"
 	TargetLifecycleMarkerHelperArtifact          = "syncfuzz-lifecycle-marker"
 	TargetSnapshotAfterPlantArtifact             = "snapshot-after-plant.json"
@@ -1293,7 +1294,7 @@ func buildTargetCheckpointDifferential(queryID string, baselineFilesystem core.S
 		}
 	}
 	return TargetCheckpointDifferential{
-		SchemaVersion:        "syncfuzz.target-checkpoint-differential.v1",
+		SchemaVersion:        TargetCheckpointDifferentialSchemaVersion,
 		QueryID:              strings.TrimSpace(queryID),
 		Baseline:             TargetCheckpointState{Point: observation.ObservationBeforePlant, RunnerPhase: "P0", FilesystemArtifact: "snapshot-before.json", ProcessArtifact: "process-before.json"},
 		Checkpoints:          checkpoints,

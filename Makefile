@@ -58,6 +58,9 @@ TARGET_OBSERVATION_PLAN ?=
 TARGET_OBSERVATION_MODE ?=
 TARGET_FALLBACK_REPORT ?=
 TARGET_REFINED_OBSERVATION_PLAN ?=
+TARGET_CONTROL_RUN ?=
+TARGET_COMPARE_RUN ?=
+TARGET_PAIR_DIFFERENTIAL ?=
 EXPECT_FILES ?=
 
 # Phase 5B feedback experiment v3
@@ -232,6 +235,7 @@ help:
 	@echo "  make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id>"
 	@echo "  make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json"
 	@echo "  make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<target-run-id>/targeted-probe-report.json"
+	@echo "  make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id>"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned ENV=local"
@@ -319,6 +323,11 @@ target-refine-plan:
 	@test -n "$(TARGET_OBSERVATION_PLAN)" || (echo "usage: make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<target-run-id>/targeted-probe-report.json [TARGET_REFINED_OBSERVATION_PLAN=path]"; exit 2)
 	@test -n "$(TARGET_FALLBACK_REPORT)" || (echo "usage: make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<target-run-id>/targeted-probe-report.json [TARGET_REFINED_OBSERVATION_PLAN=path]"; exit 2)
 	$(SYNCFUZZ) target refine-plan --plan $(TARGET_OBSERVATION_PLAN) --fallback-report $(TARGET_FALLBACK_REPORT) $(if $(TARGET_REFINED_OBSERVATION_PLAN),--out $(TARGET_REFINED_OBSERVATION_PLAN),)
+
+target-compare:
+	@test -n "$(TARGET_CONTROL_RUN)" || (echo "usage: make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id> [TARGET_PAIR_DIFFERENTIAL=path]"; exit 2)
+	@test -n "$(TARGET_COMPARE_RUN)" || (echo "usage: make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id> [TARGET_PAIR_DIFFERENTIAL=path]"; exit 2)
+	$(SYNCFUZZ) target compare --control $(TARGET_CONTROL_RUN) --target $(TARGET_COMPARE_RUN) $(if $(TARGET_PAIR_DIFFERENTIAL),--out $(TARGET_PAIR_DIFFERENTIAL),)
 
 target-matrix:
 	$(SYNCFUZZ) target matrix --target $(TARGET_ID) --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS)

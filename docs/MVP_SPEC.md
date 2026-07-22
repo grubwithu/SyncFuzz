@@ -64,6 +64,7 @@ go run ./cmd/syncfuzz target prompt-profiles
 go run ./cmd/syncfuzz target footprint --run runs/<target-run-id>
 go run ./cmd/syncfuzz target plan-probes --footprint runs/<target-run-id>/resource-footprint.json
 go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-plan.json --fallback-report runs/<pruned-run>/targeted-probe-report.json
+go run ./cmd/syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id>
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned --command-file examples/target-commands/orphan-process.sh --out runs
@@ -102,6 +103,7 @@ make target-scenarios
 make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id>
 make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json
 make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<pilot-run>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<pruned-run>/targeted-probe-report.json
+make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id>
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
 make target-run TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh EXPECT_FILES=late-effect
@@ -357,6 +359,14 @@ P0 as the baseline, resolves the best artifact for each post-plant checkpoint
 and serializes deterministic filesystem metadata deltas plus process lineage
 deltas. It is evidence for later differential/root-cause analysis, not a
 causal classifier or an oracle verdict.
+
+`syncfuzz target compare --control <run> --target <run>` requires matching
+query identities and writes `target-pair-differential.json` beside the target
+run unless `--out` is specified. It compares checkpoint filesystem state while
+ignoring run timestamps and compares process name/cmdline multiplicities while
+ignoring PIDs. `evidence_candidates` reports target-only paths/processes and
+target/control path differences for review; it must not be interpreted as a
+root-cause verdict.
 
 `syncfuzz target refine-plan --plan <plan> --fallback-report <report>` reads
 the report's adjacent fallback snapshot and produces

@@ -54,8 +54,10 @@ marker 覆盖率与 refine-once 的 fallback coverage；完成后才评估 time-
 target runner 还会为每次 run 生成 `target-checkpoint-differential.json`：以 P0
 为 baseline，按 checkpoint 引用 marker/fallback artifact，并复用 filesystem
 metadata delta 与 process lineage delta。它只提供可复核的 differential evidence；
-下一步才是把 control/target pair 与 root-cause explanation 绑定到该 artifact，
-不能把该汇总本身宣传为因果判定。
+`target compare` 现在可对 matching-query 的 control/target run 生成
+`target-pair-differential.json`，以忽略 timestamp/PID 的方式给出 target-only
+state 与 target/control difference candidate。下一步才是把经 contract 约束的
+root-cause explanation 绑定到该 artifact，不能把任何汇总本身宣传为因果判定。
 
 ## 当前判断
 

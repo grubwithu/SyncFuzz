@@ -90,6 +90,7 @@ Usage:
   syncfuzz target footprint --run runs/<target-run-id> [--out resource-footprint.json]
   syncfuzz target plan-probes --footprint resource-footprint.json [--out observation-plan.json]
   syncfuzz target refine-plan --plan observation-plan.json --fallback-report targeted-probe-report.json [--out observation-plan-refined.json]
+  syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id> [--out target-pair-differential.json]
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--fidelity exact|semantic|impact] [--out runs]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--observation-plan observation-plan.json] [--observation-mode shadow|pruned-filesystem|pruned] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
@@ -474,7 +475,7 @@ func campaign(args []string) {
 
 func runTarget(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, matrix, minimize, run, suite, or campaign")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, matrix, minimize, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -498,6 +499,8 @@ func runTarget(args []string) {
 		targetPlanProbes(args[1:])
 	case "refine-plan":
 		targetRefinePlan(args[1:])
+	case "compare":
+		targetCompare(args[1:])
 	case "matrix":
 		targetMatrix(args[1:])
 	case "minimize":
@@ -716,6 +719,47 @@ func targetRefinePlan(args []string) {
 	fmt.Printf("query_id: %s\n", refined.QueryID)
 	fmt.Printf("expansion_count: %d\n", refined.ExpansionCount)
 	fmt.Printf("added_paths: %s\n", strings.Join(refined.LastExpansionPaths, ","))
+	fmt.Printf("artifact: %s\n", output)
+}
+
+func targetCompare(args []string) {
+	fs := flag.NewFlagSet("target compare", flag.ExitOnError)
+	controlRun := fs.String("control", "", "control target run artifact directory")
+	targetRun := fs.String("target", "", "target/fault run artifact directory")
+	outPath := fs.String("out", "", "target-pair-differential.json output path; defaults inside --target")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*controlRun) == "" || strings.TrimSpace(*targetRun) == "" {
+		fmt.Fprintln(os.Stderr, "target compare requires --control and --target")
+		os.Exit(2)
+	}
+	result, err := target.CompareTargetRuns(target.TargetPairDifferentialOptions{
+		ControlRunDir: *controlRun,
+		TargetRunDir:  *targetRun,
+		OutputPath:    *outPath,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target compare failed: %v\n", err)
+		os.Exit(1)
+	}
+	output := strings.TrimSpace(*outPath)
+	if output == "" {
+		output = filepath.Join(*targetRun, target.TargetPairDifferentialArtifact)
+	}
+	comparable := 0
+	partial := 0
+	for _, checkpoint := range result.Checkpoints {
+		if checkpoint.Status == "comparable" {
+			comparable++
+		} else {
+			partial++
+		}
+	}
+	fmt.Printf("query_id: %s\n", result.QueryID)
+	fmt.Printf("checkpoints_comparable: %d\n", comparable)
+	fmt.Printf("checkpoints_partial_or_unavailable: %d\n", partial)
+	fmt.Printf("evidence_candidates: %d\n", len(result.Evidence))
 	fmt.Printf("artifact: %s\n", output)
 }
 
