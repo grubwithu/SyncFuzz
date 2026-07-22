@@ -45,6 +45,8 @@ go run ./cmd/syncfuzz target seeds
 go run ./cmd/syncfuzz target scenarios
 go run ./cmd/syncfuzz target groups
 go run ./cmd/syncfuzz target prompt-profiles
+go run ./cmd/syncfuzz target footprint --run runs/<target-run-id>
+go run ./cmd/syncfuzz target plan-probes --footprint runs/<target-run-id>/resource-footprint.json
 go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --group phase5a-baseline --prompt-profiles all
 go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --seed shell-path-residue --prompt-profiles all
 go run ./cmd/syncfuzz target run --command-file examples/target-commands/orphan-process.sh --expect-files late-effect --observe-delay 500ms --out runs
@@ -94,6 +96,8 @@ make target-seeds
 make target-scenarios
 make target-groups
 make target-prompt-profiles
+make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id>
+make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json
 make target-matrix TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=all
 make target-minimize MINIMIZE_FROM=runs/target-suite-<id>/target-suite-result.json
 make target-minimize MINIMIZE_FROM=runs/target-suite-<id>/target-suite-result.json MINIMIZE_EXECUTE=true MINIMIZE_CANDIDATE_LIMIT=1 MINIMIZE_MAX_TRIALS=16 MINIMIZE_FIDELITY=semantic
@@ -187,6 +191,23 @@ Phase 5 target runs add a parallel artifact set for real agent/runtime observati
 - `target-result.json`: command exit status, timeout status, target oracle verdict plus causal attribution, separate task-compliance verdict, optional contract interpretation, process lineage summary, workspace, and artifact path
 - `target-contract-profile.json`: optional target-specific recovery contract profile used to interpret a real-target run
 - `snapshot-late.json` / `process-late.json` / `filesystem-late-metadata.json`: optional late observation artifacts when `--late-observe-delay` is set
+
+`syncfuzz target footprint --run <target-run-dir>` compiles the normalized
+Scenario IR and the recorded filesystem, process-lineage, and state-trace
+artifacts into `resource-footprint.json`. `syncfuzz target plan-probes
+--footprint <...>` then emits `observation-plan.json`: a query-specific probe
+contract for `before-plant`, `after-plant`, `after-recovery`, and
+`after-activation`. The current implementation is intentionally offline and
+artifact/IR-guided; it does not claim an eBPF collector or dynamically load
+eBPF programs. Plans retain a mandatory full-probe fallback until targeted
+runner collection is implemented.
+
+Both artifacts preserve the same typed `query` (`syncfuzz.lifecycle-query.v1`):
+`q = <Init, Plant, Boundary, Recovery, Activation, Witness>`. Its embedded
+`violation_hypothesis` records the state surface, lifecycle edge, oracle kind,
+and expected recovery-consistency relation; it is a test intent, never an
+oracle verdict. This keeps Scenario IR component identities connected to
+resource selection and later differential/root-cause evidence.
 
 `target_oracle` now carries a tri-state `status`:
 
@@ -283,6 +304,15 @@ For replay and fork lifecycle tasks, `target_oracle` now also records an `attrib
 LangGraph shell target runs require observed shell tool use. If the model only replies in text without a `tool` message, the wrapper exits non-zero and records `validation_error` in `langgraph-run-summary.json`.
 
 `syncfuzz target tasks` lists the current built-in real-target tasks, `syncfuzz target seeds` groups them by Scenario IR seed family, and `syncfuzz target scenarios` shows the first executable Scenario IR view: seed id, plant primitive, lifecycle operation, activation kind, and mutation operators for each built-in task. The same metadata is written into `target-task.json`, so replayed real-target artifacts preserve more than just prompt text. `syncfuzz target suite` batches repeated real-target runs into one `target-suite-<id>/target-suite-result.json` summary. Each suite item now preserves `target_oracle`, `task_compliance`, `contract_interpretation`, plus scheduler-level `outcome_category`, `outcome_reason`, and `activation_stage`. Confirmed items also include `minimization_plan`, a structured delta-debugging checklist derived from Scenario IR components, mutation axes, expected artifacts, and oracle constraints. Mutation-axis steps now carry stable `mutation_id` values. `syncfuzz target minimize --from <target-suite-result.json|target-matrix-result.json>` extracts those plans into `target-minimization-plan.json`. With explicit `--execute`, it now performs bounded greedy prompt-line deletion, command-line deletion, conservative Scenario IR component deletion for optional `setup` / `fault` nodes, component-summary reduction, mutation-provenance deletion, semantic plant-primitive metadata reduction, impact-mode lifecycle / activation / oracle metadata reduction, activation fork-message line reduction, and execution-plan reduction against fresh target runs, then writes `target-minimization-result.json`. The reducer independently tries deleting non-required IR components, clearing reducible component summaries including required activation component summaries, clearing reducible mutation metadata, clearing reducible `PlantPrimitiveID` metadata under `semantic` / `impact` fidelity, clearing reducible lifecycle / activation / oracle component metadata under `impact` fidelity while preserving runtime fork/replay controls and oracle status / impact identity, shortening multi-line fork activation messages, removing removable concrete command lines, and removing explicit process mode, checkpoint backend, checkpoint selector, fork follow-up, and replay behavior. The default `--fidelity exact` mode keeps command completion, oracle status, attribution, mismatch signature, task compliance, and contract interpretation unchanged; `semantic` preserves the semantic signature fields plus compliance and contract status while allowing attribution / primitive-operation drift; `impact` preserves oracle status and the same security impact, allowing activation metadata-only drops when oracle identity remains unchanged. Execution defaults to one candidate and 32 trials because it re-runs the command stored in the source `target-task.json`. The suite summary also aggregates `outcome_summaries`, `activation_summaries`, and `dimension_coverage`, so repeated campaigns can distinguish residue confirmed, activation reached but residue clean, and which scenario dimensions were actually exercised in the current batch. When a matrix batch is budget-limited, `dimension_coverage` is still computed against the full pre-selection candidate universe, not just the few candidates that ran in that batch. Matrix-backed suites now also emit `frontier_candidates`, which are the next unexecuted candidates that best fill the remaining in-universe coverage gaps. Confirmed target runs are also written into `corpus/`, so `corpus list`, `replay`, and `corpus verify` can exercise the same real target again. For now, target corpus replay reads the original `target-task.json` from each recorded run artifact, so keep the corresponding `runs/` directory when you want to replay, verify, or execute minimization later.
+
+The FSE route now treats recovery consistency as `S = <A, O>`, where
+`O = <N, Pi, H, E>` covers filesystem namespace, process/descriptor state,
+shell or runtime heap context, and external effects. The primary method claim
+is a typed lifecycle query -> resource footprint -> observation-plan pipeline
+with deterministic differential and root-cause evidence. Structured mutation,
+feedback scheduling, and source-grounded LLM proposal generation remain
+supporting experiments; none is currently presented as the central claim or as
+an oracle.
 
 `syncfuzz target groups` lists built-in task bundles such as `workspace-residue`, `shell-lifecycle`, `phase5a-baseline`, and `maf-baseline`. `maf-baseline` is the current small MAF smoke bundle: `orphan-process` plus `orphan-process-long-delay`, which is enough to exercise both immediate delayed-file residue and the lifecycle-backed late-observation oracle without assuming LangGraph replay/fork semantics. `maf-session` contains the first MAF-2 session restore probe, and `maf-workflow` contains the first MAF-3 Workflow checkpoint probes, including local external-effect, HTTP external-service commit, external resource creation, authority-token state, partial-commit, approval-pending replay, and resume-vs-rehydrate divergence. The HTTP external-service tasks can use the shared mock server as a separate process via `MAF_WORKFLOW_EFFECT_SERVICE_URL`, which gives the workflow target a cleaner cross-process effect boundary. `workspace-residue` now covers file presence, directory presence, deletion state, symlink binding, rename state, file mode, appended content, hardlink state, named-pipe residue, open-FD residue, deleted-open-FD residue, inherited-FD branch leakage, active Unix-listener residue, trusted-client response residue, response-cache residue, cwd residue, and umask residue. `syncfuzz target suite --group ...` or `--groups ...` expands those bundles before any explicit `--task` or `--tasks`, which makes it easier to run repeated residue campaigns without hand-copying long task lists. The suite summary now also writes `outcome_summaries`, `activation_summaries`, `dimension_coverage`, `attribution_summaries`, `compliance_summaries`, and `contract_summaries`, so repeated runs can be tallied directly by observation progress, scenario coverage, prompt/task drift, and contract interpretation.
 

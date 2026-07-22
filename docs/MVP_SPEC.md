@@ -61,6 +61,8 @@ go run ./cmd/syncfuzz target tasks
 go run ./cmd/syncfuzz target seeds
 go run ./cmd/syncfuzz target scenarios
 go run ./cmd/syncfuzz target prompt-profiles
+go run ./cmd/syncfuzz target footprint --run runs/<target-run-id>
+go run ./cmd/syncfuzz target plan-probes --footprint runs/<target-run-id>/resource-footprint.json
 go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --group phase5a-baseline --prompt-profiles all
 go run ./cmd/syncfuzz target run --command-file examples/target-commands/orphan-process.sh --expect-files late-effect --observe-delay 500ms --out runs
 go run ./cmd/syncfuzz target run --target langgraph-shell-react --command-file examples/target-commands/langgraph-shell-react.sh --expect-files late-effect --observe-delay 500ms --out runs
@@ -93,6 +95,8 @@ make run-campaign ROUNDS=2 CANDIDATE_LIMIT=3 CASES=action-replay TIMING=baseline
 make target-list
 make target-tasks
 make target-scenarios
+make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id>
+make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json
 make target-run TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh EXPECT_FILES=late-effect
 make target-suite TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh REPEAT=3
 make target-langgraph-shell-react
@@ -259,12 +263,47 @@ runs/<run_id>/
   process-after.json
   process-lineage.json
   filesystem-metadata.json
+  resource-footprint.json              # emitted by `target footprint`
+  observation-plan.json                 # emitted by `target plan-probes`
   workspace/
 ```
 
 `syncfuzz target run` currently supports the implemented `command` adapter. It runs any local or container-visible agent command inside the SyncFuzz workspace, writes `target-prompt.txt` and `target-task.json` into that workspace, exports `SYNCFUZZ_PROMPT`, `SYNCFUZZ_PROMPT_FILE`, `SYNCFUZZ_TASK_FILE`, `SYNCFUZZ_RUN_ID`, `SYNCFUZZ_TARGET_ID`, `SYNCFUZZ_REPO_ROOT`, and `SYNCFUZZ_WORKSPACE`, captures combined stdout/stderr, waits for `--observe-delay`, optionally waits for `--late-observe-delay`, and checks optional `--expect-files`. `target-task.json` now also carries built-in executable Scenario IR metadata when the task is repository-owned: seed id, plant primitive, activation kind, oracle kind, mutation operators, and the lifecycle execution plan used to derive replay/fork runtime overrides. `target-result.json` embeds the process lineage summary, a task-specific `target_oracle`, and a separate `task_compliance` verdict, so real-target runs can be triaged for both boundary residue and prompt/task drift. `--command-file` is the most reliable way to pass quoted or multi-line commands. This is observation-only: it does not yet provide framework-native checkpoint/replay/cancel hooks, but it gives real Agent CLIs the same filesystem/process artifact contract as known-answer seeds.
 
 When a target ships with a built-in contract profile, the same run now also writes `target-contract-profile.json` into the run artifact directory and adds `contract_interpretation` to `target-result.json`. This lets SyncFuzz distinguish three layers in a real-target result: raw residue evidence (`target_oracle`), prompt/task drift (`task_compliance`), and the current lifecycle-contract reading (`contract_interpretation`).
+
+### Observation-plan v1
+
+The FSE-facing method models recovery consistency as `S = <A, O>` and OS
+state as `O = <N, Pi, H, E>`: namespace, process/descriptor, runtime or shell
+context, and external effect state. The first implementation covers the
+artifact-visible subset of `N`, `Pi`, and `H`; `E` stays represented by the
+existing external-effect artifacts and contract/oracle path.
+
+`syncfuzz target footprint --run <target-run-dir>` reads the persisted
+Scenario IR plus `snapshot-*.json`, `process-lineage.json`, and
+`state-trace.json` to write `resource-footprint.json`. It records why each
+resource entered the footprint, preserving the distinction between declared
+Scenario IR surfaces and runtime observations. `syncfuzz target plan-probes
+--footprint <path>` compiles that footprint into `observation-plan.json` with
+the fixed checkpoints `before-plant`, `after-plant`, `after-recovery`, and
+`after-activation`.
+
+The two artifacts carry one normalized `query` object with schema
+`syncfuzz.lifecycle-query.v1`: `q = <Init, Plant, Boundary, Recovery,
+Activation, Witness>`. Each stage preserves Scenario IR `component_id`,
+`kind_id`, and summary. `violation_hypothesis` names the recovery-consistency
+question (state surface, lifecycle edge, oracle kind, expected relation) but
+does not carry a verdict; deterministic oracle and contract interpretation
+remain the only verdict sources.
+
+The compiler applies explicit static dependency closure: a Unix-domain socket
+requires namespace, process, and file-descriptor probes; a file descriptor
+requires a process probe. It emits a mandatory full-probe fallback policy
+(`expand-once-then-full-probe`) for unplanned state. V1 is offline plan
+compilation only. It neither installs eBPF probes nor claims causal tracing;
+the targeted runner and any privileged trace source must consume the same
+artifact schemas in a later increment.
 
 For `orphan-process-long-delay`, the target oracle requires the command to return successfully, a workspace-related process to appear at the command boundary, that process to remain through immediate observation, and, when late observation is enabled, `late-effect` to appear during the late snapshot window.
 

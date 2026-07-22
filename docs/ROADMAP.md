@@ -197,6 +197,34 @@ Phase 4 之后：
 
 状态：Phase 5A 观察里程碑已冻结，Phase 5B 现在正式转入 **contract-aware validation**。当前已经有一条稳定的 observation-first 路线：通用 `command` target adapter 把任意本地或容器内可见的真实 Agent CLI 放进 SyncFuzz workspace 运行，并复用 Phase 2 的 filesystem/process/state-trace artifact contract。它已经可以把 `target-prompt.txt` 和 `target-task.json` 直接写进 workspace、传递 prompt/task file path、捕获 stdout/stderr、通过 `--observe-delay` 等待 immediate observation、通过 `--late-observe-delay` 捕获 delayed effect、检查 expected files、写出 `target-result.json`，为 LangGraph、MAF、OpenHands 的专用 lifecycle adapter 打底。
 
+### FSE A–O 路线重置（当前优先级）
+
+论文的主问题收敛为 recovery consistency：`S = <A, O>`，其中
+`O = <N, Pi, H, E>`。本文的核心方法不再同时宣称 eBPF、LLM、feedback
+或大规模 fuzzing，而是：**typed lifecycle query -> resource footprint ->
+state-probe plan -> deterministic differential/root-cause evidence**。
+
+首个可执行里程碑已经落地为离线的 `resource-footprint.json` 和
+`observation-plan.json`：它从 Scenario IR、filesystem snapshot、process
+lineage 与 state trace 推导 query-specific state surfaces，并对 socket/FD
+等资源施加显式 dependency closure。当前计划是 artifact/IR-guided，保留
+`expand-once-then-full-probe` fallback；它不是 eBPF collector，也还没有由
+target runner 在执行期消费。
+
+两份 artifact 现在共享 `syncfuzz.lifecycle-query.v1`：
+`q = <Init, Plant, Boundary, Recovery, Activation, Witness>`。每个阶段保留
+Scenario IR component identity 与 kind；`violation_hypothesis` 只声明待验证
+的 recovery-consistency relation，绝不替代 deterministic oracle 或 contract
+interpretation。
+
+紧接着的开发顺序是：
+
+1. 固化 lifecycle query 与 violation signature 的 typed schema；
+2. 让 target runner 在 `before-plant`、`after-plant`、`after-recovery`、`after-activation` 消费 observation plan，并用全量 probe fallback 校验漏报；
+3. 将差分与 root-cause 输出绑定到这些 checkpoint；
+4. 仅在环境和评估支持时，加入作为同一 evidence source 的 eBPF trace；
+5. 让 LLM 仅从源码/契约生成 probe 或 contract 候选，绝不担当 oracle。
+
 最新校准：
 
 - LangGraph 实验已经证明：真实 runtime 中确实存在可稳定观测的 shell / workspace / process residue；

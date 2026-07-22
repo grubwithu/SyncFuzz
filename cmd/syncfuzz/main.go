@@ -5,12 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/cases"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/observation"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/scheduler"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
@@ -85,6 +87,8 @@ Usage:
   syncfuzz target groups
   syncfuzz target prompt-profiles
   syncfuzz target prompt-variants
+  syncfuzz target footprint --run runs/<target-run-id> [--out resource-footprint.json]
+  syncfuzz target plan-probes --footprint resource-footprint.json [--out observation-plan.json]
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--fidelity exact|semantic|impact] [--out runs]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
@@ -469,7 +473,7 @@ func campaign(args []string) {
 
 func runTarget(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, matrix, minimize, run, suite, or campaign")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, matrix, minimize, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -487,6 +491,10 @@ func runTarget(args []string) {
 		targetPromptProfiles()
 	case "prompt-variants":
 		targetPromptVariants()
+	case "footprint":
+		targetFootprint(args[1:])
+	case "plan-probes":
+		targetPlanProbes(args[1:])
 	case "matrix":
 		targetMatrix(args[1:])
 	case "minimize":
@@ -587,6 +595,87 @@ func targetPromptVariants() {
 	for _, variant := range target.TargetPromptVariants() {
 		fmt.Printf("%-18s %s\n", variant.VariantID, variant.Description)
 	}
+}
+
+func targetFootprint(args []string) {
+	fs := flag.NewFlagSet("target footprint", flag.ExitOnError)
+	runDir := fs.String("run", "", "completed target run artifact directory")
+	outPath := fs.String("out", "", "resource-footprint.json output path; defaults inside --run")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*runDir) == "" {
+		fmt.Fprintln(os.Stderr, "target footprint requires --run")
+		os.Exit(2)
+	}
+	footprint, err := observation.ExtractTargetRunFootprint(*runDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target footprint failed: %v\n", err)
+		os.Exit(1)
+	}
+	output := strings.TrimSpace(*outPath)
+	if output == "" {
+		output = filepath.Join(*runDir, observation.ResourceFootprintArtifact)
+	}
+	if err := observation.WriteFootprint(output, footprint); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target footprint failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("query_id: %s\n", footprint.QueryID)
+	if footprint.ScenarioID != "" {
+		fmt.Printf("scenario_id: %s\n", footprint.ScenarioID)
+	}
+	fmt.Printf("resource_classes: %s\n", resourceClassCSV(footprint.ResourceClasses))
+	fmt.Printf("paths: %d\n", len(footprint.Paths))
+	fmt.Printf("processes: %d\n", len(footprint.Processes))
+	fmt.Printf("artifact: %s\n", output)
+}
+
+func targetPlanProbes(args []string) {
+	fs := flag.NewFlagSet("target plan-probes", flag.ExitOnError)
+	footprintPath := fs.String("footprint", "", "resource-footprint.json input path")
+	outPath := fs.String("out", "", "observation-plan.json output path; defaults beside --footprint")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*footprintPath) == "" {
+		fmt.Fprintln(os.Stderr, "target plan-probes requires --footprint")
+		os.Exit(2)
+	}
+	footprint, err := observation.ReadFootprint(*footprintPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target plan-probes failed: %v\n", err)
+		os.Exit(1)
+	}
+	plan, err := observation.CompilePlan(footprint)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target plan-probes failed: %v\n", err)
+		os.Exit(1)
+	}
+	output := strings.TrimSpace(*outPath)
+	if output == "" {
+		output = filepath.Join(filepath.Dir(*footprintPath), observation.ObservationPlanArtifact)
+	}
+	if err := observation.WritePlan(output, plan); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target plan-probes failed: %v\n", err)
+		os.Exit(1)
+	}
+	families := make([]string, 0, len(plan.ProbePlans))
+	for _, probe := range plan.ProbePlans {
+		families = append(families, string(probe.Family))
+	}
+	fmt.Printf("query_id: %s\n", plan.QueryID)
+	fmt.Printf("probe_families: %s\n", strings.Join(families, ","))
+	fmt.Printf("fallback_full_probe: %t\n", plan.FallbackFullProbe)
+	fmt.Printf("artifact: %s\n", output)
+}
+
+func resourceClassCSV(classes []observation.ResourceClass) string {
+	values := make([]string, 0, len(classes))
+	for _, class := range classes {
+		values = append(values, string(class))
+	}
+	return strings.Join(values, ",")
 }
 
 func targetMatrix(args []string) {

@@ -52,6 +52,9 @@ TARGET_RANDOM_SEED ?= 1
 TARGET_MIN_COVERAGE_GAIN_SCORE ?= 0
 TARGET_MAX_STAGNANT_ROUNDS ?= 0
 TARGET_AUTO_PIVOT ?= false
+TARGET_OBSERVATION_RUN ?=
+TARGET_FOOTPRINT ?=
+TARGET_OBSERVATION_PLAN ?=
 EXPECT_FILES ?=
 
 # Phase 5B feedback experiment v3
@@ -146,7 +149,7 @@ SUITE_ARGS = --out $(OUT) --corpus $(CORPUS) --repeat $(REPEAT) --delay $(DELAY)
 CAMPAIGN_ARGS = --out $(OUT) --corpus $(CORPUS) --rounds $(ROUNDS) --repeat $(REPEAT) --delay $(DELAY) $(ENV_ARGS) $(CONTAINER_ARGS) $(CASE_ARGS) $(MOCK_ARGS) $(DIFFERENTIAL_ARGS) $(TIMING_ARGS) $(FEEDBACK_ARGS) $(CANDIDATE_LIMIT_ARGS)
 TARGET_RUN_ARGS = --out $(OUT) --timeout $(TARGET_TIMEOUT) --observe-delay $(TARGET_OBSERVE_DELAY) $(TARGET_LATE_OBSERVE_ARGS) $(ENV_ARGS) $(CONTAINER_ARGS) $(TARGET_PROMPT_ARGS) $(TARGET_PROMPT_FILE_ARGS) $(TARGET_EXPECT_ARGS)
 
-.PHONY: help list fault-plans timing-profiles primitives matrix run-case run-pair run-mvp run-action run-authority run-shell run-fs run-branch run-suite run-diff-suite run-matrix-suite run-campaign target-list target-tasks target-seeds target-scenarios target-groups target-prompt-profiles target-matrix target-minimize target-run target-suite target-matrix-suite target-campaign target-langgraph-shell-react target-langgraph-shell-react-suite target-langgraph-shell-react-matrix-suite target-langgraph-shell-react-campaign target-langgraph-shell-react-check target-maf-github-copilot-shell target-maf-github-copilot-shell-suite target-maf-github-copilot-shell-matrix-suite target-maf-github-copilot-shell-campaign target-maf-github-copilot-shell-check target-maf-workflow-checkpoint target-maf-workflow-checkpoint-suite target-maf-workflow-checkpoint-check phase5b-v3-fixed phase5b-v3-random phase5b-v3-feedback phase5b-v3-full corpus-list corpus-analyze corpus-show corpus-verify replay test-go fmt-go mock-build mock-start
+.PHONY: help list fault-plans timing-profiles primitives matrix run-case run-pair run-mvp run-action run-authority run-shell run-fs run-branch run-suite run-diff-suite run-matrix-suite run-campaign target-list target-tasks target-seeds target-scenarios target-groups target-prompt-profiles target-footprint target-plan-probes target-matrix target-minimize target-run target-suite target-matrix-suite target-campaign target-langgraph-shell-react target-langgraph-shell-react-suite target-langgraph-shell-react-matrix-suite target-langgraph-shell-react-campaign target-langgraph-shell-react-check target-maf-github-copilot-shell target-maf-github-copilot-shell-suite target-maf-github-copilot-shell-matrix-suite target-maf-github-copilot-shell-campaign target-maf-github-copilot-shell-check target-maf-workflow-checkpoint target-maf-workflow-checkpoint-suite target-maf-workflow-checkpoint-check phase5b-v3-fixed phase5b-v3-random phase5b-v3-feedback phase5b-v3-full corpus-list corpus-analyze corpus-show corpus-verify replay test-go fmt-go mock-build mock-start
 
 help:
 	@echo "SyncFuzz targets:"
@@ -221,6 +224,8 @@ help:
 	@echo "  make corpus-show ENTRY_ID=<entry_id_or_unique_prefix>"
 	@echo "  make corpus-verify"
 	@echo "  make replay ENTRY_ID=<entry_id_or_unique_prefix>"
+	@echo "  make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id>"
+	@echo "  make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json"
 	@echo "  make run-case CASE=orphan-process ENV=container CONTAINER_IMAGE=ubuntu:latest"
 	@echo "Variables: OUT=$(OUT), CORPUS=$(CORPUS), DELAY=$(DELAY), ENV=$(ENV), CONTAINER_IMAGE=$(CONTAINER_IMAGE), LIMIT=$(LIMIT), VERIFY_LIMIT=$(VERIFY_LIMIT), ROUNDS=$(ROUNDS), DIFFERENTIAL=$(DIFFERENTIAL), TIMING=$(TIMING), INCLUDE_PLANNED=$(INCLUDE_PLANNED), FEEDBACK_FROM=$(FEEDBACK_FROM), CANDIDATE_LIMIT=$(CANDIDATE_LIMIT), TARGET_ADAPTER=$(TARGET_ADAPTER), TARGET_ID=$(TARGET_ID), TARGET_TASK=$(TARGET_TASK), TARGET_TASKS=$(TARGET_TASKS), TARGET_SEED=$(TARGET_SEED), TARGET_SEEDS=$(TARGET_SEEDS), TARGET_GROUP=$(TARGET_GROUP), TARGET_GROUPS=$(TARGET_GROUPS), TARGET_PROMPT_PROFILE=$(TARGET_PROMPT_PROFILE), TARGET_PROMPT_PROFILES=$(TARGET_PROMPT_PROFILES), TARGET_TIMEOUT=$(TARGET_TIMEOUT), TARGET_OBSERVE_DELAY=$(TARGET_OBSERVE_DELAY), TARGET_LATE_OBSERVE_DELAY=$(TARGET_LATE_OBSERVE_DELAY), TARGET_SELECTION_POLICY=$(TARGET_SELECTION_POLICY), TARGET_RANDOM_SEED=$(TARGET_RANDOM_SEED), TARGET_COMMAND_FILE=$(TARGET_COMMAND_FILE), EXPECT_FILES=$(EXPECT_FILES), LANGCHAIN_MODEL=$(LANGCHAIN_MODEL), OPENAI_API_KEY=$(OPENAI_API_KEY), OPENAI_BASE_URL=$(OPENAI_BASE_URL), COPILOT_MODEL=$(COPILOT_MODEL), COPILOT_PROVIDER_BASE_URL=$(COPILOT_PROVIDER_BASE_URL), COPILOT_PROVIDER_TYPE=$(COPILOT_PROVIDER_TYPE), COPILOT_PROVIDER_API_KEY=$(COPILOT_PROVIDER_API_KEY), LANGGRAPH_POLICY=$(LANGGRAPH_POLICY), LANGGRAPH_DOCKER_IMAGE=$(LANGGRAPH_DOCKER_IMAGE), LANGGRAPH_CHECKPOINT_BACKEND=$(LANGGRAPH_CHECKPOINT_BACKEND), LANGGRAPH_CHECKPOINT_DIR=$(LANGGRAPH_CHECKPOINT_DIR), LANGGRAPH_PROCESS_MODE=$(LANGGRAPH_PROCESS_MODE), LANGGRAPH_REPLAY=$(LANGGRAPH_REPLAY), LANGGRAPH_CHECKPOINT_INDEX=$(LANGGRAPH_CHECKPOINT_INDEX), LANGGRAPH_CHECKPOINT_SELECTOR=$(LANGGRAPH_CHECKPOINT_SELECTOR), LANGGRAPH_FORK_USER_MESSAGE=$(LANGGRAPH_FORK_USER_MESSAGE), MAF_PYTHON=$(MAF_PYTHON), MAF_TIMEOUT=$(MAF_TIMEOUT), MAF_COPILOT_CLI=$(MAF_COPILOT_CLI), MAF_SESSION_HOME=$(MAF_SESSION_HOME), MAF_LOG_LEVEL=$(MAF_LOG_LEVEL), MAF_ALLOW_UNSUPPORTED_TASKS=$(MAF_ALLOW_UNSUPPORTED_TASKS), MAF_WORKFLOW_EFFECT_SERVICE_URL=$(MAF_WORKFLOW_EFFECT_SERVICE_URL), DOTENV_FILE=$(DOTENV_FILE), MOCK_URL=$(MOCK_URL)"
 
@@ -292,6 +297,14 @@ target-groups:
 
 target-prompt-profiles:
 	$(SYNCFUZZ) target prompt-profiles
+
+target-footprint:
+	@test -n "$(TARGET_OBSERVATION_RUN)" || (echo "usage: make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id> [TARGET_FOOTPRINT=path]"; exit 2)
+	$(SYNCFUZZ) target footprint --run $(TARGET_OBSERVATION_RUN) $(if $(TARGET_FOOTPRINT),--out $(TARGET_FOOTPRINT),)
+
+target-plan-probes:
+	@test -n "$(TARGET_FOOTPRINT)" || (echo "usage: make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json [TARGET_OBSERVATION_PLAN=path]"; exit 2)
+	$(SYNCFUZZ) target plan-probes --footprint $(TARGET_FOOTPRINT) $(if $(TARGET_OBSERVATION_PLAN),--out $(TARGET_OBSERVATION_PLAN),)
 
 target-matrix:
 	$(SYNCFUZZ) target matrix --target $(TARGET_ID) --task $(TARGET_TASK) $(TARGET_TASKS_ARGS) $(TARGET_SEED_ARGS) $(TARGET_SEEDS_ARGS) $(TARGET_GROUP_ARGS) $(TARGET_GROUPS_ARGS) $(TARGET_PROMPT_PROFILE_ARGS) $(TARGET_PROMPT_PROFILES_ARGS)

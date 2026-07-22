@@ -1,5 +1,42 @@
 # Phase 5B：Contract-Aware Validation
 
+## FSE 路线重置：A–O recovery consistency
+
+面向 FSE，SyncFuzz 的中心对象现在是 recovery consistency：
+`S = <A, O>`，其中 `O = <N, Pi, H, E>` 分别表示 namespace、process /
+descriptor、runtime or shell context、external effect。论文主线收敛为：
+
+```text
+typed lifecycle query
+  -> resource footprint
+  -> state-probe plan
+  -> deterministic differential + root-cause evidence
+```
+
+因此，eBPF、feedback scheduling、structured mutation 和 LLM 都是可单独
+评估的支撑机制，而不是要在同一篇论文中同时成立的核心 claim。LLM 以后
+只能从源码或明确 contract 中提出 query/probe 候选；deterministic artifact、
+compliance、oracle 与 replay/minimize 仍然承担判断责任。
+
+当前已实现该主线的第一段：`syncfuzz target footprint` 从 Scenario IR 和
+target-run artifact 导出 `resource-footprint.json`；`syncfuzz target
+plan-probes` 再导出 `observation-plan.json`。它覆盖 artifact-visible 的
+filesystem、process、FD、Unix socket、shell context，并为 socket ->
+filesystem/process/FD、FD -> process 应用静态 dependency closure。该版本
+只编译离线计划，固定四个 checkpoint（`before-plant`、`after-plant`、
+`after-recovery`、`after-activation`），保留 full-probe fallback；它不是
+eBPF collector，尚未声称 runtime causal trace。
+
+这两个 artifact 还共享 `syncfuzz.lifecycle-query.v1`，显式固化
+`q = <Init, Plant, Boundary, Recovery, Activation, Witness>`。各 stage 保存
+Scenario IR 的 component identity、kind 与 summary；`violation_hypothesis`
+只描述要由后续 differential oracle 回答的 recovery-consistency relation，
+不是一个自动判定或 LLM judge。
+
+接下来的直接目标是让 target runner 消费 observation plan，并将
+query-specific probe 与 full-probe fallback 的差分结果写回统一 artifact。
+完成后才评估 time-boxed、特权环境可用的 OS trace/eBPF evidence source。
+
 ## 当前判断
 
 SyncFuzz 已经不再停留在“框架能不能跑起来”的阶段。基于 `targets/langgraph_shell_react/`，我们已经稳定观测到几类真实 residue：
