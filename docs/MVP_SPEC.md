@@ -67,6 +67,7 @@ go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-pla
 go run ./cmd/syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id>
 go run ./cmd/syncfuzz target pair-campaign --manifest target-pair-campaign.json --out runs/<pair-campaign>
 go run ./cmd/syncfuzz target calibration-summary --inputs runs/<pair-campaign> --out runs/<pair-campaign>/target-pair-calibration-summary.json
+go run ./cmd/syncfuzz target contract-candidates --input examples/target-contract-candidates.example.json --source-root examples --out runs/target-contract-candidate-validation.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned --command-file examples/target-commands/orphan-process.sh --out runs
@@ -403,6 +404,22 @@ against an actual candidate before reporting reviewed precision as
 `supported / (supported + unsupported)`; `inconclusive` labels stay outside
 the denominator. Without such independent candidate-level labels, the summary
 does not derive hypothesis precision from its own report.
+
+`syncfuzz target contract-candidates --input <path> --source-root <directory>
+--out <path>` is the source-grounding boundary for future human or LLM contract
+proposals. Its `syncfuzz.target-contract-candidates.v1` input requires a
+candidate id, target/task, state surface, lifecycle edge, allowed expectation,
+claim type (`documented-contract`, `derived-safety-invariant`, or
+`scenario-assumption`), and an exact local source span. The validator resolves
+only relative paths inside the explicit source root, rejects traversal or
+symlink escapes, and checks that the quote exactly matches the declared source
+lines after CRLF normalization. A candidate with any missing or mismatched span
+is `unsupported`; a valid entry is only a `source-grounded-proposal`. The
+result records `automatic_profile_adoption=disabled`: candidate validation does
+not modify built-in profiles, select contract rules, or produce an oracle or
+root-cause verdict. The checked-in example is self-validating with
+`--source-root examples`, but it remains illustrative rather than an active
+target contract.
 
 `syncfuzz target refine-plan --plan <plan> --fallback-report <report>` reads
 the report's adjacent fallback snapshot and produces

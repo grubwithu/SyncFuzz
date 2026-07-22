@@ -477,7 +477,7 @@ func campaign(args []string) {
 
 func runTarget(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, pair-campaign, calibration-summary, matrix, minimize, run, suite, or campaign")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, pair-campaign, calibration-summary, contract-candidates, matrix, minimize, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -507,6 +507,8 @@ func runTarget(args []string) {
 		targetPairCampaign(args[1:])
 	case "calibration-summary":
 		targetCalibrationSummary(args[1:])
+	case "contract-candidates":
+		targetContractCandidates(args[1:])
 	case "matrix":
 		targetMatrix(args[1:])
 	case "minimize":
@@ -835,6 +837,33 @@ func targetCalibrationSummary(args []string) {
 			fmt.Println("reviewed_hypothesis_precision: unavailable")
 		}
 	}
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func targetContractCandidates(args []string) {
+	fs := flag.NewFlagSet("target contract-candidates", flag.ExitOnError)
+	inputPath := fs.String("input", "", "syncfuzz.target-contract-candidates.v1 input path")
+	sourceRoot := fs.String("source-root", "", "local source or documentation root used to validate candidate spans")
+	outPath := fs.String("out", "", "target-contract-candidate-validation.json output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*inputPath) == "" || strings.TrimSpace(*sourceRoot) == "" || strings.TrimSpace(*outPath) == "" {
+		fmt.Fprintln(os.Stderr, "target contract-candidates requires --input, --source-root, and --out")
+		os.Exit(2)
+	}
+	report, err := target.ValidateTargetContractCandidates(target.TargetContractCandidateValidationOptions{
+		InputPath:  *inputPath,
+		SourceRoot: *sourceRoot,
+		OutputPath: *outPath,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target contract-candidates failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("accepted: %d\n", report.Accepted)
+	fmt.Printf("unsupported: %d\n", report.Unsupported)
+	fmt.Printf("automatic_profile_adoption: %s\n", report.AutomaticProfileAdoption)
 	fmt.Printf("artifact: %s\n", *outPath)
 }
 

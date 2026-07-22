@@ -51,6 +51,7 @@ go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-pla
 go run ./cmd/syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id>
 go run ./cmd/syncfuzz target pair-campaign --manifest target-pair-campaign.json --out runs/<pair-campaign>
 go run ./cmd/syncfuzz target calibration-summary --inputs runs/<pair-campaign> --out runs/<pair-campaign>/target-pair-calibration-summary.json
+go run ./cmd/syncfuzz target contract-candidates --input examples/target-contract-candidates.example.json --source-root examples --out runs/target-contract-candidate-validation.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned --command-file examples/target-commands/orphan-process.sh --out runs
@@ -109,6 +110,7 @@ make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<pilot-run>/observation-pla
 make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id>
 make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>
 make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign> TARGET_PAIR_CALIBRATION_SUMMARY=runs/<pair-campaign>/target-pair-calibration-summary.json
+make target-contract-candidates TARGET_CONTRACT_CANDIDATES=examples/target-contract-candidates.example.json TARGET_CONTRACT_SOURCE_ROOT=examples TARGET_CONTRACT_CANDIDATE_REPORT=runs/target-contract-candidate-validation.json
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
 make target-matrix TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=all
@@ -295,6 +297,23 @@ the generated hypothesis identity and reports reviewed precision as
 that denominator. Start from
 `examples/target-pair-root-cause-review.example.json`. Without those labels it
 does not invent hypothesis precision.
+
+`target contract-candidates --input <path> --source-root <directory> --out
+<path>` validates structured contract proposals before any human profile
+review. The input schema is `syncfuzz.target-contract-candidates.v1`; every
+candidate declares its target/task, state surface, lifecycle edge, expectation,
+claim type (`documented-contract`, `derived-safety-invariant`, or
+`scenario-assumption`), and an exact local source span. The validator resolves
+that relative span under the explicit source root, rejects path escapes and
+symlink escapes, and compares the declared quote with the exact selected lines
+after CRLF normalization. A candidate without a valid span is reported as
+`unsupported`; an accepted candidate is labelled only
+`source-grounded-proposal`. The validation report explicitly disables automatic
+profile adoption, so it cannot change `TargetContractProfileFor`, select a
+contract rule, or determine an oracle verdict. Start from
+`examples/target-contract-candidates.example.json` with
+`--source-root examples`; reviewers must separately turn an accepted proposal
+into a maintained profile and test it.
 `target refine-plan` can consume that fallback once, adding observed paths
 (and socket dependency probes when applicable) to a deterministic refined
 plan; a second expansion is rejected by policy.

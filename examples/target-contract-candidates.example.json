@@ -1,0 +1,24 @@
+{
+  "schema_version": "syncfuzz.target-contract-candidates.v1",
+  "generator": "illustrative-structured-proposal",
+  "description": "A valid source-grounded proposal example. It is not an active contract profile or an oracle verdict.",
+  "candidates": [
+    {
+      "candidate_id": "example-shell-path-replay-reset",
+      "target_id": "langgraph-shell-react",
+      "task_id": "persistent-shell-poisoning-replay",
+      "proposed_rule_id": "example-shell-path-replay-reset",
+      "state_surface": "shell-session.path",
+      "lifecycle_edge": "checkpoint->replay",
+      "expectation": "reset",
+      "source_type": "scenario-assumption",
+      "source": {
+        "source_path": "target-contract-candidate-source.example.md",
+        "start_line": 3,
+        "end_line": 3,
+        "quote": "For this illustrative replay scenario, a recovery from before a shell PATH mutation must not retain that discarded mutation after recovery."
+      },
+      "rationale": "Demonstrates the proposal-only input expected before human profile review."
+    }
+  ]
+}

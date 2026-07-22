@@ -81,6 +81,17 @@ control，再在同一 query identity 上运行 compare，并把 manifest、per-
 campaign result 与 calibration summary 固化到一个 artifact directory。它只比较
 预先记录的 run，不会隐式调用真实 target 或重新执行模型。
 
+为把后续 LLM 的权限严格限制在 proposal 层，`target contract-candidates` 现已
+提供 source-grounding gate。它接收
+`syncfuzz.target-contract-candidates.v1` 的结构化候选，要求每条候选都带有
+target/task、state surface、lifecycle edge、expectation、claim type 与相对于明确
+`source_root` 的精确 source span；validator 会拒绝缺失 span、quote mismatch、路径
+穿越和 symlink escape。通过的条目只被标记为 `source-grounded-proposal`，报告中
+固定 `automatic_profile_adoption=disabled`；它不会改写 contract profile，也不参与
+oracle、contract interpretation 或 root-cause verdict。下一步才是在固定输入/输出
+schema 上接入受评估的 LLM proposal generator，并由人工将受支持条目转化为可测试的
+profile。
+
 ## 当前判断
 
 SyncFuzz 已经不再停留在“框架能不能跑起来”的阶段。基于 `targets/langgraph_shell_react/`，我们已经稳定观测到几类真实 residue：
