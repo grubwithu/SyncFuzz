@@ -94,6 +94,7 @@ Usage:
   syncfuzz target runtime-pair --control-kind fresh-runtime --control-command '<control command>' --command '<target command>' [--target local-agent] [--task orphan-process] [--out runs]
   syncfuzz target pair-campaign [--manifest target-pair-campaign.json | --runtime-pairs runs/<runtime-pair>/target-runtime-pair.json,...] --out runs/<pair-campaign>
   syncfuzz target calibration-summary --inputs runs/<pair-campaign>,runs/<target-run-id>/target-pair-differential.json [--review-manifests review.json] --out target-pair-calibration-summary.json
+  syncfuzz target contract-propose --target langgraph-shell-react --tasks persistent-shell-poisoning-replay --source-root <source-root> --sources docs/recovery.md --generator-command '<LLM wrapper command>' --out runs
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--fidelity exact|semantic|impact] [--out runs]
   syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--observation-plan observation-plan.json] [--observation-mode shadow|pruned-filesystem|pruned] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
@@ -478,7 +479,7 @@ func campaign(args []string) {
 
 func runTarget(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, signatures, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, runtime-pair, pair-campaign, calibration-summary, contract-candidates, matrix, minimize, run, suite, or campaign")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, signatures, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, runtime-pair, pair-campaign, calibration-summary, contract-propose, contract-candidates, matrix, minimize, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -512,6 +513,8 @@ func runTarget(args []string) {
 		targetPairCampaign(args[1:])
 	case "calibration-summary":
 		targetCalibrationSummary(args[1:])
+	case "contract-propose":
+		targetContractPropose(args[1:])
 	case "contract-candidates":
 		targetContractCandidates(args[1:])
 	case "matrix":
@@ -911,6 +914,46 @@ func targetContractCandidates(args []string) {
 	fmt.Printf("unsupported: %d\n", report.Unsupported)
 	fmt.Printf("automatic_profile_adoption: %s\n", report.AutomaticProfileAdoption)
 	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func targetContractPropose(args []string) {
+	fs := flag.NewFlagSet("target contract-propose", flag.ExitOnError)
+	targetID := fs.String("target", "langgraph-shell-react", "target id for proposal context")
+	tasks := fs.String("tasks", "", "comma-separated built-in target task ids")
+	sourceRoot := fs.String("source-root", "", "local source or documentation root exposed to the generator")
+	sources := fs.String("sources", "", "comma-separated text files below source-root exposed to the generator")
+	generatorCommand := fs.String("generator-command", "", "explicit local command that reads SYNCFUZZ_CONTRACT_PROPOSAL_REQUEST and writes SYNCFUZZ_CONTRACT_PROPOSAL_OUTPUT")
+	outDir := fs.String("out", "runs", "directory for contract proposal run artifacts")
+	timeout := fs.Duration("timeout", 2*time.Minute, "proposal generator command timeout")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*targetID) == "" || len(splitCSV(*tasks)) == 0 || strings.TrimSpace(*sourceRoot) == "" || len(splitCSV(*sources)) == 0 || strings.TrimSpace(*generatorCommand) == "" {
+		fmt.Fprintln(os.Stderr, "target contract-propose requires --target, --tasks, --source-root, --sources, and --generator-command")
+		os.Exit(2)
+	}
+	result, err := target.RunTargetContractProposalGenerator(context.Background(), target.TargetContractProposalOptions{
+		TargetID:         *targetID,
+		TaskIDs:          splitCSV(*tasks),
+		SourceRoot:       *sourceRoot,
+		SourcePaths:      splitCSV(*sources),
+		GeneratorCommand: *generatorCommand,
+		OutDir:           *outDir,
+		Timeout:          *timeout,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target contract-propose failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("run_id: %s\n", result.RunID)
+	fmt.Printf("target: %s\n", result.TargetID)
+	fmt.Printf("accepted: %d\n", result.Accepted)
+	fmt.Printf("unsupported: %d\n", result.Unsupported)
+	fmt.Printf("automatic_profile_adoption: %s\n", result.AutomaticProfileAdoption)
+	fmt.Printf("request: %s\n", filepath.Join(result.ArtifactDir, result.RequestArtifact))
+	fmt.Printf("candidates: %s\n", filepath.Join(result.ArtifactDir, result.CandidateSetArtifact))
+	fmt.Printf("validation: %s\n", filepath.Join(result.ArtifactDir, result.ValidationReportArtifact))
+	fmt.Printf("artifact: %s\n", filepath.Join(result.ArtifactDir, target.TargetContractProposalResultArtifact))
 }
 
 func resourceClassCSV(classes []observation.ResourceClass) string {

@@ -54,6 +54,7 @@ go run ./cmd/syncfuzz target runtime-pair --control-kind fresh-runtime --control
 go run ./cmd/syncfuzz target pair-campaign --manifest target-pair-campaign.json --out runs/<pair-campaign>
 go run ./cmd/syncfuzz target pair-campaign --runtime-pairs runs/<runtime-pair>/target-runtime-pair.json --out runs/<pair-campaign>
 go run ./cmd/syncfuzz target calibration-summary --inputs runs/<pair-campaign> --out runs/<pair-campaign>/target-pair-calibration-summary.json
+go run ./cmd/syncfuzz target contract-propose --target langgraph-shell-react --tasks persistent-shell-poisoning-replay --source-root examples --sources target-contract-candidate-source.example.md --generator-command 'bash target-contract-proposal-generator.example.sh' --out runs
 go run ./cmd/syncfuzz target contract-candidates --input examples/target-contract-candidates.example.json --source-root examples --out runs/target-contract-candidate-validation.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
@@ -116,6 +117,7 @@ make target-runtime-pair TARGET_RUNTIME_PAIR_CONTROL_KIND=fresh-runtime TARGET_R
 make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>
 make target-pair-campaign TARGET_RUNTIME_PAIR_RESULTS=runs/<runtime-pair>/target-runtime-pair.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>
 make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign> TARGET_PAIR_CALIBRATION_SUMMARY=runs/<pair-campaign>/target-pair-calibration-summary.json
+make target-contract-propose TARGET_CONTRACT_PROPOSAL_TASKS=persistent-shell-poisoning-replay TARGET_CONTRACT_PROPOSAL_SOURCE_ROOT=examples TARGET_CONTRACT_PROPOSAL_SOURCES=target-contract-candidate-source.example.md TARGET_CONTRACT_PROPOSAL_GENERATOR_COMMAND='bash target-contract-proposal-generator.example.sh'
 make target-contract-candidates TARGET_CONTRACT_CANDIDATES=examples/target-contract-candidates.example.json TARGET_CONTRACT_SOURCE_ROOT=examples TARGET_CONTRACT_CANDIDATE_REPORT=runs/target-contract-candidate-validation.json
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
@@ -367,6 +369,26 @@ contract rule, or determine an oracle verdict. Start from
 `examples/target-contract-candidates.example.json` with
 `--source-root examples`; reviewers must separately turn an accepted proposal
 into a maintained profile and test it.
+
+`target contract-propose` is the evaluated generator boundary on top of that
+gate. The caller explicitly selects a target, built-in task contexts, and a
+bounded UTF-8 source bundle under `--source-root`; SyncFuzz writes
+`syncfuzz.target-contract-proposal-request.v1`, then runs only the supplied
+`--generator-command`. That command receives the request and output paths as
+`SYNCFUZZ_CONTRACT_PROPOSAL_REQUEST` and
+`SYNCFUZZ_CONTRACT_PROPOSAL_OUTPUT`, and must write a
+`syncfuzz.target-contract-candidates.v1` candidate set. The request records
+source contents and SHA-256 values, while the result records only a hash of the
+generator command, not its potentially sensitive provider configuration. The
+subsequent source-grounding validation restricts accepted citations to the
+exact source files supplied in the request. It always writes the request,
+candidate set, validation report, and proposal-run result with
+`automatic_profile_adoption=disabled`; no provider is contacted unless the
+user's command does so. `examples/target-contract-proposal-generator.example.sh`
+is a deterministic interface fixture, not an LLM. The generator command is
+caller-supplied and not sandboxed; the proposal pipeline nevertheless never
+loads its output as a contract profile or oracle input.
+
 `target refine-plan` can consume that fallback once, adding observed paths
 (and socket dependency probes when applicable) to a deterministic refined
 plan; a second expansion is rejected by policy.

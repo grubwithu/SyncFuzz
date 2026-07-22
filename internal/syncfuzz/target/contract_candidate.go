@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -74,9 +75,12 @@ type TargetContractCandidateSource struct {
 }
 
 type TargetContractCandidateValidationOptions struct {
-	InputPath  string
-	SourceRoot string
-	OutputPath string
+	InputPath          string
+	SourceRoot         string
+	ExpectedTargetID   string
+	AllowedTaskIDs     []string
+	AllowedSourcePaths []string
+	OutputPath         string
 }
 
 // TargetContractCandidateValidationReport is a deterministic source-grounding
@@ -87,6 +91,9 @@ type TargetContractCandidateValidationReport struct {
 	GeneratedAt              string                                    `json:"generated_at"`
 	CandidateSetPath         string                                    `json:"candidate_set_path"`
 	SourceRoot               string                                    `json:"source_root"`
+	ExpectedTargetID         string                                    `json:"expected_target_id,omitempty"`
+	AllowedTaskIDs           []string                                  `json:"allowed_task_ids,omitempty"`
+	AllowedSourcePaths       []string                                  `json:"allowed_source_paths,omitempty"`
 	AutomaticProfileAdoption string                                    `json:"automatic_profile_adoption"`
 	Accepted                 int                                       `json:"accepted"`
 	Unsupported              int                                       `json:"unsupported"`
@@ -118,6 +125,12 @@ func ValidateTargetContractCandidates(opts TargetContractCandidateValidationOpti
 	if err != nil {
 		return nil, err
 	}
+	allowedSourcePaths, err := normalizeTargetContractCandidateAllowedSourcePaths(opts.AllowedSourcePaths)
+	if err != nil {
+		return nil, err
+	}
+	expectedTargetID := strings.TrimSpace(opts.ExpectedTargetID)
+	allowedTaskIDs := normalizeTargetContractCandidateAllowedTaskIDs(opts.AllowedTaskIDs)
 	inputPath, err = filepath.Abs(inputPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve contract candidate input path: %w", err)
@@ -145,6 +158,9 @@ func ValidateTargetContractCandidates(opts TargetContractCandidateValidationOpti
 		GeneratedAt:              time.Now().UTC().Format(time.RFC3339Nano),
 		CandidateSetPath:         inputPath,
 		SourceRoot:               sourceRoot,
+		ExpectedTargetID:         expectedTargetID,
+		AllowedTaskIDs:           allowedTaskIDs,
+		AllowedSourcePaths:       allowedSourcePaths,
 		AutomaticProfileAdoption: TargetContractCandidateAutomaticAdoptionDisabled,
 		Candidates:               make([]TargetContractCandidateValidationResult, 0, len(set.Candidates)),
 	}
@@ -152,11 +168,20 @@ func ValidateTargetContractCandidates(opts TargetContractCandidateValidationOpti
 		candidate := normalizeTargetContractCandidate(original)
 		result := TargetContractCandidateValidationResult{Candidate: candidate}
 		reasons := validateTargetContractCandidateShape(candidate, counts)
+		if expectedTargetID != "" && candidate.TargetID != expectedTargetID {
+			reasons = append(reasons, "target_id does not match expected_target_id")
+		}
+		if len(allowedTaskIDs) > 0 && !targetContractCandidateTaskAllowed(candidate.TaskID, allowedTaskIDs) {
+			reasons = append(reasons, "task_id is not included in allowed_task_ids")
+		}
 		resolvedSource, sourceReasons := validateTargetContractCandidateSource(sourceRoot, candidate.Source)
 		if resolvedSource != "" {
 			result.ResolvedSourcePath = resolvedSource
 		}
 		reasons = append(reasons, sourceReasons...)
+		if len(allowedSourcePaths) > 0 && !targetContractCandidateSourceAllowed(candidate.Source.SourcePath, allowedSourcePaths) {
+			reasons = append(reasons, "source.source_path is not included in allowed_source_paths")
+		}
 		if len(reasons) == 0 {
 			result.Status = TargetContractCandidateValidationAccepted
 			result.Classification = TargetContractCandidateClassificationSourceGroundedProposal
@@ -176,6 +201,71 @@ func ValidateTargetContractCandidates(opts TargetContractCandidateValidationOpti
 		return nil, fmt.Errorf("write contract candidate validation report %s: %w", outputPath, err)
 	}
 	return report, nil
+}
+
+func normalizeTargetContractCandidateAllowedTaskIDs(taskIDs []string) []string {
+	unique := make(map[string]struct{}, len(taskIDs))
+	normalized := make([]string, 0, len(taskIDs))
+	for _, taskID := range taskIDs {
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" {
+			continue
+		}
+		if _, exists := unique[taskID]; exists {
+			continue
+		}
+		unique[taskID] = struct{}{}
+		normalized = append(normalized, taskID)
+	}
+	sort.Strings(normalized)
+	return normalized
+}
+
+func targetContractCandidateTaskAllowed(taskID string, allowedTaskIDs []string) bool {
+	index := sort.SearchStrings(allowedTaskIDs, strings.TrimSpace(taskID))
+	return index < len(allowedTaskIDs) && allowedTaskIDs[index] == strings.TrimSpace(taskID)
+}
+
+func normalizeTargetContractCandidateAllowedSourcePaths(paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	unique := make(map[string]struct{}, len(paths))
+	normalized := make([]string, 0, len(paths))
+	for _, original := range paths {
+		path := strings.TrimSpace(original)
+		if path == "" {
+			continue
+		}
+		if filepath.IsAbs(path) {
+			return nil, fmt.Errorf("allowed contract candidate source path %q must be relative to source root", path)
+		}
+		path = filepath.Clean(path)
+		if path == "." || path == ".." || strings.HasPrefix(path, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("allowed contract candidate source path %q escapes source root", original)
+		}
+		path = filepath.ToSlash(path)
+		if _, exists := unique[path]; exists {
+			continue
+		}
+		unique[path] = struct{}{}
+		normalized = append(normalized, path)
+	}
+	sort.Strings(normalized)
+	return normalized, nil
+}
+
+func targetContractCandidateSourceAllowed(sourcePath string, allowedSourcePaths []string) bool {
+	if filepath.IsAbs(sourcePath) {
+		return false
+	}
+	clean := filepath.Clean(strings.TrimSpace(sourcePath))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return false
+	}
+	clean = filepath.ToSlash(clean)
+	index := sort.SearchStrings(allowedSourcePaths, clean)
+	return index < len(allowedSourcePaths) && allowedSourcePaths[index] == clean
 }
 
 func normalizeTargetContractCandidate(candidate TargetContractCandidate) TargetContractCandidate {

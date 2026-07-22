@@ -68,6 +68,7 @@ go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-pla
 go run ./cmd/syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id>
 go run ./cmd/syncfuzz target pair-campaign --manifest target-pair-campaign.json --out runs/<pair-campaign>
 go run ./cmd/syncfuzz target calibration-summary --inputs runs/<pair-campaign> --out runs/<pair-campaign>/target-pair-calibration-summary.json
+go run ./cmd/syncfuzz target contract-propose --target langgraph-shell-react --tasks persistent-shell-poisoning-replay --source-root examples --sources target-contract-candidate-source.example.md --generator-command 'bash target-contract-proposal-generator.example.sh' --out runs
 go run ./cmd/syncfuzz target contract-candidates --input examples/target-contract-candidates.example.json --source-root examples --out runs/target-contract-candidate-validation.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
@@ -463,6 +464,21 @@ not modify built-in profiles, select contract rules, or produce an oracle or
 root-cause verdict. The checked-in example is self-validating with
 `--source-root examples`, but it remains illustrative rather than an active
 target contract.
+
+`syncfuzz target contract-propose --target <id> --tasks <ids> --source-root
+<directory> --sources <relative-files> --generator-command <command> --out
+<directory>` supplies a narrow execution boundary for an LLM wrapper or other
+proposal generator. SyncFuzz writes a versioned request containing only the
+selected built-in Scenario IR task contexts and bounded, UTF-8 source files;
+the command receives request/output file paths through environment variables
+and must write the existing candidate-set schema. The generator's output is
+then passed through the same validator with `allowed_source_paths` set to the
+exact request bundle, so it cannot turn an unseen local file into accepted
+support. The run records a hash—not the text—of the configured command, and
+still fixes `automatic_profile_adoption=disabled`. The bundled shell example
+only tests this I/O contract and does not call an LLM. The command is explicitly
+caller-supplied and unsandboxed; SyncFuzz never adopts its output as a profile
+or oracle input.
 
 `syncfuzz target refine-plan --plan <plan> --fallback-report <report>` reads
 the report's adjacent fallback snapshot and produces

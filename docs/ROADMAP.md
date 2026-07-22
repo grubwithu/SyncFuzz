@@ -253,7 +253,11 @@ interpretation。
 5. `target contract-candidates` 已固定 LLM/人工 contract proposal 的
    source-grounding gate：没有可复核本地 source span 的候选一律
    `unsupported`，通过者也只是 `source-grounded-proposal`，不会自动进入
-   profile 或 oracle；下一步才接入受评估的源码/契约 proposal generator。
+   profile 或 oracle；`target contract-propose` 已提供受评估的源码/契约 proposal
+   generator boundary：它只把显式 allowlist 的 task context / UTF-8 source bundle
+   交给调用者指定的 generator command，再用同一 allowlist 回验输出 citation，且
+   只记录 command hash。下一步针对固定 target/source bundle 运行真实 LLM wrapper
+   并与人工 proposal 比较 accepted-support 与 review 后的 profile utility。
 
 最新校准：
 
