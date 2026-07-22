@@ -274,6 +274,7 @@ runs/<run_id>/
   observation-plan.json                 # emitted by `target plan-probes`
   observation-plan-refined.json         # emitted by `target refine-plan`
   targeted-probe-report.json            # emitted when a rerun consumes a plan
+  target-checkpoint-differential.json   # deterministic checkpoint delta evidence
   target-lifecycle-markers.jsonl        # optional target-emitted semantic markers
   snapshot-after-plant.json             # optional P4 snapshot from after-plant marker
   process-after-plant.json              # optional P4 process snapshot from marker
@@ -349,6 +350,13 @@ marker before capture completes. Markers must be strictly ordered as plant,
 recovery, activation. The protocol is opt-in; absent an
 `after-plant` marker, P5 remains the explicitly partial command-return process
 observation rather than a fabricated filesystem boundary.
+
+Every target run also writes `target-checkpoint-differential.json`. It fixes
+P0 as the baseline, resolves the best artifact for each post-plant checkpoint
+(a validated marker when available, otherwise the explicit adapter fallback),
+and serializes deterministic filesystem metadata deltas plus process lineage
+deltas. It is evidence for later differential/root-cause analysis, not a
+causal classifier or an oracle verdict.
 
 `syncfuzz target refine-plan --plan <plan> --fallback-report <report>` reads
 the report's adjacent fallback snapshot and produces

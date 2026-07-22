@@ -64,6 +64,7 @@ printf target-output`,
 		"process-after.json",
 		"process-lineage.json",
 		"filesystem-metadata.json",
+		TargetCheckpointDifferentialArtifact,
 	} {
 		if _, err := os.Stat(filepath.Join(result.ArtifactDir, name)); err != nil {
 			t.Fatalf("expected artifact %s: %v", name, err)
@@ -229,6 +230,11 @@ func TestRunTargetCapturesAcknowledgedRecoveryAndActivationMarkers(t *testing.T)
 	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, observation.TargetedProbeReportArtifact), &report)
 	if findTargetedProbeCheckpoint(report.Checkpoints, observation.ObservationAfterRecovery).RunnerPhase != "P6" || findTargetedProbeCheckpoint(report.Checkpoints, observation.ObservationAfterActivation).RunnerPhase != "P7" {
 		t.Fatalf("expected semantic recovery and activation checkpoints: %#v", report.Checkpoints)
+	}
+	var differential TargetCheckpointDifferential
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, TargetCheckpointDifferentialArtifact), &differential)
+	if differential.SchemaVersion != "syncfuzz.target-checkpoint-differential.v1" || len(differential.Checkpoints) != 3 || differential.Checkpoints[0].RunnerPhase != "P4" || differential.Checkpoints[1].RunnerPhase != "P6" || differential.Checkpoints[2].RunnerPhase != "P7" {
+		t.Fatalf("unexpected checkpoint differential: %#v", differential)
 	}
 }
 

@@ -51,6 +51,12 @@ paths 固化到 refined plan。接下来的直接目标是评估 plan-selected c
 marker 覆盖率与 refine-once 的 fallback coverage；完成后才评估 time-boxed、
 特权环境可用的 OS trace/eBPF evidence source。
 
+target runner 还会为每次 run 生成 `target-checkpoint-differential.json`：以 P0
+为 baseline，按 checkpoint 引用 marker/fallback artifact，并复用 filesystem
+metadata delta 与 process lineage delta。它只提供可复核的 differential evidence；
+下一步才是把 control/target pair 与 root-cause explanation 绑定到该 artifact，
+不能把该汇总本身宣传为因果判定。
+
 ## 当前判断
 
 SyncFuzz 已经不再停留在“框架能不能跑起来”的阶段。基于 `targets/langgraph_shell_react/`，我们已经稳定观测到几类真实 residue：

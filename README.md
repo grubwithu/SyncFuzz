@@ -201,6 +201,7 @@ Phase 5 target runs add a parallel artifact set for real agent/runtime observati
 - `observation-plan.json`: validated query-specific plan copied into a rerun that uses `--observation-plan`
 - `observation-plan-refined.json`: optional one-time expansion from a pruned run's fallback evidence
 - `targeted-probe-report.json`: objects selected by that plan at each adapter-visible checkpoint
+- `target-checkpoint-differential.json`: deterministic filesystem/process delta summary over lifecycle checkpoints
 - `target-lifecycle-markers.jsonl`: optional semantic markers emitted by the target command
 - `snapshot-after-{plant,recovery,activation}*.json` / `process-after-{plant,recovery,activation}*.json`: optional P4/P6/P7 marker observations
 - `snapshot-full-fallback.json`: final broad filesystem fallback for a `pruned-filesystem` rerun
@@ -242,6 +243,12 @@ P4/P6/P7 respectively. This protocol is
 opt-in: when a target does not emit an `after-plant` marker, the generic
 adapter retains the explicitly partial P5 command-return process observation
 instead of inventing a semantic boundary.
+
+Every target run writes `target-checkpoint-differential.json`. It references
+the P0 baseline and the artifact selected for each post-plant checkpoint,
+then applies the existing deterministic filesystem metadata and process
+lineage analysis. It is evidence for later differential/root-cause analysis,
+not a causal verdict and not a replacement for the target oracle.
 `target refine-plan` can consume that fallback once, adding observed paths
 (and socket dependency probes when applicable) to a deterministic refined
 plan; a second expansion is rejected by policy.

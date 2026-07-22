@@ -25,6 +25,7 @@ const (
 	TargetPromptArtifact                         = "target-prompt.txt"
 	TargetOutputArtifact                         = "target-output.txt"
 	TargetResultArtifact                         = "target-result.json"
+	TargetCheckpointDifferentialArtifact         = "target-checkpoint-differential.json"
 	TargetLifecycleMarkerArtifact                = "target-lifecycle-markers.jsonl"
 	TargetLifecycleMarkerHelperArtifact          = "syncfuzz-lifecycle-marker"
 	TargetSnapshotAfterPlantArtifact             = "snapshot-after-plant.json"
@@ -281,6 +282,33 @@ type TargetLifecycleMarker struct {
 	Timestamp     string `json:"timestamp"`
 }
 
+// TargetCheckpointDifferential is deterministic evidence over the artifacts
+// captured at adapter-visible lifecycle checkpoints. It aggregates existing
+// filesystem and process lineage analyses; it does not infer causality or
+// replace the target oracle.
+type TargetCheckpointDifferential struct {
+	SchemaVersion        string                         `json:"schema_version"`
+	QueryID              string                         `json:"query_id"`
+	Baseline             TargetCheckpointState          `json:"baseline"`
+	Checkpoints          []TargetCheckpointState        `json:"checkpoints"`
+	FilesystemMetadata   core.FilesystemMetadataReport  `json:"filesystem_metadata"`
+	ProcessDifferentials []TargetCheckpointProcessDelta `json:"process_differentials,omitempty"`
+}
+
+type TargetCheckpointState struct {
+	Point              observation.ObservationPoint `json:"point"`
+	RunnerPhase        string                       `json:"runner_phase"`
+	FilesystemArtifact string                       `json:"filesystem_artifact,omitempty"`
+	ProcessArtifact    string                       `json:"process_artifact,omitempty"`
+	Partial            bool                         `json:"partial,omitempty"`
+	Reason             string                       `json:"reason,omitempty"`
+}
+
+type TargetCheckpointProcessDelta struct {
+	Point   observation.ObservationPoint `json:"point"`
+	Lineage core.ProcessLineageReport    `json:"lineage"`
+}
+
 type TargetOracleResult struct {
 	Name        string             `json:"name"`
 	Status      TargetOracleStatus `json:"status,omitempty"`
@@ -307,45 +335,46 @@ const (
 type TargetOracleStatus string
 
 type TargetRunResult struct {
-	SchemaVersion            string                        `json:"schema_version"`
-	RunID                    string                        `json:"run_id"`
-	AdapterID                string                        `json:"adapter_id"`
-	TargetID                 string                        `json:"target_id"`
-	TaskID                   string                        `json:"task_id"`
-	Objective                string                        `json:"objective"`
-	PromptProfileID          string                        `json:"prompt_profile_id,omitempty"`
-	PromptVariantID          string                        `json:"prompt_variant_id,omitempty"`
-	Environment              string                        `json:"environment"`
-	ContainerImage           string                        `json:"container_image,omitempty"`
-	Command                  string                        `json:"command"`
-	TimeoutMillis            int64                         `json:"timeout_ms"`
-	ObserveDelayMs           int64                         `json:"observe_delay_ms"`
-	LateObserveDelayMs       int64                         `json:"late_observe_delay_ms,omitempty"`
-	Completed                bool                          `json:"completed"`
-	ExpectationsMet          bool                          `json:"expectations_met"`
-	ExpectedFiles            []string                      `json:"expected_files,omitempty"`
-	ExpectedFilesPresent     []string                      `json:"expected_files_present,omitempty"`
-	ExpectedFilesMissing     []string                      `json:"expected_files_missing,omitempty"`
-	LateObserved             bool                          `json:"late_observed"`
-	LateExpectedFiles        []string                      `json:"late_expected_files,omitempty"`
-	LateExpectedFilesPresent []string                      `json:"late_expected_files_present,omitempty"`
-	LateExpectedFilesMissing []string                      `json:"late_expected_files_missing,omitempty"`
-	ObservationPlanArtifact  string                        `json:"observation_plan_artifact,omitempty"`
-	ObservationPlanQueryID   string                        `json:"observation_plan_query_id,omitempty"`
-	LifecycleMarkerArtifact  string                        `json:"lifecycle_marker_artifact,omitempty"`
-	LifecycleMarkers         []TargetLifecycleMarker       `json:"lifecycle_markers,omitempty"`
-	TargetedProbeArtifact    string                        `json:"targeted_probe_artifact,omitempty"`
-	ObservationMode          string                        `json:"observation_mode,omitempty"`
-	CommandResult            TargetCommandResult           `json:"command_result"`
-	ProcessLineage           core.ProcessLineageSummary    `json:"process_lineage"`
-	TargetOracle             TargetOracleResult            `json:"target_oracle"`
-	TaskCompliance           TargetTaskComplianceResult    `json:"task_compliance"`
-	ContractInterpretation   *TargetContractInterpretation `json:"contract_interpretation,omitempty"`
-	Signature                core.MismatchSignature        `json:"signature"`
-	ArtifactDir              string                        `json:"artifact_dir"`
-	Workspace                string                        `json:"workspace"`
-	StartedAt                string                        `json:"started_at"`
-	FinishedAt               string                        `json:"finished_at"`
+	SchemaVersion                  string                        `json:"schema_version"`
+	RunID                          string                        `json:"run_id"`
+	AdapterID                      string                        `json:"adapter_id"`
+	TargetID                       string                        `json:"target_id"`
+	TaskID                         string                        `json:"task_id"`
+	Objective                      string                        `json:"objective"`
+	PromptProfileID                string                        `json:"prompt_profile_id,omitempty"`
+	PromptVariantID                string                        `json:"prompt_variant_id,omitempty"`
+	Environment                    string                        `json:"environment"`
+	ContainerImage                 string                        `json:"container_image,omitempty"`
+	Command                        string                        `json:"command"`
+	TimeoutMillis                  int64                         `json:"timeout_ms"`
+	ObserveDelayMs                 int64                         `json:"observe_delay_ms"`
+	LateObserveDelayMs             int64                         `json:"late_observe_delay_ms,omitempty"`
+	Completed                      bool                          `json:"completed"`
+	ExpectationsMet                bool                          `json:"expectations_met"`
+	ExpectedFiles                  []string                      `json:"expected_files,omitempty"`
+	ExpectedFilesPresent           []string                      `json:"expected_files_present,omitempty"`
+	ExpectedFilesMissing           []string                      `json:"expected_files_missing,omitempty"`
+	LateObserved                   bool                          `json:"late_observed"`
+	LateExpectedFiles              []string                      `json:"late_expected_files,omitempty"`
+	LateExpectedFilesPresent       []string                      `json:"late_expected_files_present,omitempty"`
+	LateExpectedFilesMissing       []string                      `json:"late_expected_files_missing,omitempty"`
+	ObservationPlanArtifact        string                        `json:"observation_plan_artifact,omitempty"`
+	ObservationPlanQueryID         string                        `json:"observation_plan_query_id,omitempty"`
+	LifecycleMarkerArtifact        string                        `json:"lifecycle_marker_artifact,omitempty"`
+	LifecycleMarkers               []TargetLifecycleMarker       `json:"lifecycle_markers,omitempty"`
+	CheckpointDifferentialArtifact string                        `json:"checkpoint_differential_artifact,omitempty"`
+	TargetedProbeArtifact          string                        `json:"targeted_probe_artifact,omitempty"`
+	ObservationMode                string                        `json:"observation_mode,omitempty"`
+	CommandResult                  TargetCommandResult           `json:"command_result"`
+	ProcessLineage                 core.ProcessLineageSummary    `json:"process_lineage"`
+	TargetOracle                   TargetOracleResult            `json:"target_oracle"`
+	TaskCompliance                 TargetTaskComplianceResult    `json:"task_compliance"`
+	ContractInterpretation         *TargetContractInterpretation `json:"contract_interpretation,omitempty"`
+	Signature                      core.MismatchSignature        `json:"signature"`
+	ArtifactDir                    string                        `json:"artifact_dir"`
+	Workspace                      string                        `json:"workspace"`
+	StartedAt                      string                        `json:"started_at"`
+	FinishedAt                     string                        `json:"finished_at"`
 }
 
 func TargetAdapters() []TargetAdapterInfo {
@@ -601,6 +630,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	var afterPlantMarkerSnapshot core.Snapshot
 	var afterPlantMarkerProcesses core.ProcessSnapshot
 	var afterRecoveryMarkerSnapshot core.Snapshot
+	var afterRecoveryMarkerProcesses core.ProcessSnapshot
+	var afterActivationMarkerSnapshot core.Snapshot
+	var afterActivationMarkerProcesses core.ProcessSnapshot
 	afterPlantMarkerCaptured := false
 	afterRecoveryMarkerCaptured := false
 	afterActivationMarkerCaptured := false
@@ -661,11 +693,12 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 			if afterRecoveryMarkerCaptured {
 				return fmt.Errorf("lifecycle marker %q was emitted more than once", marker.Event)
 			}
-			filesystem, _, err := captureLifecycleMarker(marker, observation.ObservationAfterRecovery, "P6", TargetSnapshotAfterRecoveryArtifact, TargetProcessAfterRecoveryArtifact, "explicit target after-recovery lifecycle marker")
+			filesystem, processes, err := captureLifecycleMarker(marker, observation.ObservationAfterRecovery, "P6", TargetSnapshotAfterRecoveryArtifact, TargetProcessAfterRecoveryArtifact, "explicit target after-recovery lifecycle marker")
 			if err != nil {
 				return err
 			}
 			afterRecoveryMarkerSnapshot = filesystem
+			afterRecoveryMarkerProcesses = processes
 			afterRecoveryMarkerCaptured = true
 			lastLifecycleMarkerOrder = order
 			return nil
@@ -673,10 +706,12 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 			if afterActivationMarkerCaptured {
 				return fmt.Errorf("lifecycle marker %q was emitted more than once", marker.Event)
 			}
-			_, _, err := captureLifecycleMarker(marker, observation.ObservationAfterActivation, "P7", TargetSnapshotAfterActivationArtifact, TargetProcessAfterActivationArtifact, "explicit target after-activation lifecycle marker")
+			filesystem, processes, err := captureLifecycleMarker(marker, observation.ObservationAfterActivation, "P7", TargetSnapshotAfterActivationArtifact, TargetProcessAfterActivationArtifact, "explicit target after-activation lifecycle marker")
 			if err != nil {
 				return err
 			}
+			afterActivationMarkerSnapshot = filesystem
+			afterActivationMarkerProcesses = processes
 			afterActivationMarkerCaptured = true
 			lastLifecycleMarkerOrder = order
 			return nil
@@ -810,6 +845,55 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 			return nil, err
 		}
 	}
+	checkpointCaptures := make([]targetCheckpointCapture, 0, 3)
+	if afterPlantMarkerCaptured {
+		checkpointCaptures = append(checkpointCaptures, targetCheckpointCapture{
+			State:      TargetCheckpointState{Point: observation.ObservationAfterPlant, RunnerPhase: "P4", FilesystemArtifact: TargetSnapshotAfterPlantArtifact, ProcessArtifact: TargetProcessAfterPlantArtifact},
+			Filesystem: &afterPlantMarkerSnapshot,
+			Processes:  &afterPlantMarkerProcesses,
+		})
+	} else {
+		checkpointCaptures = append(checkpointCaptures, targetCheckpointCapture{
+			State:     TargetCheckpointState{Point: observation.ObservationAfterPlant, RunnerPhase: "P5", ProcessArtifact: "process-after-command.json", Partial: true, Reason: "no explicit after-plant lifecycle marker"},
+			Processes: &processAfterCommand,
+		})
+	}
+	if afterRecoveryMarkerCaptured {
+		checkpointCaptures = append(checkpointCaptures, targetCheckpointCapture{
+			State:      TargetCheckpointState{Point: observation.ObservationAfterRecovery, RunnerPhase: "P6", FilesystemArtifact: TargetSnapshotAfterRecoveryArtifact, ProcessArtifact: TargetProcessAfterRecoveryArtifact},
+			Filesystem: &afterRecoveryMarkerSnapshot,
+			Processes:  &afterRecoveryMarkerProcesses,
+		})
+	} else {
+		checkpointCaptures = append(checkpointCaptures, targetCheckpointCapture{
+			State:      TargetCheckpointState{Point: observation.ObservationAfterRecovery, RunnerPhase: "P6", FilesystemArtifact: "snapshot-after.json", ProcessArtifact: "process-after.json"},
+			Filesystem: &after,
+			Processes:  &processAfter,
+		})
+	}
+	if afterActivationMarkerCaptured {
+		checkpointCaptures = append(checkpointCaptures, targetCheckpointCapture{
+			State:      TargetCheckpointState{Point: observation.ObservationAfterActivation, RunnerPhase: "P7", FilesystemArtifact: TargetSnapshotAfterActivationArtifact, ProcessArtifact: TargetProcessAfterActivationArtifact},
+			Filesystem: &afterActivationMarkerSnapshot,
+			Processes:  &afterActivationMarkerProcesses,
+		})
+	} else if lateObserved {
+		checkpointCaptures = append(checkpointCaptures, targetCheckpointCapture{
+			State:      TargetCheckpointState{Point: observation.ObservationAfterActivation, RunnerPhase: "P7", FilesystemArtifact: TargetSnapshotLateArtifact, ProcessArtifact: TargetProcessLateArtifact},
+			Filesystem: &late,
+			Processes:  &processLate,
+		})
+	} else {
+		checkpointCaptures = append(checkpointCaptures, targetCheckpointCapture{
+			State:      TargetCheckpointState{Point: observation.ObservationAfterActivation, RunnerPhase: "P6", FilesystemArtifact: "snapshot-after.json", ProcessArtifact: "process-after.json", Reason: "reuses immediate post-recovery observation because no activation marker or late observation was requested"},
+			Filesystem: &after,
+			Processes:  &processAfter,
+		})
+	}
+	checkpointDifferential := buildTargetCheckpointDifferential(targetObservationQueryID(task), before, processBefore, checkpointCaptures)
+	if err := core.WriteJSON(filepath.Join(run.RunDir, TargetCheckpointDifferentialArtifact), checkpointDifferential); err != nil {
+		return nil, err
+	}
 	fallbackArtifact := ""
 	fallbackPhase := ""
 	if targetUsesPrunedFilesystem(observationMode) && observationPlan.FallbackFullProbe {
@@ -900,6 +984,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"process-after.json",
 		"process-lineage.json",
 		"filesystem-metadata.json",
+		TargetCheckpointDifferentialArtifact,
 		TargetResultArtifact,
 	}
 	if lifecycleMarkerArtifact != "" {
@@ -933,6 +1018,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-after.json", Kind: "process-snapshot"},
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-lineage.json", Kind: "process-lineage"},
 		{Layer: "os", StateClass: "filesystem-metadata", Phase: "P6", Artifact: "filesystem-metadata.json", Kind: "filesystem-metadata"},
+		{Layer: "analysis", StateClass: "checkpoint-differential", Phase: "P6", Artifact: TargetCheckpointDifferentialArtifact, Kind: "json-summary", Description: "deterministic filesystem and process deltas across lifecycle checkpoints"},
 	}
 	if afterPlantMarkerCaptured {
 		observations = append(observations,
@@ -1006,7 +1092,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	adapterArtifacts, adapterObservations := targetAdapterRuntimeObservations(run.Workspace)
 	artifacts = append(artifacts, adapterArtifacts...)
 	observations = append(observations, adapterObservations...)
-	stateClasses := []string{"workspace", "process", "target-command"}
+	stateClasses := []string{"workspace", "process", "target-command", "checkpoint-differential"}
 	if afterPlantMarkerCaptured {
 		stateClasses = append(stateClasses, "lifecycle-marker")
 	}
@@ -1031,45 +1117,46 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 
 	finished := time.Now().UTC()
 	result := &TargetRunResult{
-		SchemaVersion:            "syncfuzz.target-result.v1",
-		RunID:                    run.RunID,
-		AdapterID:                opts.AdapterID,
-		TargetID:                 opts.TargetID,
-		TaskID:                   opts.TaskID,
-		Objective:                opts.Objective,
-		PromptProfileID:          opts.PromptProfileID,
-		PromptVariantID:          opts.PromptVariantID,
-		Environment:              run.Environment,
-		ContainerImage:           run.ContainerImage,
-		Command:                  opts.Command,
-		TimeoutMillis:            opts.Timeout.Milliseconds(),
-		ObserveDelayMs:           opts.ObserveDelay.Milliseconds(),
-		LateObserveDelayMs:       opts.LateObserveDelay.Milliseconds(),
-		Completed:                completed,
-		ExpectationsMet:          expectationsMet,
-		ExpectedFiles:            opts.ExpectedFiles,
-		ExpectedFilesPresent:     present,
-		ExpectedFilesMissing:     missing,
-		LateObserved:             lateObserved,
-		LateExpectedFiles:        lateExpected,
-		LateExpectedFilesPresent: latePresent,
-		LateExpectedFilesMissing: lateMissing,
-		ObservationPlanArtifact:  targetObservationPlanArtifactValue(observationPlan),
-		ObservationPlanQueryID:   targetObservationPlanQueryIDValue(observationPlan),
-		LifecycleMarkerArtifact:  lifecycleMarkerArtifact,
-		LifecycleMarkers:         lifecycleMarkers,
-		TargetedProbeArtifact:    targetedProbeArtifactValue(targetedProbeReport),
-		ObservationMode:          observationMode,
-		CommandResult:            commandResult,
-		ProcessLineage:           processLineage.Summary,
-		TargetOracle:             targetOracle,
-		TaskCompliance:           taskCompliance,
-		ContractInterpretation:   contractInterpretation,
-		Signature:                signature,
-		ArtifactDir:              run.RunDir,
-		Workspace:                workspacePath,
-		StartedAt:                started.Format(time.RFC3339Nano),
-		FinishedAt:               finished.Format(time.RFC3339Nano),
+		SchemaVersion:                  "syncfuzz.target-result.v1",
+		RunID:                          run.RunID,
+		AdapterID:                      opts.AdapterID,
+		TargetID:                       opts.TargetID,
+		TaskID:                         opts.TaskID,
+		Objective:                      opts.Objective,
+		PromptProfileID:                opts.PromptProfileID,
+		PromptVariantID:                opts.PromptVariantID,
+		Environment:                    run.Environment,
+		ContainerImage:                 run.ContainerImage,
+		Command:                        opts.Command,
+		TimeoutMillis:                  opts.Timeout.Milliseconds(),
+		ObserveDelayMs:                 opts.ObserveDelay.Milliseconds(),
+		LateObserveDelayMs:             opts.LateObserveDelay.Milliseconds(),
+		Completed:                      completed,
+		ExpectationsMet:                expectationsMet,
+		ExpectedFiles:                  opts.ExpectedFiles,
+		ExpectedFilesPresent:           present,
+		ExpectedFilesMissing:           missing,
+		LateObserved:                   lateObserved,
+		LateExpectedFiles:              lateExpected,
+		LateExpectedFilesPresent:       latePresent,
+		LateExpectedFilesMissing:       lateMissing,
+		ObservationPlanArtifact:        targetObservationPlanArtifactValue(observationPlan),
+		ObservationPlanQueryID:         targetObservationPlanQueryIDValue(observationPlan),
+		LifecycleMarkerArtifact:        lifecycleMarkerArtifact,
+		LifecycleMarkers:               lifecycleMarkers,
+		CheckpointDifferentialArtifact: TargetCheckpointDifferentialArtifact,
+		TargetedProbeArtifact:          targetedProbeArtifactValue(targetedProbeReport),
+		ObservationMode:                observationMode,
+		CommandResult:                  commandResult,
+		ProcessLineage:                 processLineage.Summary,
+		TargetOracle:                   targetOracle,
+		TaskCompliance:                 taskCompliance,
+		ContractInterpretation:         contractInterpretation,
+		Signature:                      signature,
+		ArtifactDir:                    run.RunDir,
+		Workspace:                      workspacePath,
+		StartedAt:                      started.Format(time.RFC3339Nano),
+		FinishedAt:                     finished.Format(time.RFC3339Nano),
 	}
 	if err := run.Trace.Write(core.NewEvent(run, "oracle", "target_result", map[string]any{
 		"completed":                   completed,
@@ -1165,6 +1252,54 @@ func targetUnplannedFallbackPaths(plan observation.ObservationPlan, snapshot cor
 		}
 	}
 	return filtered, nil
+}
+
+type targetCheckpointCapture struct {
+	State      TargetCheckpointState
+	Filesystem *core.Snapshot
+	Processes  *core.ProcessSnapshot
+}
+
+func buildTargetCheckpointDifferential(queryID string, baselineFilesystem core.Snapshot, baselineProcesses core.ProcessSnapshot, captures []targetCheckpointCapture) TargetCheckpointDifferential {
+	filesystemArtifacts := []core.FilesystemSnapshotArtifact{{
+		Phase:    "P0",
+		Artifact: "snapshot-before.json",
+		Snapshot: baselineFilesystem,
+	}}
+	checkpoints := make([]TargetCheckpointState, 0, len(captures))
+	processDifferentials := make([]TargetCheckpointProcessDelta, 0, len(captures))
+	for _, capture := range captures {
+		checkpoints = append(checkpoints, capture.State)
+		if capture.Filesystem != nil {
+			filesystemArtifacts = append(filesystemArtifacts, core.FilesystemSnapshotArtifact{
+				Phase:    capture.State.RunnerPhase,
+				Artifact: capture.State.FilesystemArtifact,
+				Snapshot: *capture.Filesystem,
+			})
+		}
+		if capture.Processes != nil {
+			lineage := core.AnalyzeProcessLineage(
+				baselineProcesses,
+				*capture.Processes,
+				*capture.Processes,
+				"process-before.json",
+				capture.State.ProcessArtifact,
+				capture.State.ProcessArtifact,
+			)
+			processDifferentials = append(processDifferentials, TargetCheckpointProcessDelta{
+				Point:   capture.State.Point,
+				Lineage: lineage,
+			})
+		}
+	}
+	return TargetCheckpointDifferential{
+		SchemaVersion:        "syncfuzz.target-checkpoint-differential.v1",
+		QueryID:              strings.TrimSpace(queryID),
+		Baseline:             TargetCheckpointState{Point: observation.ObservationBeforePlant, RunnerPhase: "P0", FilesystemArtifact: "snapshot-before.json", ProcessArtifact: "process-before.json"},
+		Checkpoints:          checkpoints,
+		FilesystemMetadata:   core.AnalyzeFilesystemMetadata(filesystemArtifacts),
+		ProcessDifferentials: processDifferentials,
+	}
 }
 
 func captureTargetedProbeCheckpoint(report *observation.TargetedProbeReport, plan *observation.ObservationPlan, point observation.ObservationPoint, runnerPhase string, filesystem *core.Snapshot, processes *core.ProcessSnapshot, reason string) error {
