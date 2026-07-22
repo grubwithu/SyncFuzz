@@ -259,10 +259,16 @@ as state and compares process name/cmdline multiplicities without using PIDs.
 It excludes SyncFuzz's prompt/task/marker control artifacts before generating
 evidence, since those legitimately vary across runs.
 Its `evidence_candidates` list only target-only paths/processes and target/control
-path changes. When the target oracle is confirmed and its paired control is not,
-it additionally derives checkpoint-bound `root_cause_candidates` with
-`confidence=evidence-hypothesis`; they name a state surface and mechanism but
-remain hypotheses, not causal verdicts.
+path changes. Its v2 `contract_calibration` preserves the paired contract
+readings and only promotes that evidence to checkpoint-bound
+`root_cause_candidates` when the target oracle is confirmed, the control is
+negative, both task-compliance readings are `compliant`, both runs resolve to
+the same contract profile/rule, the target is a `contract-violation`, and the
+control is `contract-consistent`. Promoted candidates carry the profile/rule
+and source strength with `confidence=contract-calibrated-evidence-hypothesis`;
+they remain hypotheses, never causal verdicts. Generic targets or unresolved,
+incompatible, or contract-consistent pairs retain `evidence_candidates` but do
+not receive root-cause candidates.
 `target refine-plan` can consume that fallback once, adding observed paths
 (and socket dependency probes when applicable) to a deterministic refined
 plan; a second expansion is rejected by policy.

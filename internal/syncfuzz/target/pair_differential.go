@@ -14,8 +14,11 @@ import (
 )
 
 const (
-	TargetPairDifferentialSchemaVersion = "syncfuzz.target-pair-differential.v1"
+	TargetPairDifferentialSchemaVersion = "syncfuzz.target-pair-differential.v2"
 	TargetPairDifferentialArtifact      = "target-pair-differential.json"
+
+	TargetPairContractCalibrationUnresolved = "contract-unresolved"
+	TargetPairContractCalibrationCalibrated = "contract-calibrated"
 )
 
 // TargetPairDifferential compares two completed runs at the same typed
@@ -29,7 +32,35 @@ type TargetPairDifferential struct {
 	TargetRunID         string                         `json:"target_run_id"`
 	Checkpoints         []TargetPairCheckpoint         `json:"checkpoints"`
 	Evidence            []TargetPairEvidenceCandidate  `json:"evidence_candidates,omitempty"`
+	ContractCalibration TargetPairContractCalibration  `json:"contract_calibration"`
 	RootCauseCandidates []TargetPairRootCauseCandidate `json:"root_cause_candidates,omitempty"`
+}
+
+// TargetPairContractCalibration records whether the paired artifacts support
+// a contract-bound explanation. It is stricter than target-only evidence:
+// both runs must be task-compliant readings of the same contract rule, with a
+// violating target and a contract-consistent control.
+type TargetPairContractCalibration struct {
+	Status            string                    `json:"status"`
+	Reason            string                    `json:"reason"`
+	RootCauseEligible bool                      `json:"root_cause_eligible"`
+	Control           TargetPairContractReading `json:"control"`
+	Target            TargetPairContractReading `json:"target"`
+}
+
+// TargetPairContractReading preserves the compact portion of each run's
+// contract interpretation needed to audit calibration without treating the
+// interpretation itself as a causal conclusion.
+type TargetPairContractReading struct {
+	Available        bool                               `json:"available"`
+	Status           TargetContractInterpretationStatus `json:"status,omitempty"`
+	ProfileID        string                             `json:"profile_id,omitempty"`
+	RuleID           string                             `json:"rule_id,omitempty"`
+	StateSurface     string                             `json:"state_surface,omitempty"`
+	LifecycleEdge    string                             `json:"lifecycle_edge,omitempty"`
+	Expectation      TargetContractExpectation          `json:"expectation,omitempty"`
+	SourceStrength   TargetContractSourceStrength       `json:"source_strength,omitempty"`
+	ComplianceStatus TargetTaskComplianceStatus         `json:"compliance_status,omitempty"`
 }
 
 type TargetPairCheckpoint struct {
@@ -70,15 +101,19 @@ type TargetPairEvidenceCandidate struct {
 }
 
 // TargetPairRootCauseCandidate is deliberately conditional. It is emitted
-// only when the target oracle confirms the target run and the paired control
-// is not confirmed; the listed mechanism remains a checkpoint-bound evidence
-// hypothesis, not a causal conclusion.
+// only for a contract-calibrated pairing: a confirmed violating target and a
+// negative, contract-consistent, task-compliant control under the same rule.
+// The listed mechanism remains a checkpoint-bound evidence hypothesis, not a
+// causal conclusion.
 type TargetPairRootCauseCandidate struct {
-	Point        observation.ObservationPoint `json:"point"`
-	StateSurface string                       `json:"state_surface"`
-	Mechanism    string                       `json:"mechanism"`
-	Evidence     string                       `json:"evidence"`
-	Confidence   string                       `json:"confidence"`
+	Point                  observation.ObservationPoint `json:"point"`
+	StateSurface           string                       `json:"state_surface"`
+	Mechanism              string                       `json:"mechanism"`
+	Evidence               string                       `json:"evidence"`
+	Confidence             string                       `json:"confidence"`
+	ContractProfileID      string                       `json:"contract_profile_id"`
+	ContractRuleID         string                       `json:"contract_rule_id"`
+	ContractSourceStrength TargetContractSourceStrength `json:"contract_source_strength"`
 }
 
 type TargetPairDifferentialOptions struct {
@@ -132,8 +167,9 @@ func CompareTargetRuns(opts TargetPairDifferentialOptions) (*TargetPairDifferent
 		result.Checkpoints = append(result.Checkpoints, checkpoint)
 		result.Evidence = append(result.Evidence, evidence...)
 	}
-	if targetRun.Result.TargetOracle.Confirmed && !control.Result.TargetOracle.Confirmed {
-		result.RootCauseCandidates = targetPairRootCauseCandidates(result.Evidence)
+	result.ContractCalibration = targetPairContractCalibration(control.Result, targetRun.Result)
+	if result.ContractCalibration.RootCauseEligible {
+		result.RootCauseCandidates = targetPairRootCauseCandidates(result.Evidence, result.ContractCalibration.Target)
 	}
 	canonicalizeTargetPairDifferential(result)
 
@@ -145,6 +181,75 @@ func CompareTargetRuns(opts TargetPairDifferentialOptions) (*TargetPairDifferent
 		return nil, fmt.Errorf("write target pair differential %s: %w", output, err)
 	}
 	return result, nil
+}
+
+func targetPairContractCalibration(control TargetRunResult, target TargetRunResult) TargetPairContractCalibration {
+	calibration := TargetPairContractCalibration{
+		Status:  TargetPairContractCalibrationUnresolved,
+		Control: targetPairContractReading(control),
+		Target:  targetPairContractReading(target),
+	}
+	if !target.TargetOracle.Confirmed || target.TargetOracle.Status != TargetOracleStatusConfirmed {
+		calibration.Reason = "target oracle is not confirmed"
+		return calibration
+	}
+	if control.TargetOracle.Confirmed || control.TargetOracle.Status != TargetOracleStatusNegative {
+		calibration.Reason = "paired control oracle is not negative"
+		return calibration
+	}
+	if !calibration.Control.Available || !calibration.Target.Available {
+		calibration.Reason = "a paired run does not provide a contract interpretation"
+		return calibration
+	}
+	if calibration.Control.ComplianceStatus != TargetTaskComplianceStatusCompliant || calibration.Target.ComplianceStatus != TargetTaskComplianceStatusCompliant {
+		calibration.Reason = "both paired runs must be task-compliant for contract calibration"
+		return calibration
+	}
+	if !targetPairContractReadingsMatch(calibration.Control, calibration.Target) {
+		calibration.Reason = "paired runs do not resolve to the same contract profile and rule"
+		return calibration
+	}
+	if calibration.Target.Status != TargetContractStatusViolation {
+		calibration.Reason = "target behavior is not a contract violation"
+		return calibration
+	}
+	if calibration.Control.Status != TargetContractStatusConsistent {
+		calibration.Reason = "paired control behavior is not contract-consistent"
+		return calibration
+	}
+	calibration.Status = TargetPairContractCalibrationCalibrated
+	calibration.Reason = "target contract violation is paired with a task-compliant, contract-consistent control"
+	calibration.RootCauseEligible = true
+	return calibration
+}
+
+func targetPairContractReading(result TargetRunResult) TargetPairContractReading {
+	reading := TargetPairContractReading{ComplianceStatus: result.TaskCompliance.Status}
+	interpretation := result.ContractInterpretation
+	if interpretation == nil {
+		return reading
+	}
+	reading.Available = true
+	reading.Status = interpretation.Status
+	reading.ProfileID = interpretation.ProfileID
+	reading.RuleID = interpretation.RuleID
+	reading.StateSurface = interpretation.StateSurface
+	reading.LifecycleEdge = interpretation.LifecycleEdge
+	reading.Expectation = interpretation.Expectation
+	reading.SourceStrength = interpretation.SourceStrength
+	return reading
+}
+
+func targetPairContractReadingsMatch(control TargetPairContractReading, target TargetPairContractReading) bool {
+	if control.ProfileID == "" || control.RuleID == "" {
+		return false
+	}
+	return control.ProfileID == target.ProfileID &&
+		control.RuleID == target.RuleID &&
+		control.StateSurface == target.StateSurface &&
+		control.LifecycleEdge == target.LifecycleEdge &&
+		control.Expectation == target.Expectation &&
+		control.SourceStrength == target.SourceStrength
 }
 
 func readTargetPairRunArtifacts(runDir string) (targetPairRunArtifacts, error) {
@@ -438,17 +543,23 @@ func canonicalizeTargetPairDifferential(result *TargetPairDifferential) {
 		if result.RootCauseCandidates[i].Mechanism != result.RootCauseCandidates[j].Mechanism {
 			return result.RootCauseCandidates[i].Mechanism < result.RootCauseCandidates[j].Mechanism
 		}
+		if result.RootCauseCandidates[i].ContractRuleID != result.RootCauseCandidates[j].ContractRuleID {
+			return result.RootCauseCandidates[i].ContractRuleID < result.RootCauseCandidates[j].ContractRuleID
+		}
 		return result.RootCauseCandidates[i].Evidence < result.RootCauseCandidates[j].Evidence
 	})
 }
 
-func targetPairRootCauseCandidates(evidence []TargetPairEvidenceCandidate) []TargetPairRootCauseCandidate {
+func targetPairRootCauseCandidates(evidence []TargetPairEvidenceCandidate, contract TargetPairContractReading) []TargetPairRootCauseCandidate {
 	candidates := make([]TargetPairRootCauseCandidate, 0, len(evidence))
 	for _, item := range evidence {
 		candidate := TargetPairRootCauseCandidate{
-			Point:      item.Point,
-			Evidence:   item.Detail,
-			Confidence: "evidence-hypothesis",
+			Point:                  item.Point,
+			Evidence:               item.Detail,
+			Confidence:             "contract-calibrated-evidence-hypothesis",
+			ContractProfileID:      contract.ProfileID,
+			ContractRuleID:         contract.RuleID,
+			ContractSourceStrength: contract.SourceStrength,
 		}
 		switch {
 		case item.Family == "filesystem" && item.Kind == "target-only-path":

@@ -367,10 +367,17 @@ ignoring run timestamps and compares process name/cmdline multiplicities while
 ignoring PIDs, and excludes SyncFuzz prompt/task/marker control artifacts.
 `evidence_candidates` reports target-only paths/processes and
 target/control path differences for review; it must not be interpreted as a
-root-cause verdict. Only when the target oracle is confirmed while its paired
-control is not does the report add checkpoint-bound `root_cause_candidates`.
-Each carries `confidence=evidence-hypothesis`: it identifies a state surface
-and candidate mechanism, never a causal conclusion.
+root-cause verdict. The v2 report also writes `contract_calibration`, including
+the compact control/target contract readings and an explicit eligibility
+decision. It adds checkpoint-bound `root_cause_candidates` only when a
+confirmed target is paired with a negative control, both task-compliance
+readings are `compliant`, both readings resolve to the same profile/rule, the
+target is `contract-violation`, and the control is `contract-consistent`. Each
+carries that profile/rule and source strength with
+`confidence=contract-calibrated-evidence-hypothesis`; it identifies a state
+surface and candidate mechanism, never a causal conclusion. A target without a
+contract profile, a task-drifted pair, or a contract-consistent target retains
+descriptive evidence only.
 
 `syncfuzz target refine-plan --plan <plan> --fallback-report <report>` reads
 the report's adjacent fallback snapshot and produces

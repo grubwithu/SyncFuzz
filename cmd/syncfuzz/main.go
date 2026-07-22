@@ -760,6 +760,9 @@ func targetCompare(args []string) {
 	fmt.Printf("checkpoints_comparable: %d\n", comparable)
 	fmt.Printf("checkpoints_partial_or_unavailable: %d\n", partial)
 	fmt.Printf("evidence_candidates: %d\n", len(result.Evidence))
+	fmt.Printf("contract_calibration: %s\n", result.ContractCalibration.Status)
+	fmt.Printf("contract_calibration_reason: %s\n", result.ContractCalibration.Reason)
+	fmt.Printf("root_cause_eligible: %t\n", result.ContractCalibration.RootCauseEligible)
 	fmt.Printf("root_cause_candidates: %d\n", len(result.RootCauseCandidates))
 	fmt.Printf("artifact: %s\n", output)
 }

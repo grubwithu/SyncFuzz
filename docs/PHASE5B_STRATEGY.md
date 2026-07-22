@@ -57,9 +57,14 @@ metadata delta 与 process lineage delta。它只提供可复核的 differential
 `target compare` 现在可对 matching-query 的 control/target run 生成
 `target-pair-differential.json`，以忽略 timestamp/PID 的方式给出 target-only
 state 与 target/control difference candidate。当 target oracle confirmed 且 control
-未 confirmed 时，它会给出 checkpoint-bound root-cause hypothesis，明确标记为
-`evidence-hypothesis`。下一步是在 controlled campaign 中校准这些 hypothesis 与
-contract attribution，不能把任何汇总本身宣传为因果判定。
+为 negative 时，v2 artifact 会先输出 `contract_calibration`：只有 control/target
+都 task-compliant、解析到同一 contract profile/rule、target 为
+`contract-violation` 且 control 为 `contract-consistent`，才会给出
+checkpoint-bound root-cause hypothesis，明确标记为
+`contract-calibrated-evidence-hypothesis` 并附带 profile/rule/source strength。
+generic target、contract-unresolved、不兼容或 contract-consistent pair 只保留
+descriptive evidence。下一步是在 controlled campaign 中量化这层 calibration 的
+覆盖率与未解析原因，不能把任何汇总本身宣传为因果判定。
 
 ## 当前判断
 
