@@ -274,6 +274,9 @@ runs/<run_id>/
   observation-plan.json                 # emitted by `target plan-probes`
   observation-plan-refined.json         # emitted by `target refine-plan`
   targeted-probe-report.json            # emitted when a rerun consumes a plan
+  target-lifecycle-markers.jsonl        # optional target-emitted semantic markers
+  snapshot-after-plant.json             # optional P4 snapshot from after-plant marker
+  process-after-plant.json              # optional P4 process snapshot from marker
   snapshot-full-fallback.json           # final fallback for pruned-filesystem mode
   process-full-fallback.json            # final process fallback for local pruned mode
   workspace/
@@ -329,9 +332,16 @@ of the selected process. It writes `process-full-fallback.json` alongside the
 filesystem fallback. It requires an enabled process or FD selector; otherwise
 the caller must use `pruned-filesystem`. This mode rejects `--env container`;
 container selected process collection is not implemented. It neither installs
-eBPF probes nor claims causal tracing. The generic command adapter reports its P5
-filesystem probe as unavailable rather than treating command return as a
-fabricated semantic plant boundary.
+eBPF probes nor claims causal tracing.
+
+The generic command adapter exports an executable
+`$SYNCFUZZ_LIFECYCLE_MARKER` plus `SYNCFUZZ_LIFECYCLE_MARKER_FILE`. A
+cooperating command invokes `"$SYNCFUZZ_LIFECYCLE_MARKER" after-plant` at its
+actual semantic plant boundary. The runner polls that validated JSONL protocol
+while the command remains live, captures filesystem/process artifacts at P4,
+and maps the `after-plant` probe checkpoint to those artifacts. The marker is
+opt-in; absent a marker, P5 remains the explicitly partial command-return
+process observation rather than a fabricated filesystem boundary.
 
 `syncfuzz target refine-plan --plan <plan> --fallback-report <report>` reads
 the report's adjacent fallback snapshot and produces

@@ -1,9 +1,11 @@
 package target
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -23,6 +25,10 @@ const (
 	TargetPromptArtifact                         = "target-prompt.txt"
 	TargetOutputArtifact                         = "target-output.txt"
 	TargetResultArtifact                         = "target-result.json"
+	TargetLifecycleMarkerArtifact                = "target-lifecycle-markers.jsonl"
+	TargetLifecycleMarkerHelperArtifact          = "syncfuzz-lifecycle-marker"
+	TargetSnapshotAfterPlantArtifact             = "snapshot-after-plant.json"
+	TargetProcessAfterPlantArtifact              = "process-after-plant.json"
 	TargetFullFallbackSnapshotArtifact           = "snapshot-full-fallback.json"
 	TargetFullFallbackProcessArtifact            = "process-full-fallback.json"
 	TargetShellPoisonCheckArtifact               = "shell-poison-check.txt"
@@ -191,6 +197,9 @@ const (
 	TargetObservationModeShadow           = "shadow"
 	TargetObservationModePrunedFilesystem = "pruned-filesystem"
 	TargetObservationModePruned           = "pruned"
+
+	TargetLifecycleMarkerSchemaVersion = "syncfuzz.target-lifecycle-marker.v1"
+	TargetLifecycleAfterPlantEvent     = "after-plant"
 )
 
 type TargetAdapterInfo struct {
@@ -257,6 +266,15 @@ type TargetCommandResult struct {
 	Error        string `json:"error,omitempty"`
 }
 
+// TargetLifecycleMarker is an opt-in, command-emitted semantic checkpoint.
+// The generic adapter observes it while the command is still running; it is
+// not inferred from command return or filesystem timestamps.
+type TargetLifecycleMarker struct {
+	SchemaVersion string `json:"schema_version"`
+	Event         string `json:"event"`
+	Timestamp     string `json:"timestamp"`
+}
+
 type TargetOracleResult struct {
 	Name        string             `json:"name"`
 	Status      TargetOracleStatus `json:"status,omitempty"`
@@ -308,6 +326,8 @@ type TargetRunResult struct {
 	LateExpectedFilesMissing []string                      `json:"late_expected_files_missing,omitempty"`
 	ObservationPlanArtifact  string                        `json:"observation_plan_artifact,omitempty"`
 	ObservationPlanQueryID   string                        `json:"observation_plan_query_id,omitempty"`
+	LifecycleMarkerArtifact  string                        `json:"lifecycle_marker_artifact,omitempty"`
+	LifecycleMarkers         []TargetLifecycleMarker       `json:"lifecycle_markers,omitempty"`
 	TargetedProbeArtifact    string                        `json:"targeted_probe_artifact,omitempty"`
 	ObservationMode          string                        `json:"observation_mode,omitempty"`
 	CommandResult            TargetCommandResult           `json:"command_result"`
@@ -564,6 +584,53 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 			return core.RecordSelectedProcessSnapshot(ctx, env, run, phase, artifact, processSelectors)
 		}
 	}
+	markerHostPath := filepath.Join(run.Workspace, TargetLifecycleMarkerArtifact)
+	markerEnvironmentPath := filepath.Join(workspacePath, TargetLifecycleMarkerArtifact)
+	markerHelperPath := filepath.Join(run.Workspace, TargetLifecycleMarkerHelperArtifact)
+	if err := writeTargetLifecycleMarkerHelper(markerHelperPath); err != nil {
+		return nil, err
+	}
+	markerCommand := filepath.Join(workspacePath, TargetLifecycleMarkerHelperArtifact)
+	lifecycleMarkers := make([]TargetLifecycleMarker, 0)
+	var afterPlantMarkerSnapshot core.Snapshot
+	var afterPlantMarkerProcesses core.ProcessSnapshot
+	afterPlantMarkerCaptured := false
+	observeLifecycleMarker := func(marker TargetLifecycleMarker) error {
+		if afterPlantMarkerCaptured {
+			return fmt.Errorf("lifecycle marker %q was emitted more than once", marker.Event)
+		}
+		if marker.Event != TargetLifecycleAfterPlantEvent {
+			return fmt.Errorf("unsupported lifecycle marker event %q", marker.Event)
+		}
+		filesystem, err := snapshotFilesystem(run.Workspace)
+		if err != nil {
+			return err
+		}
+		if err := core.WriteJSON(filepath.Join(run.RunDir, TargetSnapshotAfterPlantArtifact), filesystem); err != nil {
+			return err
+		}
+		processes, err := recordProcesses(ctx, env, run, "P4", TargetProcessAfterPlantArtifact)
+		if err != nil {
+			return err
+		}
+		if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterPlant, "P4", &filesystem, &processes, "explicit target after-plant lifecycle marker"); err != nil {
+			return err
+		}
+		if err := run.Trace.Write(core.NewEvent(run, "P4", "target_lifecycle_marker", map[string]any{
+			"artifact":  TargetLifecycleMarkerArtifact,
+			"event":     marker.Event,
+			"timestamp": marker.Timestamp,
+			"snapshot":  TargetSnapshotAfterPlantArtifact,
+			"process":   TargetProcessAfterPlantArtifact,
+		})); err != nil {
+			return err
+		}
+		lifecycleMarkers = append(lifecycleMarkers, marker)
+		afterPlantMarkerSnapshot = filesystem
+		afterPlantMarkerProcesses = processes
+		afterPlantMarkerCaptured = true
+		return nil
+	}
 	if err := run.Trace.Write(core.NewEvent(run, "P1", "target_task_prepared", map[string]any{
 		"artifact":         TargetTaskArtifact,
 		"prompt_file":      TargetPromptArtifact,
@@ -572,6 +639,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"command":          opts.Command,
 		"observation_plan": observationPlan != nil,
 		"observation_mode": observationMode,
+		"lifecycle_marker": markerCommand,
 	})); err != nil {
 		return nil, err
 	}
@@ -591,12 +659,23 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		return nil, err
 	}
 
-	commandResult, output, err := execTargetCommand(ctx, env, run, opts, workspacePath)
+	commandResult, output, err := execTargetCommand(ctx, env, run, opts, workspacePath, markerHostPath, markerEnvironmentPath, markerCommand, observeLifecycleMarker)
 	if err != nil {
 		return nil, err
 	}
 	if err := os.WriteFile(filepath.Join(run.RunDir, TargetOutputArtifact), output, 0o644); err != nil {
 		return nil, fmt.Errorf("write target output: %w", err)
+	}
+	lifecycleMarkerArtifact := ""
+	if len(lifecycleMarkers) > 0 {
+		rawMarkers, err := os.ReadFile(markerHostPath)
+		if err != nil {
+			return nil, fmt.Errorf("read lifecycle marker artifact: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(run.RunDir, TargetLifecycleMarkerArtifact), rawMarkers, 0o644); err != nil {
+			return nil, fmt.Errorf("write lifecycle marker artifact: %w", err)
+		}
+		lifecycleMarkerArtifact = TargetLifecycleMarkerArtifact
 	}
 	if err := run.Trace.Write(core.NewEvent(run, "P5", "target_command_returned", map[string]any{
 		"exit_code":    commandResult.ExitCode,
@@ -611,8 +690,10 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err != nil {
 		return nil, err
 	}
-	if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterPlant, "P5", nil, &processAfterCommand, "the command adapter has no semantic plant marker; only its command-return process snapshot is available"); err != nil {
-		return nil, err
+	if !afterPlantMarkerCaptured {
+		if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterPlant, "P5", nil, &processAfterCommand, "the command adapter has no semantic plant marker; only its command-return process snapshot is available"); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := waitForTargetObservation(ctx, run, "P6", "target_observation_delay", opts.ObserveDelay); err != nil {
@@ -625,14 +706,22 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterRecovery, "P6", &after, &processAfter, "adapter immediate post-recovery observation"); err != nil {
 		return nil, err
 	}
-	processLineage, err := core.RecordProcessLineage(run, "P6", "process-lineage.json", processBefore, processAfterCommand, processAfter, "process-before.json", "process-after-command.json", "process-after.json")
+	processBoundary := processAfterCommand
+	processBoundaryArtifact := "process-after-command.json"
+	if afterPlantMarkerCaptured {
+		processBoundary = afterPlantMarkerProcesses
+		processBoundaryArtifact = TargetProcessAfterPlantArtifact
+	}
+	processLineage, err := core.RecordProcessLineage(run, "P6", "process-lineage.json", processBefore, processBoundary, processAfter, "process-before.json", processBoundaryArtifact, "process-after.json")
 	if err != nil {
 		return nil, err
 	}
-	if _, err := core.RecordFilesystemMetadata(run, "P6", "filesystem-metadata.json", []core.FilesystemSnapshotArtifact{
-		{Phase: "P0", Artifact: "snapshot-before.json", Snapshot: before},
-		{Phase: "P6", Artifact: "snapshot-after.json", Snapshot: after},
-	}); err != nil {
+	metadataSnapshots := []core.FilesystemSnapshotArtifact{{Phase: "P0", Artifact: "snapshot-before.json", Snapshot: before}}
+	if afterPlantMarkerCaptured {
+		metadataSnapshots = append(metadataSnapshots, core.FilesystemSnapshotArtifact{Phase: "P4", Artifact: TargetSnapshotAfterPlantArtifact, Snapshot: afterPlantMarkerSnapshot})
+	}
+	metadataSnapshots = append(metadataSnapshots, core.FilesystemSnapshotArtifact{Phase: "P6", Artifact: "snapshot-after.json", Snapshot: after})
+	if _, err := core.RecordFilesystemMetadata(run, "P6", "filesystem-metadata.json", metadataSnapshots); err != nil {
 		return nil, err
 	}
 
@@ -751,6 +840,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"filesystem-metadata.json",
 		TargetResultArtifact,
 	}
+	if afterPlantMarkerCaptured {
+		artifacts = append(artifacts, TargetSnapshotAfterPlantArtifact, TargetProcessAfterPlantArtifact, lifecycleMarkerArtifact)
+	}
 	if observationPlan != nil {
 		artifacts = append(artifacts, observation.ObservationPlanArtifact, observation.TargetedProbeReportArtifact)
 	}
@@ -770,6 +862,13 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-after.json", Kind: "process-snapshot"},
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-lineage.json", Kind: "process-lineage"},
 		{Layer: "os", StateClass: "filesystem-metadata", Phase: "P6", Artifact: "filesystem-metadata.json", Kind: "filesystem-metadata"},
+	}
+	if afterPlantMarkerCaptured {
+		observations = append(observations,
+			core.StateObservation{Layer: "agent", StateClass: "lifecycle-marker", Phase: "P4", Artifact: lifecycleMarkerArtifact, Kind: "jsonl", Description: "explicit target-emitted after-plant marker observed while the command was still running"},
+			core.StateObservation{Layer: "os", StateClass: "filesystem", Phase: "P4", Artifact: TargetSnapshotAfterPlantArtifact, Kind: "filesystem-snapshot", Description: "filesystem observation captured at the explicit after-plant marker"},
+			core.StateObservation{Layer: "os", StateClass: "process", Phase: "P4", Artifact: TargetProcessAfterPlantArtifact, Kind: "process-snapshot", Description: "process observation captured at the explicit after-plant marker"},
+		)
 	}
 	if observationPlan != nil {
 		probeDescription := "plan-selected objects projected from retained broad artifacts"
@@ -801,6 +900,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		})
 	}
 	faultPhases := []string{"P1 target task prepared", "P5 target command returned", "P6 target workspace observed"}
+	if afterPlantMarkerCaptured {
+		faultPhases = append(faultPhases, "P4 explicit target after-plant marker observed")
+	}
 	if lateObserved {
 		artifacts = append(artifacts, TargetSnapshotLateArtifact, TargetProcessLateArtifact, TargetFilesystemLateArtifact)
 		observations = append(observations,
@@ -814,6 +916,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	artifacts = append(artifacts, adapterArtifacts...)
 	observations = append(observations, adapterObservations...)
 	stateClasses := []string{"workspace", "process", "target-command"}
+	if afterPlantMarkerCaptured {
+		stateClasses = append(stateClasses, "lifecycle-marker")
+	}
 	if observationPlan != nil {
 		stateClasses = append(stateClasses, "query-specific-targeted-probe")
 	}
@@ -860,6 +965,8 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		LateExpectedFilesMissing: lateMissing,
 		ObservationPlanArtifact:  targetObservationPlanArtifactValue(observationPlan),
 		ObservationPlanQueryID:   targetObservationPlanQueryIDValue(observationPlan),
+		LifecycleMarkerArtifact:  lifecycleMarkerArtifact,
+		LifecycleMarkers:         lifecycleMarkers,
 		TargetedProbeArtifact:    targetedProbeArtifactValue(targetedProbeReport),
 		ObservationMode:          observationMode,
 		CommandResult:            commandResult,
@@ -957,7 +1064,7 @@ func targetUnplannedFallbackPaths(plan observation.ObservationPlan, snapshot cor
 	filtered := make([]string, 0, len(paths))
 	for _, path := range paths {
 		switch path {
-		case TargetPromptArtifact, TargetTaskArtifact:
+		case TargetPromptArtifact, TargetTaskArtifact, TargetLifecycleMarkerArtifact, TargetLifecycleMarkerHelperArtifact:
 			continue
 		default:
 			filtered = append(filtered, path)
@@ -3250,15 +3357,62 @@ func readTargetOracleFile(workspace string, name string) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
-func execTargetCommand(ctx context.Context, env core.Environment, run *core.RunContext, opts TargetRunOptions, workspacePath string) (TargetCommandResult, []byte, error) {
-	commandEnv := targetCommandEnv(opts, run.RunID, workspacePath)
+func execTargetCommand(ctx context.Context, env core.Environment, run *core.RunContext, opts TargetRunOptions, workspacePath string, markerHostPath string, markerEnvironmentPath string, markerCommand string, observeMarker func(TargetLifecycleMarker) error) (TargetCommandResult, []byte, error) {
+	commandEnv := targetCommandEnv(opts, run.RunID, workspacePath, markerEnvironmentPath, markerCommand)
 	started := time.Now()
 	commandCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 
-	var output []byte
-	var err error
-	output, err = env.ExecTargetCommand(commandCtx, run, opts.Command, commandEnv)
+	type targetCommandExecution struct {
+		output []byte
+		err    error
+	}
+	executionDone := make(chan targetCommandExecution, 1)
+	go func() {
+		output, err := env.ExecTargetCommand(commandCtx, run, opts.Command, commandEnv)
+		executionDone <- targetCommandExecution{output: output, err: err}
+	}()
+
+	observedMarkers := 0
+	consumeMarkers := func() error {
+		markers, err := readTargetLifecycleMarkers(markerHostPath)
+		if err != nil {
+			return err
+		}
+		for observedMarkers < len(markers) {
+			if observeMarker != nil {
+				if err := observeMarker(markers[observedMarkers]); err != nil {
+					return err
+				}
+			}
+			observedMarkers++
+		}
+		return nil
+	}
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	var execution targetCommandExecution
+	for {
+		select {
+		case execution = <-executionDone:
+			if err := consumeMarkers(); err != nil {
+				return TargetCommandResult{}, nil, err
+			}
+			goto commandFinished
+		case <-ticker.C:
+			if err := consumeMarkers(); err != nil {
+				cancel()
+				return TargetCommandResult{}, nil, err
+			}
+		case <-ctx.Done():
+			cancel()
+			return TargetCommandResult{}, nil, ctx.Err()
+		}
+	}
+
+commandFinished:
+	output := execution.output
+	err := execution.err
 
 	result := TargetCommandResult{
 		ExitCode:     exitCode(err),
@@ -3273,24 +3427,81 @@ func execTargetCommand(ctx context.Context, env core.Environment, run *core.RunC
 	return result, output, nil
 }
 
-func targetCommandEnv(opts TargetRunOptions, runID string, workspacePath string) map[string]string {
+func targetCommandEnv(opts TargetRunOptions, runID string, workspacePath string, markerPath string, markerCommand string) map[string]string {
 	promptFile := filepath.Join(workspacePath, TargetPromptArtifact)
 	taskFile := filepath.Join(workspacePath, TargetTaskArtifact)
 	env := map[string]string{
-		"SYNCFUZZ_ADAPTER_ID":  opts.AdapterID,
-		"SYNCFUZZ_TARGET_ID":   opts.TargetID,
-		"SYNCFUZZ_TASK_ID":     opts.TaskID,
-		"SYNCFUZZ_RUN_ID":      runID,
-		"SYNCFUZZ_REPO_ROOT":   targetRepoRoot(),
-		"SYNCFUZZ_WORKSPACE":   workspacePath,
-		"SYNCFUZZ_PROMPT":      opts.Prompt,
-		"SYNCFUZZ_PROMPT_FILE": promptFile,
-		"SYNCFUZZ_TASK_FILE":   taskFile,
+		"SYNCFUZZ_ADAPTER_ID":            opts.AdapterID,
+		"SYNCFUZZ_TARGET_ID":             opts.TargetID,
+		"SYNCFUZZ_TASK_ID":               opts.TaskID,
+		"SYNCFUZZ_RUN_ID":                runID,
+		"SYNCFUZZ_REPO_ROOT":             targetRepoRoot(),
+		"SYNCFUZZ_WORKSPACE":             workspacePath,
+		"SYNCFUZZ_PROMPT":                opts.Prompt,
+		"SYNCFUZZ_PROMPT_FILE":           promptFile,
+		"SYNCFUZZ_TASK_FILE":             taskFile,
+		"SYNCFUZZ_LIFECYCLE_MARKER_FILE": markerPath,
+		"SYNCFUZZ_LIFECYCLE_MARKER":      markerCommand,
 	}
 	for key, value := range targetTaskEnvOverridesWithPlan(opts.TaskID, opts.ExecutionPlan) {
 		env[key] = value
 	}
 	return env
+}
+
+func writeTargetLifecycleMarkerHelper(path string) error {
+	const helper = `#!/usr/bin/env bash
+set -euo pipefail
+if [ "$#" -ne 1 ] || [ "$1" != "after-plant" ]; then
+  printf 'usage: %s after-plant\n' "$0" >&2
+  exit 2
+fi
+: "${SYNCFUZZ_LIFECYCLE_MARKER_FILE:?SYNCFUZZ_LIFECYCLE_MARKER_FILE is required}"
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)
+printf '{"schema_version":"syncfuzz.target-lifecycle-marker.v1","event":"after-plant","timestamp":"%s"}\n' "$timestamp" >> "$SYNCFUZZ_LIFECYCLE_MARKER_FILE"
+`
+	if err := os.WriteFile(path, []byte(helper), 0o755); err != nil {
+		return fmt.Errorf("write lifecycle marker helper: %w", err)
+	}
+	return nil
+}
+
+func readTargetLifecycleMarkers(path string) ([]TargetLifecycleMarker, error) {
+	file, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open lifecycle marker artifact: %w", err)
+	}
+	defer file.Close()
+
+	markers := make([]TargetLifecycleMarker, 0)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var marker TargetLifecycleMarker
+		if err := json.Unmarshal([]byte(line), &marker); err != nil {
+			return nil, fmt.Errorf("decode lifecycle marker: %w", err)
+		}
+		if marker.SchemaVersion != TargetLifecycleMarkerSchemaVersion {
+			return nil, fmt.Errorf("unsupported lifecycle marker schema %q", marker.SchemaVersion)
+		}
+		if marker.Event != TargetLifecycleAfterPlantEvent {
+			return nil, fmt.Errorf("unsupported lifecycle marker event %q", marker.Event)
+		}
+		if strings.TrimSpace(marker.Timestamp) == "" {
+			return nil, fmt.Errorf("lifecycle marker %q is missing timestamp", marker.Event)
+		}
+		markers = append(markers, marker)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read lifecycle marker artifact: %w", err)
+	}
+	return markers, nil
 }
 
 func targetTaskEnvOverrides(taskID string) map[string]string {

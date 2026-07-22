@@ -201,6 +201,8 @@ Phase 5 target runs add a parallel artifact set for real agent/runtime observati
 - `observation-plan.json`: validated query-specific plan copied into a rerun that uses `--observation-plan`
 - `observation-plan-refined.json`: optional one-time expansion from a pruned run's fallback evidence
 - `targeted-probe-report.json`: objects selected by that plan at each adapter-visible checkpoint
+- `target-lifecycle-markers.jsonl`: optional semantic markers emitted by the target command
+- `snapshot-after-plant.json` / `process-after-plant.json`: optional P4 observations from an `after-plant` marker
 - `snapshot-full-fallback.json`: final broad filesystem fallback for a `pruned-filesystem` rerun
 - `process-full-fallback.json`: final broad process fallback for a local `pruned` rerun
 
@@ -227,8 +229,15 @@ enumeration while retaining final full-state checks. It requires at least one
 enabled process or FD selector; filesystem-only plans use
 `pruned-filesystem`. Container selected-process collection is not implemented,
 so `pruned` rejects `--env container`.
-The generic command adapter has no semantic `after-plant` marker, so its P5
-filesystem probe is explicitly partial rather than a fabricated boundary.
+
+Every target command receives an executable `$SYNCFUZZ_LIFECYCLE_MARKER` and a
+marker-file path. Calling `"$SYNCFUZZ_LIFECYCLE_MARKER" after-plant` after the
+actual plant causes the runner to capture `snapshot-after-plant.json` and
+`process-after-plant.json` while the command is still running, then records
+the event in `target-lifecycle-markers.jsonl`. The corresponding targeted
+probe checkpoint is P4 and no longer partial. This protocol is opt-in: when a
+target does not emit it, the generic adapter retains the explicitly partial P5
+command-return process observation instead of inventing a semantic boundary.
 `target refine-plan` can consume that fallback once, adding observed paths
 (and socket dependency probes when applicable) to a deterministic refined
 plan; a second expansion is rejected by policy.

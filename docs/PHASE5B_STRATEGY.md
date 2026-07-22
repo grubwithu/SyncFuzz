@@ -38,13 +38,18 @@ plan 复制进新 run，并生成 `targeted-probe-report.json`，以 query-speci
 path/process/FD selection 投影 broad snapshot。默认保持 shadow mode；可选的
 `pruned-filesystem` mode 已把前/后/late 的 workspace snapshot 切到 exact
 planned paths，再用一次最终 full snapshot 作为 fallback，并把未规划对象
-写入 report。generic command adapter 仍会把没有 semantic plant marker 的
-P5 filesystem coverage 明确标为 partial，process/FD 也仍是 broad collection。
+写入 report。本地 `pruned` mode 还会先按 plan selector 匹配 process identity，
+只为命中的 PID 读取 FD，再保留最终 broad process/filesystem fallback。generic
+command adapter 现提供 opt-in `$SYNCFUZZ_LIFECYCLE_MARKER`：目标在实际 plant
+完成后调用 `"$SYNCFUZZ_LIFECYCLE_MARKER" after-plant`，runner 在命令存活期间
+验证 JSONL marker 并采集 P4 filesystem/process artifact；未调用 marker 时才把
+P5 coverage 明确标为 partial。
 `target refine-plan` 已将 fallback evidence 接入 compiler：未规划路径可
 扩展一次；socket 会自动补齐 filesystem/process/FD dependency，并把 added
-paths 固化到 refined plan。接下来的直接目标是安全地将 process/FD collection
-切到真正的 plan-selected probe，并评估 refine-once 的 fallback coverage；
-完成后才评估 time-boxed、特权环境可用的 OS trace/eBPF evidence source。
+paths 固化到 refined plan。接下来的直接目标是评估 plan-selected collection 与
+refine-once 的 fallback coverage，并把 marker protocol 扩展到 recovery /
+activation；完成后才评估 time-boxed、特权环境可用的 OS trace/eBPF evidence
+source。
 
 ## 当前判断
 

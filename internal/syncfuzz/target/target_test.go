@@ -143,6 +143,52 @@ func TestRunTargetConsumesObservationPlanInShadowMode(t *testing.T) {
 	}
 }
 
+func TestRunTargetCapturesExplicitAfterPlantMarker(t *testing.T) {
+	tmp := t.TempDir()
+	planPath := filepath.Join(tmp, observation.ObservationPlanArtifact)
+	if err := observation.WritePlan(planPath, &observation.ObservationPlan{
+		QueryID:     "orphan-process",
+		Checkpoints: []observation.ObservationPoint{observation.ObservationBeforePlant, observation.ObservationAfterPlant, observation.ObservationAfterRecovery},
+		ProbePlans: []observation.ProbePlan{
+			{Family: observation.ProbeFilesystem, Enabled: true, Paths: []string{"plant.txt"}, Fields: []string{"exists", "content_hash"}},
+			{Family: observation.ProbeProcess, Enabled: true, Fields: []string{"alive", "command_line"}},
+		},
+	}); err != nil {
+		t.Fatalf("WritePlan failed: %v", err)
+	}
+
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:              filepath.Join(tmp, "runs"),
+		TaskID:              "orphan-process",
+		Command:             "printf planted > plant.txt; \"$SYNCFUZZ_LIFECYCLE_MARKER\" after-plant; sleep 0.1; printf complete > late-effect",
+		ObserveDelay:        10 * time.Millisecond,
+		ObservationPlanPath: planPath,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget with lifecycle marker failed: %v", err)
+	}
+	if result.LifecycleMarkerArtifact != TargetLifecycleMarkerArtifact || len(result.LifecycleMarkers) != 1 || result.LifecycleMarkers[0].Event != TargetLifecycleAfterPlantEvent {
+		t.Fatalf("expected recorded lifecycle marker, got %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(result.ArtifactDir, TargetLifecycleMarkerArtifact)); err != nil {
+		t.Fatalf("expected lifecycle marker artifact: %v", err)
+	}
+	var afterPlant core.Snapshot
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, TargetSnapshotAfterPlantArtifact), &afterPlant)
+	if !snapshotContainsPath(afterPlant, "plant.txt") || snapshotContainsPath(afterPlant, "late-effect") {
+		t.Fatalf("expected in-command after-plant snapshot before later effect: %#v", afterPlant)
+	}
+	if _, err := os.Stat(filepath.Join(result.ArtifactDir, TargetProcessAfterPlantArtifact)); err != nil {
+		t.Fatalf("expected after-plant process artifact: %v", err)
+	}
+	var report observation.TargetedProbeReport
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, observation.TargetedProbeReportArtifact), &report)
+	afterPlantCheckpoint := findTargetedProbeCheckpoint(report.Checkpoints, observation.ObservationAfterPlant)
+	if afterPlantCheckpoint.RunnerPhase != "P4" || afterPlantCheckpoint.Status != "observed" || !targetedProbeContainsPath(afterPlantCheckpoint.Families, "plant.txt") {
+		t.Fatalf("expected full P4 after-plant checkpoint, got %#v", afterPlantCheckpoint)
+	}
+}
+
 func TestRunTargetRejectsObservationPlanForDifferentQuery(t *testing.T) {
 	tmp := t.TempDir()
 	planPath := filepath.Join(tmp, observation.ObservationPlanArtifact)
@@ -204,7 +250,7 @@ func TestRunTargetPrunesFilesystemSnapshotsWithFinalFallback(t *testing.T) {
 	if report.CollectionMode != TargetObservationModePrunedFilesystem || !report.FullProbeFallbackUsed || report.FallbackFilesystemArtifact != TargetFullFallbackSnapshotArtifact {
 		t.Fatalf("unexpected pruned probe report: %#v", report)
 	}
-	if targetContainsString(report.UnplannedFallbackFilesystemPaths, TargetTaskArtifact) || targetContainsString(report.UnplannedFallbackFilesystemPaths, TargetPromptArtifact) {
+	if targetContainsString(report.UnplannedFallbackFilesystemPaths, TargetTaskArtifact) || targetContainsString(report.UnplannedFallbackFilesystemPaths, TargetPromptArtifact) || targetContainsString(report.UnplannedFallbackFilesystemPaths, TargetLifecycleMarkerHelperArtifact) || targetContainsString(report.UnplannedFallbackFilesystemPaths, TargetLifecycleMarkerArtifact) {
 		t.Fatalf("control artifacts must not pollute fallback expansion: %#v", report)
 	}
 }

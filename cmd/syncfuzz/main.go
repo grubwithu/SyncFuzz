@@ -676,7 +676,7 @@ func targetPlanProbes(args []string) {
 func targetRefinePlan(args []string) {
 	fs := flag.NewFlagSet("target refine-plan", flag.ExitOnError)
 	planPath := fs.String("plan", "", "observation-plan.json input path")
-	reportPath := fs.String("fallback-report", "", "targeted-probe-report.json from a pruned-filesystem run")
+	reportPath := fs.String("fallback-report", "", "targeted-probe-report.json from a pruned-filesystem or pruned run")
 	outPath := fs.String("out", "", "refined observation plan output path; defaults beside --plan")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
