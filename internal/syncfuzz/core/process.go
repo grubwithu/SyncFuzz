@@ -3,17 +3,71 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
 
 type ProcessSnapshot struct {
-	Environment    string         `json:"environment"`
-	ContainerName  string         `json:"container_name,omitempty"`
-	ContainerImage string         `json:"container_image,omitempty"`
-	Workspace      string         `json:"workspace,omitempty"`
-	CapturedAt     string         `json:"captured_at"`
-	Processes      []ProcessEntry `json:"processes"`
+	Environment     string            `json:"environment"`
+	ContainerName   string            `json:"container_name,omitempty"`
+	ContainerImage  string            `json:"container_image,omitempty"`
+	Workspace       string            `json:"workspace,omitempty"`
+	CapturedAt      string            `json:"captured_at"`
+	CollectionScope string            `json:"collection_scope,omitempty"`
+	Selectors       []ProcessSelector `json:"selectors,omitempty"`
+	Processes       []ProcessEntry    `json:"processes"`
+}
+
+// ProcessSelector is a stable plan-level fingerprint. It intentionally does
+// not use PIDs, which are run-local and cannot be reused by a later replay.
+// When both values are set, a process must match both exactly.
+type ProcessSelector struct {
+	Executable  string `json:"executable,omitempty"`
+	CommandLine string `json:"command_line,omitempty"`
+}
+
+// NormalizeProcessSelectors canonicalizes reusable process fingerprints and
+// drops empty entries. It is shared by observation-plan consumers and
+// environment backends so their selection semantics cannot drift.
+func NormalizeProcessSelectors(selectors []ProcessSelector) []ProcessSelector {
+	byKey := make(map[string]ProcessSelector, len(selectors))
+	for _, selector := range selectors {
+		selector.Executable = strings.TrimSpace(selector.Executable)
+		selector.CommandLine = strings.TrimSpace(selector.CommandLine)
+		if selector.Executable == "" && selector.CommandLine == "" {
+			continue
+		}
+		key := selector.Executable + "\x00" + selector.CommandLine
+		byKey[key] = selector
+	}
+	out := make([]ProcessSelector, 0, len(byKey))
+	for _, selector := range byKey {
+		out = append(out, selector)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Executable != out[j].Executable {
+			return out[i].Executable < out[j].Executable
+		}
+		return out[i].CommandLine < out[j].CommandLine
+	})
+	return out
+}
+
+// MatchesProcessSelector reports whether process satisfies a plan-level
+// fingerprint. A blank field is a wildcard; an empty selector set matches
+// nothing because callers must select that broad-collection policy explicitly.
+func MatchesProcessSelector(process ProcessEntry, selectors []ProcessSelector) bool {
+	for _, selector := range NormalizeProcessSelectors(selectors) {
+		if selector.Executable != "" && selector.Executable != process.Name {
+			continue
+		}
+		if selector.CommandLine != "" && selector.CommandLine != process.RawCmdline {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 type ProcessEntry struct {

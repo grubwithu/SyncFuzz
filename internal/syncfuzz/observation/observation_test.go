@@ -190,6 +190,53 @@ func TestCaptureTargetedProbeCheckpointSelectsOnlyPlannedObjects(t *testing.T) {
 	}
 }
 
+func TestProcessSelectorsForPlanMergesProcessAndFDSelectors(t *testing.T) {
+	plan := ObservationPlan{
+		QueryID:     "selector-query",
+		Checkpoints: []ObservationPoint{ObservationAfterRecovery},
+		ProbePlans: []ProbePlan{
+			{Family: ProbeProcess, Enabled: true, ProcessSelectors: []ProcessFootprint{{Executable: "listener", CommandLine: "listener --serve"}}, Fields: []string{"alive"}},
+			{Family: ProbeFD, Enabled: true, ProcessSelectors: []ProcessFootprint{{Executable: "holder"}, {Executable: "listener", CommandLine: "listener --serve"}}, Fields: []string{"fd_number"}},
+		},
+	}
+	selectors, err := ProcessSelectorsForPlan(plan)
+	if err != nil {
+		t.Fatalf("ProcessSelectorsForPlan failed: %v", err)
+	}
+	if len(selectors) != 2 || selectors[0].Executable != "holder" || selectors[1].CommandLine != "listener --serve" {
+		t.Fatalf("unexpected canonical selectors: %#v", selectors)
+	}
+}
+
+func TestCaptureTargetedProbeCheckpointUsesSelectedProcessScope(t *testing.T) {
+	plan := ObservationPlan{
+		QueryID:     "selected-scope-query",
+		Checkpoints: []ObservationPoint{ObservationAfterRecovery},
+		ProbePlans: []ProbePlan{{
+			Family:           ProbeProcess,
+			Enabled:          true,
+			ProcessSelectors: []ProcessFootprint{{Executable: "listener", CommandLine: "listener --serve"}},
+			Fields:           []string{"alive"},
+		}},
+	}
+	processes := core.ProcessSnapshot{
+		CollectionScope: "selected",
+		Processes: []core.ProcessEntry{{
+			PID:        11,
+			Name:       "listener",
+			RawCmdline: "listener --serve",
+		}},
+	}
+	checkpoint, err := CaptureTargetedProbeCheckpoint(plan, ObservationAfterRecovery, "P6", nil, &processes, "selected process")
+	if err != nil {
+		t.Fatalf("CaptureTargetedProbeCheckpoint failed: %v", err)
+	}
+	process, ok := findTargetedProbeFamily(checkpoint.Families, ProbeProcess)
+	if !ok || len(process.MatchedProcesses) != 1 || process.MatchedProcesses[0].PID != 11 {
+		t.Fatalf("selected process should not require workspace cwd/FD evidence: %#v", process)
+	}
+}
+
 func TestRefinePlanFromFallbackExpandsOnceWithSocketDependencies(t *testing.T) {
 	plan := ObservationPlan{
 		QueryID:                 "refine-query",

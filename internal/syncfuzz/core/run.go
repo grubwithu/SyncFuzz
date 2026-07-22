@@ -95,6 +95,26 @@ func RecordProcessSnapshot(ctx context.Context, env Environment, run *RunContext
 	if err != nil {
 		return ProcessSnapshot{}, err
 	}
+	return recordProcessSnapshot(run, phase, artifact, snapshot)
+}
+
+// RecordSelectedProcessSnapshot captures only plan-selected processes. The
+// backend still performs a lightweight process-table pass to find reusable
+// fingerprints, but it defers expensive FD enumeration until a selector
+// matches. Empty selectors intentionally fall back to the broad snapshot.
+func RecordSelectedProcessSnapshot(ctx context.Context, env Environment, run *RunContext, phase string, artifact string, selectors []ProcessSelector) (ProcessSnapshot, error) {
+	selectors = NormalizeProcessSelectors(selectors)
+	if len(selectors) == 0 {
+		return RecordProcessSnapshot(ctx, env, run, phase, artifact)
+	}
+	snapshot, err := env.SnapshotSelectedProcesses(ctx, run, selectors)
+	if err != nil {
+		return ProcessSnapshot{}, err
+	}
+	return recordProcessSnapshot(run, phase, artifact, snapshot)
+}
+
+func recordProcessSnapshot(run *RunContext, phase string, artifact string, snapshot ProcessSnapshot) (ProcessSnapshot, error) {
 	if err := WriteJSON(filepath.Join(run.RunDir, artifact), snapshot); err != nil {
 		return ProcessSnapshot{}, err
 	}
@@ -105,6 +125,8 @@ func RecordProcessSnapshot(ctx context.Context, env Environment, run *RunContext
 		"environment":             snapshot.Environment,
 		"container_name":          snapshot.ContainerName,
 		"container_image":         snapshot.ContainerImage,
+		"collection_scope":        snapshot.CollectionScope,
+		"selector_count":          len(snapshot.Selectors),
 	})); err != nil {
 		return ProcessSnapshot{}, err
 	}

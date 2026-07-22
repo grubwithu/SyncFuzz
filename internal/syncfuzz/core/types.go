@@ -93,6 +93,7 @@ type Environment interface {
 	ExecTargetCommand(ctx context.Context, run *RunContext, command string, envVars map[string]string) ([]byte, error)
 	StartPersistentShell(ctx context.Context, run *RunContext) (PersistentShell, error)
 	SnapshotProcesses(ctx context.Context, run *RunContext) (ProcessSnapshot, error)
+	SnapshotSelectedProcesses(ctx context.Context, run *RunContext, selectors []ProcessSelector) (ProcessSnapshot, error)
 }
 
 // ShellState is a small probe of process-local shell state. This is the state

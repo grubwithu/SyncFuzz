@@ -66,6 +66,7 @@ go run ./cmd/syncfuzz target plan-probes --footprint runs/<target-run-id>/resour
 go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-plan.json --fallback-report runs/<pruned-run>/targeted-probe-report.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
+go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --group phase5a-baseline --prompt-profiles all
 go run ./cmd/syncfuzz target run --command-file examples/target-commands/orphan-process.sh --expect-files late-effect --observe-delay 500ms --out runs
 go run ./cmd/syncfuzz target run --target langgraph-shell-react --command-file examples/target-commands/langgraph-shell-react.sh --expect-files late-effect --observe-delay 500ms --out runs
@@ -274,6 +275,7 @@ runs/<run_id>/
   observation-plan-refined.json         # emitted by `target refine-plan`
   targeted-probe-report.json            # emitted when a rerun consumes a plan
   snapshot-full-fallback.json           # final fallback for pruned-filesystem mode
+  process-full-fallback.json            # final process fallback for local pruned mode
   workspace/
 ```
 
@@ -320,8 +322,14 @@ pruned-filesystem` uses those selected filesystem paths for `snapshot-before`,
 `snapshot-full-fallback.json`. The report records every path visible only in
 that fallback except SyncFuzz's own task/prompt control artifacts, so a later
 compiler can expand the plan deterministically.
-Process snapshots remain broad in this increment. It neither installs eBPF
-probes nor claims causal tracing. The generic command adapter reports its P5
+The local-only `--observation-mode pruned` additionally consumes enabled
+process/FD selectors: it scans lightweight process identity first and reads
+FD directories only after a selector matches, then preserves all descriptors
+of the selected process. It writes `process-full-fallback.json` alongside the
+filesystem fallback. It requires an enabled process or FD selector; otherwise
+the caller must use `pruned-filesystem`. This mode rejects `--env container`;
+container selected process collection is not implemented. It neither installs
+eBPF probes nor claims causal tracing. The generic command adapter reports its P5
 filesystem probe as unavailable rather than treating command return as a
 fabricated semantic plant boundary.
 

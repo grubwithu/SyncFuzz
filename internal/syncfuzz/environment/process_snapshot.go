@@ -26,10 +26,38 @@ func snapshotLocalProcesses(run *core.RunContext) (core.ProcessSnapshot, error) 
 		return core.ProcessSnapshot{}, err
 	}
 	return core.ProcessSnapshot{
-		Environment: run.Environment,
-		Workspace:   run.Workspace,
-		CapturedAt:  time.Now().UTC().Format(time.RFC3339Nano),
-		Processes:   entries,
+		Environment:     run.Environment,
+		Workspace:       run.Workspace,
+		CapturedAt:      time.Now().UTC().Format(time.RFC3339Nano),
+		CollectionScope: "workspace",
+		Processes:       entries,
+	}, nil
+}
+
+// snapshotLocalSelectedProcesses performs a lightweight /proc pass to match
+// stable plan selectors. Unlike the workspace snapshot, it opens /proc/<pid>/fd
+// only after a matching process has been found, and preserves all of that
+// selected process's descriptors so socket/pipe evidence is not discarded.
+func snapshotLocalSelectedProcesses(run *core.RunContext, selectors []core.ProcessSelector) (core.ProcessSnapshot, error) {
+	selectors = core.NormalizeProcessSelectors(selectors)
+	if len(selectors) == 0 {
+		return snapshotLocalProcesses(run)
+	}
+	workspace, err := filepath.Abs(run.Workspace)
+	if err != nil {
+		return core.ProcessSnapshot{}, fmt.Errorf("resolve workspace path: %w", err)
+	}
+	entries, err := readProcSelectedEntries("/proc", workspace, selectors)
+	if err != nil {
+		return core.ProcessSnapshot{}, err
+	}
+	return core.ProcessSnapshot{
+		Environment:     run.Environment,
+		Workspace:       run.Workspace,
+		CapturedAt:      time.Now().UTC().Format(time.RFC3339Nano),
+		CollectionScope: "selected",
+		Selectors:       selectors,
+		Processes:       entries,
 	}, nil
 }
 
@@ -46,12 +74,13 @@ func snapshotContainerProcesses(ctx context.Context, run *core.RunContext) (core
 		return core.ProcessSnapshot{}, err
 	}
 	return core.ProcessSnapshot{
-		Environment:    run.Environment,
-		ContainerName:  run.ContainerName,
-		ContainerImage: run.ContainerImage,
-		Workspace:      "/workspace",
-		CapturedAt:     time.Now().UTC().Format(time.RFC3339Nano),
-		Processes:      entries,
+		Environment:     run.Environment,
+		ContainerName:   run.ContainerName,
+		ContainerImage:  run.ContainerImage,
+		Workspace:       "/workspace",
+		CapturedAt:      time.Now().UTC().Format(time.RFC3339Nano),
+		CollectionScope: "workspace",
+		Processes:       entries,
 	}, nil
 }
 
@@ -84,7 +113,49 @@ func readProcEntries(procRoot string, workspace string, includeAll bool) ([]core
 	return entries, nil
 }
 
+func readProcSelectedEntries(procRoot string, workspace string, selectors []core.ProcessSelector) ([]core.ProcessEntry, error) {
+	dirs, err := os.ReadDir(procRoot)
+	if err != nil {
+		return nil, fmt.Errorf("read proc root: %w", err)
+	}
+
+	entries := make([]core.ProcessEntry, 0)
+	for _, dir := range dirs {
+		if !dir.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(dir.Name())
+		if err != nil {
+			continue
+		}
+		entry, err := readProcEntryWithoutFDs(procRoot, pid, workspace)
+		if err != nil || !core.MatchesProcessSelector(entry, selectors) {
+			continue
+		}
+		openFDs, hasWorkspaceFD := readProcFDs(filepath.Join(procRoot, strconv.Itoa(pid)), workspace, true)
+		entry.OpenFDs = openFDs
+		entry.WorkspaceRelated = entry.WorkspaceRelated || hasWorkspaceFD
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].PID < entries[j].PID
+	})
+	return entries, nil
+}
+
 func readProcEntry(procRoot string, pid int, workspace string) (core.ProcessEntry, error) {
+	entry, err := readProcEntryWithoutFDs(procRoot, pid, workspace)
+	if err != nil {
+		return core.ProcessEntry{}, err
+	}
+	procDir := filepath.Join(procRoot, strconv.Itoa(pid))
+	openFDs, hasWorkspaceFD := readProcFDs(procDir, workspace, false)
+	entry.OpenFDs = openFDs
+	entry.WorkspaceRelated = entry.WorkspaceRelated || hasWorkspaceFD
+	return entry, nil
+}
+
+func readProcEntryWithoutFDs(procRoot string, pid int, workspace string) (core.ProcessEntry, error) {
 	procDir := filepath.Join(procRoot, strconv.Itoa(pid))
 	name, state, ppid, err := readProcStatus(filepath.Join(procDir, "status"))
 	if err != nil {
@@ -95,7 +166,6 @@ func readProcEntry(procRoot string, pid int, workspace string) (core.ProcessEntr
 	if rawCmdline == "" {
 		rawCmdline = name
 	}
-	openFDs, hasWorkspaceFD := readProcFDs(procDir, workspace)
 	return core.ProcessEntry{
 		PID:              pid,
 		PPID:             ppid,
@@ -104,8 +174,7 @@ func readProcEntry(procRoot string, pid int, workspace string) (core.ProcessEntr
 		CWD:              cwd,
 		Cmdline:          cmdline,
 		RawCmdline:       rawCmdline,
-		OpenFDs:          openFDs,
-		WorkspaceRelated: IsWorkspaceRelated(cwd, workspace) || hasWorkspaceFD,
+		WorkspaceRelated: IsWorkspaceRelated(cwd, workspace),
 	}, nil
 }
 
@@ -156,7 +225,7 @@ func readProcCmdline(path string) (string, []string) {
 	return strings.Join(cmdline, " "), cmdline
 }
 
-func readProcFDs(procDir string, workspace string) ([]core.ProcessFDEntry, bool) {
+func readProcFDs(procDir string, workspace string, includeAll bool) ([]core.ProcessFDEntry, bool) {
 	fdDir := filepath.Join(procDir, "fd")
 	entries, err := os.ReadDir(fdDir)
 	if err != nil {
@@ -175,10 +244,12 @@ func readProcFDs(procDir string, workspace string) ([]core.ProcessFDEntry, bool)
 			continue
 		}
 		workspaceRelated := isWorkspaceRelatedPathTarget(target, workspace)
-		if !workspaceRelated {
+		if !workspaceRelated && !includeAll {
 			continue
 		}
-		hasWorkspaceFD = true
+		if workspaceRelated {
+			hasWorkspaceFD = true
+		}
 		out = append(out, core.ProcessFDEntry{
 			FD:               fd,
 			Target:           target,

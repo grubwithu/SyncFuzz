@@ -84,6 +84,52 @@ func TestLocalProcessSnapshotFindsWorkspaceFDProcess(t *testing.T) {
 	t.Fatalf("expected workspace-related fd process, got %#v", snapshot.Processes)
 }
 
+func TestLocalSelectedProcessSnapshotDefersToPlanSelectors(t *testing.T) {
+	tmp := t.TempDir()
+	env, err := environment.NewEnvironment("local", "")
+	if err != nil {
+		t.Fatalf("environment.NewEnvironment failed: %v", err)
+	}
+	run, err := env.PrepareRun(context.Background(), core.RunOptions{
+		CaseName: "selected-process-test",
+		OutDir:   filepath.Join(tmp, "runs"),
+	}, time.Now().UTC(), true)
+	if err != nil {
+		t.Fatalf("PrepareRun failed: %v", err)
+	}
+	defer run.Close()
+
+	if _, err := env.ExecShell(context.Background(), run, "nohup bash -c 'exec -a syncfuzz-selected-sleep sleep 2' >/dev/null 2>&1 &"); err != nil {
+		t.Fatalf("ExecShell failed: %v", err)
+	}
+
+	selectors := []core.ProcessSelector{{Executable: "sleep", CommandLine: "syncfuzz-selected-sleep 2"}}
+	var snapshot core.ProcessSnapshot
+	for attempt := 0; attempt < 20; attempt++ {
+		snapshot, err = env.SnapshotSelectedProcesses(context.Background(), run, selectors)
+		if err != nil {
+			t.Fatalf("SnapshotSelectedProcesses failed: %v", err)
+		}
+		if len(snapshot.Processes) > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if snapshot.CollectionScope != "selected" || len(snapshot.Selectors) != 1 {
+		t.Fatalf("expected selected collection metadata, got %#v", snapshot)
+	}
+	if len(snapshot.Processes) != 1 {
+		t.Fatalf("expected exactly the selected process, got %#v", snapshot.Processes)
+	}
+	process := snapshot.Processes[0]
+	if process.Name != "sleep" || process.RawCmdline != "syncfuzz-selected-sleep 2" {
+		t.Fatalf("unexpected selected process: %#v", process)
+	}
+	if len(process.OpenFDs) == 0 {
+		t.Fatalf("selected process should retain its FD evidence: %#v", process)
+	}
+}
+
 func TestParseContainerProcessLines(t *testing.T) {
 	output := "1\t0\tS (sleeping)\tsleep\t/workspace\ttrue\tsleep infinity \n"
 	entries, err := environment.ParseContainerProcessLines(output)

@@ -214,6 +214,10 @@ path/process/FD objects 写入 `targeted-probe-report.json`，同时保留 broad
 snapshot 作为 correctness fallback。`--observation-mode pruned-filesystem`
 已经把重复的 workspace snapshot 切为 exact planned paths，并在最终状态保留
 一次 `snapshot-full-fallback.json`；fallback 中的未规划路径会写回 report。
+本地 `--observation-mode pruned` 进一步按 plan selector 收集 process/FD：先做
+轻量 process identity 匹配，仅为命中的 PID 遍历 FD，并保留最终 broad
+filesystem/process fallback。container backend 暂不支持该 selected process
+collector，因此该模式显式要求 local。
 `target refine-plan` 已能将这些路径（socket 同时补齐 filesystem/process/FD
 dependency）确定性地扩展一次，之后强制保留 full-probe policy。
 
@@ -226,7 +230,7 @@ interpretation。
 紧接着的开发顺序是：
 
 1. 固化 lifecycle query 与 violation signature 的 typed schema；
-2. 将 process / FD collection 从 broad snapshot 逐步切换到 plan-selected probe，并在 controlled campaign 中量化 refine-once 后的 fallback coverage；为 generic command adapter 补 lifecycle marker，消除当前 P5 `after-plant` 的 partial coverage；
+2. 在 controlled campaign 中量化 local plan-selected process/FD probe 与 refine-once 后的 fallback coverage；为 generic command adapter 补 lifecycle marker，消除当前 P5 `after-plant` 的 partial coverage；
 3. 将差分与 root-cause 输出绑定到这些 checkpoint；
 4. 仅在环境和评估支持时，加入作为同一 evidence source 的 eBPF trace；
 5. 让 LLM 仅从源码/契约生成 probe 或 contract 候选，绝不担当 oracle。

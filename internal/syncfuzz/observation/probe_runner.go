@@ -25,6 +25,7 @@ type TargetedProbeReport struct {
 	FullProbeFallbackRequired        bool                      `json:"full_probe_fallback_required"`
 	FullProbeFallbackUsed            bool                      `json:"full_probe_fallback_used"`
 	FallbackFilesystemArtifact       string                    `json:"fallback_filesystem_artifact,omitempty"`
+	FallbackProcessArtifact          string                    `json:"fallback_process_artifact,omitempty"`
 	UnplannedFallbackFilesystemPaths []string                  `json:"unplanned_fallback_filesystem_paths,omitempty"`
 	Checkpoints                      []TargetedProbeCheckpoint `json:"checkpoints"`
 }
@@ -79,6 +80,27 @@ func FilesystemPathsForPlan(plan ObservationPlan) ([]string, error) {
 		}
 	}
 	return normalizeProbePaths(paths), nil
+}
+
+// ProcessSelectorsForPlan returns the reusable selectors requested by enabled
+// process and FD probes. A caller that receives no selectors must retain broad
+// process collection rather than silently treating an empty selector set as a
+// match-all query.
+func ProcessSelectorsForPlan(plan ObservationPlan) ([]ProcessFootprint, error) {
+	if err := ValidatePlan(&plan); err != nil {
+		return nil, err
+	}
+	selectors := make([]ProcessFootprint, 0)
+	for _, probe := range plan.ProbePlans {
+		if !probe.Enabled {
+			continue
+		}
+		switch probe.Family {
+		case ProbeProcess, ProbeFD:
+			selectors = append(selectors, probe.ProcessSelectors...)
+		}
+	}
+	return uniqueSortedProcesses(selectors), nil
 }
 
 // UnplannedFilesystemPaths reports objects present in a broad fallback
@@ -208,7 +230,7 @@ func matchProbePaths(snapshot core.Snapshot, requested []string, family ProbeFam
 func matchProbeProcesses(snapshot core.ProcessSnapshot, selectors []ProcessFootprint) []core.ProcessEntry {
 	matched := make([]core.ProcessEntry, 0)
 	for _, process := range snapshot.Processes {
-		if !process.WorkspaceRelated {
+		if snapshot.CollectionScope != "selected" && !process.WorkspaceRelated {
 			continue
 		}
 		if len(selectors) == 0 || matchesAnyProcessSelector(process, selectors) {

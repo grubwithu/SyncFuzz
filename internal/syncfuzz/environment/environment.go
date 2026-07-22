@@ -121,6 +121,10 @@ func (e LocalEnvironment) SnapshotProcesses(_ context.Context, run *core.RunCont
 	return snapshotLocalProcesses(run)
 }
 
+func (e LocalEnvironment) SnapshotSelectedProcesses(_ context.Context, run *core.RunContext, selectors []core.ProcessSelector) (core.ProcessSnapshot, error) {
+	return snapshotLocalSelectedProcesses(run, selectors)
+}
+
 type ContainerEnvironment struct {
 	Image string
 }
@@ -211,6 +215,10 @@ func (e ContainerEnvironment) StartPersistentShell(ctx context.Context, run *cor
 
 func (e ContainerEnvironment) SnapshotProcesses(ctx context.Context, run *core.RunContext) (core.ProcessSnapshot, error) {
 	return snapshotContainerProcesses(ctx, run)
+}
+
+func (e ContainerEnvironment) SnapshotSelectedProcesses(_ context.Context, _ *core.RunContext, _ []core.ProcessSelector) (core.ProcessSnapshot, error) {
+	return core.ProcessSnapshot{}, fmt.Errorf("container selected process collection is not implemented")
 }
 
 func ensureContainerImage(ctx context.Context, image string) error {

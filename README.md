@@ -50,6 +50,7 @@ go run ./cmd/syncfuzz target plan-probes --footprint runs/<target-run-id>/resour
 go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-plan.json --fallback-report runs/<pruned-run>/targeted-probe-report.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
+go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --group phase5a-baseline --prompt-profiles all
 go run ./cmd/syncfuzz target matrix --target langgraph-shell-react --seed shell-path-residue --prompt-profiles all
 go run ./cmd/syncfuzz target run --command-file examples/target-commands/orphan-process.sh --expect-files late-effect --observe-delay 500ms --out runs
@@ -201,6 +202,7 @@ Phase 5 target runs add a parallel artifact set for real agent/runtime observati
 - `observation-plan-refined.json`: optional one-time expansion from a pruned run's fallback evidence
 - `targeted-probe-report.json`: objects selected by that plan at each adapter-visible checkpoint
 - `snapshot-full-fallback.json`: final broad filesystem fallback for a `pruned-filesystem` rerun
+- `process-full-fallback.json`: final broad process fallback for a local `pruned` rerun
 
 `syncfuzz target footprint --run <target-run-dir>` compiles the normalized
 Scenario IR and the recorded filesystem, process-lineage, and state-trace
@@ -216,9 +218,16 @@ checkpoint while retaining broad snapshots as the correctness fallback. The
 opt-in `--observation-mode pruned-filesystem` instead uses exact planned paths
 for the regular filesystem snapshots, then writes one final
 `snapshot-full-fallback.json` and records its unplanned paths in the report.
-This reduces repeated workspace walking/hashing while retaining a final
-full-state check. Process collection remains broad in this increment. The
-generic command adapter has no semantic `after-plant` marker, so its P5
+The local-only `--observation-mode pruned` additionally selects process/FD
+snapshots by plan fingerprints; it performs the lightweight process-table
+match first and opens `/proc/<pid>/fd` only for matching processes, retaining
+their complete FD evidence. It writes both final broad filesystem and process
+fallbacks. This reduces repeated workspace walking/hashing and broad FD
+enumeration while retaining final full-state checks. It requires at least one
+enabled process or FD selector; filesystem-only plans use
+`pruned-filesystem`. Container selected-process collection is not implemented,
+so `pruned` rejects `--env container`.
+The generic command adapter has no semantic `after-plant` marker, so its P5
 filesystem probe is explicitly partial rather than a fabricated boundary.
 `target refine-plan` can consume that fallback once, adding observed paths
 (and socket dependency probes when applicable) to a deterministic refined

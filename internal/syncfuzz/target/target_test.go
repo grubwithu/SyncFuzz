@@ -209,6 +209,81 @@ func TestRunTargetPrunesFilesystemSnapshotsWithFinalFallback(t *testing.T) {
 	}
 }
 
+func TestRunTargetPrunesSelectedProcessAndFDSnapshots(t *testing.T) {
+	tmp := t.TempDir()
+	planPath := filepath.Join(tmp, observation.ObservationPlanArtifact)
+	if err := observation.WritePlan(planPath, &observation.ObservationPlan{
+		QueryID:           "orphan-process",
+		Checkpoints:       []observation.ObservationPoint{observation.ObservationBeforePlant, observation.ObservationAfterPlant, observation.ObservationAfterRecovery},
+		FallbackFullProbe: true,
+		ProbePlans: []observation.ProbePlan{
+			{Family: observation.ProbeFilesystem, Enabled: true, Paths: []string{"late-effect"}, Fields: []string{"exists"}},
+			{Family: observation.ProbeProcess, Enabled: true, ProcessSelectors: []observation.ProcessFootprint{{Executable: "sleep", CommandLine: "syncfuzz-target-selected-sleep 2"}}, Fields: []string{"alive", "command_line"}},
+			{Family: observation.ProbeFD, Enabled: true, ProcessSelectors: []observation.ProcessFootprint{{Executable: "sleep", CommandLine: "syncfuzz-target-selected-sleep 2"}}, Fields: []string{"fd_number", "target"}},
+		},
+	}); err != nil {
+		t.Fatalf("WritePlan failed: %v", err)
+	}
+
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:              filepath.Join(tmp, "runs"),
+		TaskID:              "orphan-process",
+		Command:             "nohup bash -c 'exec -a syncfuzz-target-selected-sleep sleep 2' >/dev/null 2>&1 & printf planned > late-effect",
+		ObserveDelay:        10 * time.Millisecond,
+		ObservationPlanPath: planPath,
+		ObservationMode:     TargetObservationModePruned,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget with selected process observation failed: %v", err)
+	}
+	if result.ObservationMode != TargetObservationModePruned {
+		t.Fatalf("unexpected observation mode: %#v", result)
+	}
+	var selected core.ProcessSnapshot
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, "process-after.json"), &selected)
+	if selected.CollectionScope != "selected" || len(selected.Selectors) != 1 {
+		t.Fatalf("expected selected process artifact metadata: %#v", selected)
+	}
+	if len(selected.Processes) != 1 || selected.Processes[0].RawCmdline != "syncfuzz-target-selected-sleep 2" {
+		t.Fatalf("expected only the planned process, got %#v", selected.Processes)
+	}
+	if len(selected.Processes[0].OpenFDs) == 0 {
+		t.Fatalf("expected selected process FD evidence, got %#v", selected.Processes[0])
+	}
+	var fallback core.ProcessSnapshot
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, TargetFullFallbackProcessArtifact), &fallback)
+	if fallback.CollectionScope != "workspace" {
+		t.Fatalf("expected broad workspace fallback, got %#v", fallback)
+	}
+	var report observation.TargetedProbeReport
+	readTargetArtifactJSON(t, filepath.Join(result.ArtifactDir, observation.TargetedProbeReportArtifact), &report)
+	if report.FallbackProcessArtifact != TargetFullFallbackProcessArtifact || !report.FullProbeFallbackUsed {
+		t.Fatalf("expected process fallback in report, got %#v", report)
+	}
+}
+
+func TestRunTargetPrunedModeRequiresProcessSelector(t *testing.T) {
+	tmp := t.TempDir()
+	planPath := filepath.Join(tmp, observation.ObservationPlanArtifact)
+	if err := observation.WritePlan(planPath, &observation.ObservationPlan{
+		QueryID:     "orphan-process",
+		Checkpoints: []observation.ObservationPoint{observation.ObservationBeforePlant},
+		ProbePlans:  []observation.ProbePlan{{Family: observation.ProbeFilesystem, Enabled: true, Paths: []string{"late-effect"}, Fields: []string{"exists"}}},
+	}); err != nil {
+		t.Fatalf("WritePlan failed: %v", err)
+	}
+	_, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:              filepath.Join(tmp, "runs"),
+		TaskID:              "orphan-process",
+		Command:             "printf planned > late-effect",
+		ObservationPlanPath: planPath,
+		ObservationMode:     TargetObservationModePruned,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires at least one enabled process or FD selector") {
+		t.Fatalf("expected selector requirement error, got %v", err)
+	}
+}
+
 func readTargetArtifactJSON(t *testing.T, path string, value any) {
 	t.Helper()
 	raw, err := os.ReadFile(path)

@@ -24,6 +24,7 @@ const (
 	TargetOutputArtifact                         = "target-output.txt"
 	TargetResultArtifact                         = "target-result.json"
 	TargetFullFallbackSnapshotArtifact           = "snapshot-full-fallback.json"
+	TargetFullFallbackProcessArtifact            = "process-full-fallback.json"
 	TargetShellPoisonCheckArtifact               = "shell-poison-check.txt"
 	TargetShellPoisonReplayArtifact              = "shell-poison-replay-check.txt"
 	TargetShellPoisonForkArtifact                = "shell-poison-fork-check.txt"
@@ -189,6 +190,7 @@ const (
 
 	TargetObservationModeShadow           = "shadow"
 	TargetObservationModePrunedFilesystem = "pruned-filesystem"
+	TargetObservationModePruned           = "pruned"
 )
 
 type TargetAdapterInfo struct {
@@ -380,6 +382,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err != nil {
 		return nil, err
 	}
+	if observationMode == TargetObservationModePruned && environment.NormalizedEnvKind(opts.EnvKind) != "local" {
+		return nil, fmt.Errorf("observation mode %q currently requires --env local because selected process/FD collection is local-only", observationMode)
+	}
 	if opts.Scenario != nil {
 		scenario := CloneTargetScenarioInfo(opts.Scenario)
 		if scenario.TaskID == "" {
@@ -534,7 +539,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		targetedProbeReport.CollectionMode = observationMode
 	}
 	snapshotFilesystem := core.SnapshotFilesystem
-	if observationMode == TargetObservationModePrunedFilesystem {
+	if targetUsesPrunedFilesystem(observationMode) {
 		paths, err := observation.FilesystemPathsForPlan(*observationPlan)
 		if err != nil {
 			return nil, err
@@ -544,6 +549,19 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		}
 		snapshotFilesystem = func(root string) (core.Snapshot, error) {
 			return core.SnapshotFilesystemPaths(root, paths)
+		}
+	}
+	recordProcesses := core.RecordProcessSnapshot
+	if observationMode == TargetObservationModePruned {
+		processSelectors, err := targetProcessSelectorsForPlan(*observationPlan)
+		if err != nil {
+			return nil, err
+		}
+		if len(processSelectors) == 0 {
+			return nil, fmt.Errorf("observation mode %q requires at least one enabled process or FD selector; use %q for filesystem-only plans", observationMode, TargetObservationModePrunedFilesystem)
+		}
+		recordProcesses = func(ctx context.Context, env core.Environment, run *core.RunContext, phase string, artifact string) (core.ProcessSnapshot, error) {
+			return core.RecordSelectedProcessSnapshot(ctx, env, run, phase, artifact, processSelectors)
 		}
 	}
 	if err := run.Trace.Write(core.NewEvent(run, "P1", "target_task_prepared", map[string]any{
@@ -565,7 +583,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err := core.WriteJSON(filepath.Join(run.RunDir, "snapshot-before.json"), before); err != nil {
 		return nil, err
 	}
-	processBefore, err := core.RecordProcessSnapshot(ctx, env, run, "P0", "process-before.json")
+	processBefore, err := recordProcesses(ctx, env, run, "P0", "process-before.json")
 	if err != nil {
 		return nil, err
 	}
@@ -589,7 +607,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	})); err != nil {
 		return nil, err
 	}
-	processAfterCommand, err := core.RecordProcessSnapshot(ctx, env, run, "P5", "process-after-command.json")
+	processAfterCommand, err := recordProcesses(ctx, env, run, "P5", "process-after-command.json")
 	if err != nil {
 		return nil, err
 	}
@@ -600,7 +618,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err := waitForTargetObservation(ctx, run, "P6", "target_observation_delay", opts.ObserveDelay); err != nil {
 		return nil, err
 	}
-	after, processAfter, err := observeTargetWorkspace(ctx, env, run, "P6", "snapshot-after.json", "process-after.json", snapshotFilesystem)
+	after, processAfter, err := observeTargetWorkspace(ctx, env, run, "P6", "snapshot-after.json", "process-after.json", snapshotFilesystem, recordProcesses)
 	if err != nil {
 		return nil, err
 	}
@@ -625,7 +643,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		if err := waitForTargetObservation(ctx, run, "P7", "target_late_observation_delay", opts.LateObserveDelay); err != nil {
 			return nil, err
 		}
-		if late, processLate, err = observeTargetWorkspace(ctx, env, run, "P7", TargetSnapshotLateArtifact, TargetProcessLateArtifact, snapshotFilesystem); err != nil {
+		if late, processLate, err = observeTargetWorkspace(ctx, env, run, "P7", TargetSnapshotLateArtifact, TargetProcessLateArtifact, snapshotFilesystem, recordProcesses); err != nil {
 			return nil, err
 		}
 		if err := captureTargetedProbeCheckpoint(targetedProbeReport, observationPlan, observation.ObservationAfterActivation, "P7", &late, &processLate, "adapter late observation used as activation checkpoint"); err != nil {
@@ -643,7 +661,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 	fallbackArtifact := ""
 	fallbackPhase := ""
-	if observationMode == TargetObservationModePrunedFilesystem && observationPlan.FallbackFullProbe {
+	if targetUsesPrunedFilesystem(observationMode) && observationPlan.FallbackFullProbe {
 		fallback, err := core.SnapshotFilesystem(run.Workspace)
 		if err != nil {
 			return nil, err
@@ -662,6 +680,12 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		fallbackPhase = "P6"
 		if lateObserved {
 			fallbackPhase = "P7"
+		}
+		if observationMode == TargetObservationModePruned {
+			if _, err := core.RecordProcessSnapshot(ctx, env, run, fallbackPhase, TargetFullFallbackProcessArtifact); err != nil {
+				return nil, err
+			}
+			targetedProbeReport.FallbackProcessArtifact = TargetFullFallbackProcessArtifact
 		}
 	} else if targetedProbeReport != nil && observationMode == TargetObservationModeShadow && observationPlan.FallbackFullProbe {
 		targetedProbeReport.FullProbeFallbackUsed = true
@@ -698,7 +722,14 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	evidence = append(evidence, targetOracle.Evidence...)
 	evidence = append(evidence, targetOracleMissingEvidence(targetOracle)...)
 	if observationPlan != nil {
-		evidence = append(evidence, "observation plan consumed in shadow mode with broad artifacts retained as fallback")
+		switch observationMode {
+		case TargetObservationModePruned:
+			evidence = append(evidence, "observation plan used exact filesystem and selected local process/FD collection with final broad fallbacks")
+		case TargetObservationModePrunedFilesystem:
+			evidence = append(evidence, "observation plan used exact filesystem collection with a final broad filesystem fallback")
+		default:
+			evidence = append(evidence, "observation plan consumed in shadow mode with broad artifacts retained as fallback")
+		}
 	}
 	if contractInterpretation != nil {
 		if contractInterpretation.Summary != "" {
@@ -726,6 +757,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if fallbackArtifact != "" {
 		artifacts = append(artifacts, fallbackArtifact)
 	}
+	if observationMode == TargetObservationModePruned && fallbackArtifact != "" {
+		artifacts = append(artifacts, TargetFullFallbackProcessArtifact)
+	}
 	observations := []core.StateObservation{
 		{Layer: "agent", StateClass: "target-task", Phase: "P1", Artifact: TargetTaskArtifact, Kind: "target-task", Description: "prompt and command contract passed to the real target adapter"},
 		{Layer: "agent", StateClass: "target-output", Phase: "P5", Artifact: TargetOutputArtifact, Kind: "stdout-stderr", Description: "combined stdout/stderr from the target command"},
@@ -739,7 +773,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 	if observationPlan != nil {
 		probeDescription := "plan-selected objects projected from retained broad artifacts"
-		if observationMode == TargetObservationModePrunedFilesystem {
+		if observationMode == TargetObservationModePruned {
+			probeDescription = "plan-selected filesystem and local process/FD snapshots with final broad filesystem/process fallbacks"
+		} else if observationMode == TargetObservationModePrunedFilesystem {
 			probeDescription = "plan-selected filesystem snapshots with a final broad filesystem fallback"
 		}
 		observations = append(observations,
@@ -749,6 +785,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 	if fallbackArtifact != "" {
 		observations = append(observations, core.StateObservation{Layer: "os", StateClass: "filesystem", Phase: fallbackPhase, Artifact: fallbackArtifact, Kind: "full-fallback-filesystem-snapshot", Description: "full filesystem fallback retained after pruned primary collection"})
+	}
+	if observationMode == TargetObservationModePruned && fallbackArtifact != "" {
+		observations = append(observations, core.StateObservation{Layer: "os", StateClass: "process", Phase: fallbackPhase, Artifact: TargetFullFallbackProcessArtifact, Kind: "full-fallback-process-snapshot", Description: "full workspace-related process fallback retained after selected process/FD collection"})
 	}
 	if contractProfile != nil {
 		artifacts = append(artifacts, TargetContractProfileArtifact)
@@ -884,11 +923,30 @@ func normalizeTargetObservationMode(value string, hasObservationPlan bool) (stri
 		return TargetObservationModeShadow, nil
 	}
 	switch mode {
-	case TargetObservationModeShadow, TargetObservationModePrunedFilesystem:
+	case TargetObservationModeShadow, TargetObservationModePrunedFilesystem, TargetObservationModePruned:
 		return mode, nil
 	default:
-		return "", fmt.Errorf("unsupported observation mode %q; use %s or %s", mode, TargetObservationModeShadow, TargetObservationModePrunedFilesystem)
+		return "", fmt.Errorf("unsupported observation mode %q; use %s, %s, or %s", mode, TargetObservationModeShadow, TargetObservationModePrunedFilesystem, TargetObservationModePruned)
 	}
+}
+
+func targetUsesPrunedFilesystem(mode string) bool {
+	return mode == TargetObservationModePrunedFilesystem || mode == TargetObservationModePruned
+}
+
+func targetProcessSelectorsForPlan(plan observation.ObservationPlan) ([]core.ProcessSelector, error) {
+	selectors, err := observation.ProcessSelectorsForPlan(plan)
+	if err != nil {
+		return nil, err
+	}
+	coreSelectors := make([]core.ProcessSelector, 0, len(selectors))
+	for _, selector := range selectors {
+		coreSelectors = append(coreSelectors, core.ProcessSelector{
+			Executable:  selector.Executable,
+			CommandLine: selector.CommandLine,
+		})
+	}
+	return core.NormalizeProcessSelectors(coreSelectors), nil
 }
 
 func targetUnplannedFallbackPaths(plan observation.ObservationPlan, snapshot core.Snapshot) ([]string, error) {
@@ -3419,9 +3477,12 @@ func waitForTargetObservation(ctx context.Context, run *core.RunContext, phase s
 	}
 }
 
-func observeTargetWorkspace(ctx context.Context, env core.Environment, run *core.RunContext, phase string, snapshotArtifact string, processArtifact string, snapshotFilesystem func(string) (core.Snapshot, error)) (core.Snapshot, core.ProcessSnapshot, error) {
+func observeTargetWorkspace(ctx context.Context, env core.Environment, run *core.RunContext, phase string, snapshotArtifact string, processArtifact string, snapshotFilesystem func(string) (core.Snapshot, error), recordProcesses func(context.Context, core.Environment, *core.RunContext, string, string) (core.ProcessSnapshot, error)) (core.Snapshot, core.ProcessSnapshot, error) {
 	if snapshotFilesystem == nil {
 		snapshotFilesystem = core.SnapshotFilesystem
+	}
+	if recordProcesses == nil {
+		recordProcesses = core.RecordProcessSnapshot
 	}
 	snapshot, err := snapshotFilesystem(run.Workspace)
 	if err != nil {
@@ -3430,7 +3491,7 @@ func observeTargetWorkspace(ctx context.Context, env core.Environment, run *core
 	if err := core.WriteJSON(filepath.Join(run.RunDir, snapshotArtifact), snapshot); err != nil {
 		return core.Snapshot{}, core.ProcessSnapshot{}, err
 	}
-	processSnapshot, err := core.RecordProcessSnapshot(ctx, env, run, phase, processArtifact)
+	processSnapshot, err := recordProcesses(ctx, env, run, phase, processArtifact)
 	if err != nil {
 		return core.Snapshot{}, core.ProcessSnapshot{}, err
 	}
