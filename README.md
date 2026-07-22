@@ -257,7 +257,10 @@ checkpoint reports and writes `target-pair-differential.json` beside the target
 run by default. It compares filesystem objects without treating run timestamps
 as state and compares process name/cmdline multiplicities without using PIDs.
 Its `evidence_candidates` list only target-only paths/processes and target/control
-path changes; it deliberately does not label any candidate as a root cause.
+path changes. When the target oracle is confirmed and its paired control is not,
+it additionally derives checkpoint-bound `root_cause_candidates` with
+`confidence=evidence-hypothesis`; they name a state surface and mechanism but
+remain hypotheses, not causal verdicts.
 `target refine-plan` can consume that fallback once, adding observed paths
 (and socket dependency probes when applicable) to a deterministic refined
 plan; a second expansion is rejected by policy.

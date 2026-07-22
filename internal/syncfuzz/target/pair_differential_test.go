@@ -15,6 +15,7 @@ func TestCompareTargetRunsReportsTargetOnlyCheckpointState(t *testing.T) {
 	targetDir := filepath.Join(tmp, "target")
 	writePairRunArtifact(t, controlDir, "control-run", core.Snapshot{Files: []core.FileEntry{{Path: "shared.txt", Type: "file", SHA256: "same"}}}, core.ProcessSnapshot{Processes: []core.ProcessEntry{{PID: 10, Name: "bash", RawCmdline: "bash agent"}}})
 	writePairRunArtifact(t, targetDir, "target-run", core.Snapshot{Files: []core.FileEntry{{Path: "shared.txt", Type: "file", SHA256: "same"}, {Path: "residue.txt", Type: "file", SHA256: "target"}}}, core.ProcessSnapshot{Processes: []core.ProcessEntry{{PID: 11, Name: "bash", RawCmdline: "bash agent"}, {PID: 12, Name: "listener", RawCmdline: "listener --socket residue.sock"}}})
+	writePairRunOracle(t, targetDir, true)
 
 	result, err := CompareTargetRuns(TargetPairDifferentialOptions{ControlRunDir: controlDir, TargetRunDir: targetDir})
 	if err != nil {
@@ -34,8 +35,24 @@ func TestCompareTargetRunsReportsTargetOnlyCheckpointState(t *testing.T) {
 	if len(result.Evidence) != 6 {
 		t.Fatalf("expected filesystem and process evidence for each checkpoint: %#v", result.Evidence)
 	}
+	if len(result.RootCauseCandidates) != 6 || result.RootCauseCandidates[0].Confidence != "evidence-hypothesis" {
+		t.Fatalf("expected checkpoint-bound root-cause hypotheses only for confirmed target divergence: %#v", result.RootCauseCandidates)
+	}
 	if _, err := os.Stat(filepath.Join(targetDir, TargetPairDifferentialArtifact)); err != nil {
 		t.Fatalf("expected pair differential artifact: %v", err)
+	}
+}
+
+func writePairRunOracle(t *testing.T, runDir string, confirmed bool) {
+	t.Helper()
+	resultPath := filepath.Join(runDir, TargetResultArtifact)
+	result, err := readTargetPairJSON[TargetRunResult](resultPath)
+	if err != nil {
+		t.Fatalf("read target result: %v", err)
+	}
+	result.TargetOracle.Confirmed = confirmed
+	if err := core.WriteJSON(resultPath, result); err != nil {
+		t.Fatalf("write target result: %v", err)
 	}
 }
 

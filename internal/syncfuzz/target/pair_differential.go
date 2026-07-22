@@ -22,13 +22,14 @@ const (
 // lifecycle checkpoints. Its evidence is intentionally descriptive: target-
 // only state is a candidate for later explanation, never a causal verdict.
 type TargetPairDifferential struct {
-	SchemaVersion string                        `json:"schema_version"`
-	GeneratedAt   string                        `json:"generated_at"`
-	QueryID       string                        `json:"query_id"`
-	ControlRunID  string                        `json:"control_run_id"`
-	TargetRunID   string                        `json:"target_run_id"`
-	Checkpoints   []TargetPairCheckpoint        `json:"checkpoints"`
-	Evidence      []TargetPairEvidenceCandidate `json:"evidence_candidates,omitempty"`
+	SchemaVersion       string                         `json:"schema_version"`
+	GeneratedAt         string                         `json:"generated_at"`
+	QueryID             string                         `json:"query_id"`
+	ControlRunID        string                         `json:"control_run_id"`
+	TargetRunID         string                         `json:"target_run_id"`
+	Checkpoints         []TargetPairCheckpoint         `json:"checkpoints"`
+	Evidence            []TargetPairEvidenceCandidate  `json:"evidence_candidates,omitempty"`
+	RootCauseCandidates []TargetPairRootCauseCandidate `json:"root_cause_candidates,omitempty"`
 }
 
 type TargetPairCheckpoint struct {
@@ -66,6 +67,18 @@ type TargetPairEvidenceCandidate struct {
 	Family string                       `json:"family"`
 	Kind   string                       `json:"kind"`
 	Detail string                       `json:"detail"`
+}
+
+// TargetPairRootCauseCandidate is deliberately conditional. It is emitted
+// only when the target oracle confirms the target run and the paired control
+// is not confirmed; the listed mechanism remains a checkpoint-bound evidence
+// hypothesis, not a causal conclusion.
+type TargetPairRootCauseCandidate struct {
+	Point        observation.ObservationPoint `json:"point"`
+	StateSurface string                       `json:"state_surface"`
+	Mechanism    string                       `json:"mechanism"`
+	Evidence     string                       `json:"evidence"`
+	Confidence   string                       `json:"confidence"`
 }
 
 type TargetPairDifferentialOptions struct {
@@ -118,6 +131,9 @@ func CompareTargetRuns(opts TargetPairDifferentialOptions) (*TargetPairDifferent
 		}
 		result.Checkpoints = append(result.Checkpoints, checkpoint)
 		result.Evidence = append(result.Evidence, evidence...)
+	}
+	if targetRun.Result.TargetOracle.Confirmed && !control.Result.TargetOracle.Confirmed {
+		result.RootCauseCandidates = targetPairRootCauseCandidates(result.Evidence)
 	}
 	canonicalizeTargetPairDifferential(result)
 
@@ -390,4 +406,42 @@ func canonicalizeTargetPairDifferential(result *TargetPairDifferential) {
 		}
 		return result.Evidence[i].Detail < result.Evidence[j].Detail
 	})
+	sort.Slice(result.RootCauseCandidates, func(i, j int) bool {
+		if result.RootCauseCandidates[i].Point != result.RootCauseCandidates[j].Point {
+			return result.RootCauseCandidates[i].Point < result.RootCauseCandidates[j].Point
+		}
+		if result.RootCauseCandidates[i].StateSurface != result.RootCauseCandidates[j].StateSurface {
+			return result.RootCauseCandidates[i].StateSurface < result.RootCauseCandidates[j].StateSurface
+		}
+		if result.RootCauseCandidates[i].Mechanism != result.RootCauseCandidates[j].Mechanism {
+			return result.RootCauseCandidates[i].Mechanism < result.RootCauseCandidates[j].Mechanism
+		}
+		return result.RootCauseCandidates[i].Evidence < result.RootCauseCandidates[j].Evidence
+	})
+}
+
+func targetPairRootCauseCandidates(evidence []TargetPairEvidenceCandidate) []TargetPairRootCauseCandidate {
+	candidates := make([]TargetPairRootCauseCandidate, 0, len(evidence))
+	for _, item := range evidence {
+		candidate := TargetPairRootCauseCandidate{
+			Point:      item.Point,
+			Evidence:   item.Detail,
+			Confidence: "evidence-hypothesis",
+		}
+		switch {
+		case item.Family == "filesystem" && item.Kind == "target-only-path":
+			candidate.StateSurface = "filesystem-namespace"
+			candidate.Mechanism = "target-only namespace object at lifecycle checkpoint"
+		case item.Family == "filesystem" && item.Kind == "target-control-path-difference":
+			candidate.StateSurface = "filesystem-namespace"
+			candidate.Mechanism = "target-control namespace metadata or content divergence"
+		case item.Family == "process" && item.Kind == "target-only-process":
+			candidate.StateSurface = "process"
+			candidate.Mechanism = "target-only process persisted at lifecycle checkpoint"
+		default:
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates
 }

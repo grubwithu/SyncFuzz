@@ -366,7 +366,10 @@ run unless `--out` is specified. It compares checkpoint filesystem state while
 ignoring run timestamps and compares process name/cmdline multiplicities while
 ignoring PIDs. `evidence_candidates` reports target-only paths/processes and
 target/control path differences for review; it must not be interpreted as a
-root-cause verdict.
+root-cause verdict. Only when the target oracle is confirmed while its paired
+control is not does the report add checkpoint-bound `root_cause_candidates`.
+Each carries `confidence=evidence-hypothesis`: it identifies a state surface
+and candidate mechanism, never a causal conclusion.
 
 `syncfuzz target refine-plan --plan <plan> --fallback-report <report>` reads
 the report's adjacent fallback snapshot and produces
