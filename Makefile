@@ -61,6 +61,8 @@ TARGET_REFINED_OBSERVATION_PLAN ?=
 TARGET_CONTROL_RUN ?=
 TARGET_COMPARE_RUN ?=
 TARGET_PAIR_DIFFERENTIAL ?=
+TARGET_PAIR_CAMPAIGN_MANIFEST ?=
+TARGET_PAIR_CAMPAIGN_OUT ?=
 TARGET_PAIR_REPORTS ?=
 TARGET_PAIR_CALIBRATION_SUMMARY ?=
 TARGET_PAIR_REVIEW_MANIFESTS ?=
@@ -239,6 +241,7 @@ help:
 	@echo "  make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json"
 	@echo "  make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<target-run-id>/targeted-probe-report.json"
 	@echo "  make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id>"
+	@echo "  make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"
 	@echo "  make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign> TARGET_PAIR_CALIBRATION_SUMMARY=runs/<pair-campaign>/target-pair-calibration-summary.json [TARGET_PAIR_REVIEW_MANIFESTS=reviews.json]"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json"
 	@echo "  make target-run TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem"
@@ -332,6 +335,11 @@ target-compare:
 	@test -n "$(TARGET_CONTROL_RUN)" || (echo "usage: make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id> [TARGET_PAIR_DIFFERENTIAL=path]"; exit 2)
 	@test -n "$(TARGET_COMPARE_RUN)" || (echo "usage: make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id> [TARGET_PAIR_DIFFERENTIAL=path]"; exit 2)
 	$(SYNCFUZZ) target compare --control $(TARGET_CONTROL_RUN) --target $(TARGET_COMPARE_RUN) $(if $(TARGET_PAIR_DIFFERENTIAL),--out $(TARGET_PAIR_DIFFERENTIAL),)
+
+target-pair-campaign:
+	@test -n "$(TARGET_PAIR_CAMPAIGN_MANIFEST)" || (echo "usage: make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"; exit 2)
+	@test -n "$(TARGET_PAIR_CAMPAIGN_OUT)" || (echo "usage: make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>"; exit 2)
+	$(SYNCFUZZ) target pair-campaign --manifest $(TARGET_PAIR_CAMPAIGN_MANIFEST) --out $(TARGET_PAIR_CAMPAIGN_OUT)
 
 target-calibration-summary:
 	@test -n "$(TARGET_PAIR_REPORTS)" || (echo "usage: make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign>[,runs/<target-run-id>/target-pair-differential.json] TARGET_PAIR_CALIBRATION_SUMMARY=path [TARGET_PAIR_REVIEW_MANIFESTS=reviews.json]"; exit 2)

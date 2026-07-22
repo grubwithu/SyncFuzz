@@ -74,6 +74,13 @@ calibration coverage、unresolved reason、contract-rule 分布以及逐报告 p
 才按 `supported / (supported + unsupported)` 输出 reviewed precision，
 `inconclusive` 不进入分母。
 
+为了让 counterfactual control 本身可复现，`target pair-campaign` 读取
+`syncfuzz.target-pair-campaign-manifest.v1`：每个 entry 先声明
+`baseline`、`fresh-runtime`、`branch-cleanup`、`namespace-restore` 或 `custom`
+control，再在同一 query identity 上运行 compare，并把 manifest、per-pair report、
+campaign result 与 calibration summary 固化到一个 artifact directory。它只比较
+预先记录的 run，不会隐式调用真实 target 或重新执行模型。
+
 ## 当前判断
 
 SyncFuzz 已经不再停留在“框架能不能跑起来”的阶段。基于 `targets/langgraph_shell_react/`，我们已经稳定观测到几类真实 residue：

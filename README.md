@@ -49,6 +49,7 @@ go run ./cmd/syncfuzz target footprint --run runs/<target-run-id>
 go run ./cmd/syncfuzz target plan-probes --footprint runs/<target-run-id>/resource-footprint.json
 go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-plan.json --fallback-report runs/<pruned-run>/targeted-probe-report.json
 go run ./cmd/syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id>
+go run ./cmd/syncfuzz target pair-campaign --manifest target-pair-campaign.json --out runs/<pair-campaign>
 go run ./cmd/syncfuzz target calibration-summary --inputs runs/<pair-campaign> --out runs/<pair-campaign>/target-pair-calibration-summary.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
@@ -106,6 +107,7 @@ make target-footprint TARGET_OBSERVATION_RUN=runs/<target-run-id>
 make target-plan-probes TARGET_FOOTPRINT=runs/<target-run-id>/resource-footprint.json
 make target-refine-plan TARGET_OBSERVATION_PLAN=runs/<pilot-run>/observation-plan.json TARGET_FALLBACK_REPORT=runs/<pruned-run>/targeted-probe-report.json
 make target-compare TARGET_CONTROL_RUN=runs/<control-run-id> TARGET_COMPARE_RUN=runs/<target-run-id>
+make target-pair-campaign TARGET_PAIR_CAMPAIGN_MANIFEST=target-pair-campaign.json TARGET_PAIR_CAMPAIGN_OUT=runs/<pair-campaign>
 make target-calibration-summary TARGET_PAIR_REPORTS=runs/<pair-campaign> TARGET_PAIR_CALIBRATION_SUMMARY=runs/<pair-campaign>/target-pair-calibration-summary.json
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
 make target-run TARGET_TASK=<matching-task> TARGET_OBSERVATION_PLAN=runs/<target-run-id>/observation-plan.json TARGET_OBSERVATION_MODE=pruned-filesystem TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh
@@ -271,6 +273,16 @@ and source strength with `confidence=contract-calibrated-evidence-hypothesis`;
 they remain hypotheses, never causal verdicts. Generic targets or unresolved,
 incompatible, or contract-consistent pairs retain `evidence_candidates` but do
 not receive root-cause candidates.
+
+`target pair-campaign --manifest <path> --out <directory>` executes a
+reproducible comparison over pre-recorded control/target runs. Its manifest
+records each counterfactual control kind (`baseline`, `fresh-runtime`,
+`branch-cleanup`, `namespace-restore`, or `custom`) before comparison. The
+command emits the copied manifest, one pair differential per entry,
+`target-pair-campaign-result.json`, and its initial calibration summary. Start
+from `examples/target-pair-campaign.example.json`; relative run directories are
+resolved against the manifest's location, and a `custom` control requires a
+non-empty description.
 
 `target calibration-summary --inputs <report-or-directory>[,...] --out <path>`
 recursively collects v2 pair reports for a controlled campaign and writes

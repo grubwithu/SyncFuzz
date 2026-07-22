@@ -1,0 +1,21 @@
+{
+  "schema_version": "syncfuzz.target-pair-campaign-manifest.v1",
+  "campaign_id": "<campaign-id>",
+  "description": "Pre-recorded counterfactual control/target pairs for one controlled runtime campaign.",
+  "pairs": [
+    {
+      "pair_id": "fresh-runtime",
+      "control_kind": "fresh-runtime",
+      "control_run_dir": "runs/<fresh-runtime-control-run-id>",
+      "target_run_dir": "runs/<fault-run-id>",
+      "description": "The control uses a fresh execution runtime across recovery."
+    },
+    {
+      "pair_id": "branch-cleanup",
+      "control_kind": "branch-cleanup",
+      "control_run_dir": "runs/<branch-cleanup-control-run-id>",
+      "target_run_dir": "runs/<fault-run-id>",
+      "description": "The control cleans descendants owned by the discarded branch."
+    }
+  ]
+}

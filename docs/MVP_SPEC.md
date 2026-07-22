@@ -65,6 +65,7 @@ go run ./cmd/syncfuzz target footprint --run runs/<target-run-id>
 go run ./cmd/syncfuzz target plan-probes --footprint runs/<target-run-id>/resource-footprint.json
 go run ./cmd/syncfuzz target refine-plan --plan runs/<pilot-run>/observation-plan.json --fallback-report runs/<pruned-run>/targeted-probe-report.json
 go run ./cmd/syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id>
+go run ./cmd/syncfuzz target pair-campaign --manifest target-pair-campaign.json --out runs/<pair-campaign>
 go run ./cmd/syncfuzz target calibration-summary --inputs runs/<pair-campaign> --out runs/<pair-campaign>/target-pair-calibration-summary.json
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --command-file examples/target-commands/orphan-process.sh --out runs
 go run ./cmd/syncfuzz target run --task <matching-task> --observation-plan runs/<target-run-id>/observation-plan.json --observation-mode pruned-filesystem --command-file examples/target-commands/orphan-process.sh --out runs
@@ -379,6 +380,17 @@ carries that profile/rule and source strength with
 surface and candidate mechanism, never a causal conclusion. A target without a
 contract profile, a task-drifted pair, or a contract-consistent target retains
 descriptive evidence only.
+
+`syncfuzz target pair-campaign --manifest <path> --out <directory>` executes
+the pre-recorded pairs listed in
+`syncfuzz.target-pair-campaign-manifest.v1`. Each entry declares the intended
+counterfactual control kind (`baseline`, `fresh-runtime`, `branch-cleanup`,
+`namespace-restore`, or `custom`) before comparison, resolves relative run
+directories against the manifest, and produces a copied manifest, an isolated
+pair differential per entry, `target-pair-campaign-result.json`, and the
+initial calibration summary. This keeps fresh-runtime, cleanup, and namespace
+restoration controls distinguishable in the replication package; a `custom`
+control requires a non-empty description.
 
 `syncfuzz target calibration-summary --inputs <report-or-directory>[,...] --out <path>`
 recursively collects the canonical v2 pair reports produced for a controlled

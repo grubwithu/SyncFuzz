@@ -243,7 +243,7 @@ interpretation。
 
 1. 固化 lifecycle query 与 violation signature 的 typed schema；
 2. 在 controlled campaign 中量化 local plan-selected process/FD probe、三类 lifecycle marker 与 refine-once 后的 fallback coverage，并量化无 marker 时 P5 partial coverage；
-3. `target compare` 已将 checkpoint-bound root-cause hypothesis 收紧为 contract-calibrated 条件：同一 profile/rule 的 task-compliant pair 必须呈现 target violation / control consistency；`target calibration-summary` 已汇总 campaign 的 calibration coverage、unresolved reason 与 provenance，并仅在独立 candidate-level review manifest 存在时量化 reviewed hypothesis precision；下一步收集真实 runtime 的 counterfactual labels；
+3. `target compare` 已将 checkpoint-bound root-cause hypothesis 收紧为 contract-calibrated 条件：同一 profile/rule 的 task-compliant pair 必须呈现 target violation / control consistency；`target pair-campaign` 将 fresh-runtime、branch-cleanup、namespace-restore 等 counterfactual control 固化为可复现 manifest，`target calibration-summary` 已汇总 campaign 的 calibration coverage、unresolved reason 与 provenance，并仅在独立 candidate-level review manifest 存在时量化 reviewed hypothesis precision；下一步收集真实 runtime 的 counterfactual labels；
 4. 仅在环境和评估支持时，加入作为同一 evidence source 的 eBPF trace；
 5. 让 LLM 仅从源码/契约生成 probe 或 contract 候选，绝不担当 oracle。
 

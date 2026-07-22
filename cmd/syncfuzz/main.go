@@ -91,6 +91,7 @@ Usage:
   syncfuzz target plan-probes --footprint resource-footprint.json [--out observation-plan.json]
   syncfuzz target refine-plan --plan observation-plan.json --fallback-report targeted-probe-report.json [--out observation-plan-refined.json]
   syncfuzz target compare --control runs/<control-run-id> --target runs/<target-run-id> [--out target-pair-differential.json]
+  syncfuzz target pair-campaign --manifest target-pair-campaign.json --out runs/<pair-campaign>
   syncfuzz target calibration-summary --inputs runs/<pair-campaign>,runs/<target-run-id>/target-pair-differential.json [--review-manifests review.json] --out target-pair-calibration-summary.json
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--fidelity exact|semantic|impact] [--out runs]
@@ -476,7 +477,7 @@ func campaign(args []string) {
 
 func runTarget(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, calibration-summary, matrix, minimize, run, suite, or campaign")
+		fmt.Fprintln(os.Stderr, "missing target subcommand: list, tasks, seeds, scenarios, groups, prompt-profiles, prompt-variants, footprint, plan-probes, refine-plan, compare, pair-campaign, calibration-summary, matrix, minimize, run, suite, or campaign")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -502,6 +503,8 @@ func runTarget(args []string) {
 		targetRefinePlan(args[1:])
 	case "compare":
 		targetCompare(args[1:])
+	case "pair-campaign":
+		targetPairCampaign(args[1:])
 	case "calibration-summary":
 		targetCalibrationSummary(args[1:])
 	case "matrix":
@@ -768,6 +771,33 @@ func targetCompare(args []string) {
 	fmt.Printf("root_cause_eligible: %t\n", result.ContractCalibration.RootCauseEligible)
 	fmt.Printf("root_cause_candidates: %d\n", len(result.RootCauseCandidates))
 	fmt.Printf("artifact: %s\n", output)
+}
+
+func targetPairCampaign(args []string) {
+	fs := flag.NewFlagSet("target pair-campaign", flag.ExitOnError)
+	manifestPath := fs.String("manifest", "", "target pair campaign manifest path")
+	outDir := fs.String("out", "", "directory for target pair campaign artifacts")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*manifestPath) == "" || strings.TrimSpace(*outDir) == "" {
+		fmt.Fprintln(os.Stderr, "target pair-campaign requires --manifest and --out")
+		os.Exit(2)
+	}
+	result, err := target.RunTargetPairCampaign(target.TargetPairCampaignOptions{
+		ManifestPath: *manifestPath,
+		OutDir:       *outDir,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz target pair-campaign failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("campaign_id: %s\n", result.CampaignID)
+	fmt.Printf("pair_reports: %d\n", result.TotalPairs)
+	fmt.Printf("root_cause_eligible_pairs: %d\n", result.RootCauseEligiblePairs)
+	fmt.Printf("calibration_coverage: %.2f%%\n", result.CalibrationCoverage*100)
+	fmt.Printf("calibration_summary: %s\n", filepath.Join(*outDir, result.CalibrationSummaryArtifact))
+	fmt.Printf("artifact: %s\n", filepath.Join(*outDir, target.TargetPairCampaignResultArtifact))
 }
 
 func targetCalibrationSummary(args []string) {
