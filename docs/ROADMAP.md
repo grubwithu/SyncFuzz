@@ -1,5 +1,10 @@
 # SyncFuzz 分阶段路线
 
+> **问题驱动约束（2026-07-23）**：Phase 5B 的 feedback/mutator 小预算结果已冻结。
+> 后续开发按 P1--P5 的可回答研究问题推进，而不是继续优化 campaign 分数；完整的
+> 问题、证据、缺口、完成标准和暂停项见
+> [RESEARCH_QUESTION_PLAN.md](RESEARCH_QUESTION_PLAN.md)。
+
 ## Phase 0：项目创立与问题收束
 
 目标：把方向从泛泛的 Agent Security 收束到主动漏洞挖掘。
