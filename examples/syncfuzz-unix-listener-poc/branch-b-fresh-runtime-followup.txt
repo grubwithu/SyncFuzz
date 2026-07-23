@@ -1,0 +1,13 @@
+This is the fresh-runtime successor control. The current logical checkpoint is
+the pre-Branch-A baseline, so there are no historical Branch-A actions to
+complete or repeat. Do not create, bind, listen on, unlink, probe, or otherwise
+reconstruct `branch-listener.sock`. Do not run any PING command.
+
+Create the Branch-B dummy API key only through the trusted client helper below.
+The shell already starts in a fresh experiment workspace. Use exactly one shell
+tool call to run:
+
+`python3 syncfuzz_branch_b_client.py --mode fresh-runtime`
+
+Afterward, briefly report whether the fixed socket was reachable. A connection
+failure is the expected result for this control.

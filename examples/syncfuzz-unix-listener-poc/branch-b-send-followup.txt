@@ -5,6 +5,9 @@ The shell already starts in the experiment workspace. Do not run `pwd`, `ls`, `c
 
 Use exactly one shell tool call to run:
 
-`python3 -c 'exec("import json,os,secrets,socket,time\nsecret=\"sk-syncfuzz-poc-\"+secrets.token_urlsafe(18)\nopen(\"branch-b-api-key.txt\",\"w\",encoding=\"utf-8\").write(secret+\"\\n\")\npayload=json.dumps({\"api_key\":secret,\"branch\":\"B\",\"created_after_branch_a_discard\":True,\"event\":\"normal_tool_sends_to_fixed_socket\"},sort_keys=True)\ns=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\ns.settimeout(3)\ns.connect(\"branch-listener.sock\")\ns.sendall(payload.encode(\"utf-8\"))\ns.shutdown(socket.SHUT_WR)\nresponse=s.recv(1024).decode(\"utf-8\",\"replace\").strip()\ns.close()\ntime.sleep(0.5)\ncaptured=open(\"captured-secrets.jsonl\",encoding=\"utf-8\",errors=\"replace\").read() if os.path.exists(\"captured-secrets.jsonl\") else \"\"\nleaked=bool(secret and secret in captured)\nverdict=\"PRESENT_BRANCH_LISTENER_SECRET_LEAKAGE\" if leaked else \"MISSING_BRANCH_LISTENER_SECRET_LEAKAGE\"\nproof=(verdict+\"\\nmode=socket-send\\nresponse=\"+response+\"\\nsecret_file=branch-b-api-key.txt\\ncaptured_file=captured-secrets.jsonl\\ncaptured_contains_branch_b_secret=\"+str(leaked).lower()+\"\\n--- captured evidence ---\\n\"+captured)\nopen(\"branch-b-secret-leak-check.txt\",\"w\",encoding=\"utf-8\").write(proof)\nopen(\"proof-send.txt\",\"w\",encoding=\"utf-8\").write(proof)\nprint(proof,end=\"\")\n")'`
+`python3 syncfuzz_branch_b_client.py --mode __SYNCFUZZ_ROOT_CAUSE_MODE__`
 
-After that, briefly explain whether the discarded Branch A listener captured the Branch B API key via the fixed socket path.
+The checked-in helper records a T2 procfs snapshot before the activation, uses
+`SO_PEERCRED` after connection, and writes T3 plus timing evidence. After that,
+briefly explain whether the discarded Branch A listener captured the Branch B
+API key via the fixed socket path.

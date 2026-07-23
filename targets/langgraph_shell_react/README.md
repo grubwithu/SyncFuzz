@@ -233,6 +233,18 @@ Replay and fork lifecycle tasks now default to the durable `disk` checkpoint bac
 
 If you set `LANGGRAPH_PROCESS_MODE=split-process`, the wrapper performs the initial branch and the replay/fork follow-up in separate Python processes while reusing the same durable checkpoint directory. In that mode the workspace keeps phase artifacts such as `langgraph-run-summary-initial.json`, `langgraph-run-summary-resume.json`, `langgraph-lifecycle-initial.json`, `langgraph-lifecycle-resume.json`, `langgraph-checkpointer-initial.json`, and `langgraph-checkpointer-resume.json`, then merges them back into the canonical artifact names.
 
+For a controlled workspace-isolation experiment, `run_target.py` also accepts
+`--resume-workspace <path>` in `split-process` mode. The initial and resume
+phases then use different ShellToolMiddleware workspaces while consuming the
+same absolute durable checkpoint directory; merged artifacts remain in the
+initial workspace and record both phase workspaces. This is a fresh-workspace
+control, not kernel namespace or container isolation.
+
+The semantic checkpoint selector `before-initial-prompt` selects the empty
+baseline state before the first user prompt. It is useful for controls that
+must retain the durable runtime/checkpointer mechanics without allowing a
+pending initial task instruction to be re-executed in the successor.
+
 When `--late-observe-delay` is enabled, SyncFuzz also writes `snapshot-late.json`, `process-late.json`, and `filesystem-late-metadata.json` in the run artifact directory.
 
 ## Replay And Fork

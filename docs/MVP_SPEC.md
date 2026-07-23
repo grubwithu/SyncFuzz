@@ -347,6 +347,14 @@ the caller must use `pruned-filesystem`. This mode rejects `--env container`;
 container selected process collection is not implemented. It neither installs
 eBPF probes nor claims causal tracing.
 
+The standalone Unix-listener motivation example applies the same evidence
+discipline to one active-IPC case. Its local T0--T3 probe artifacts correlate
+the pathname with `/proc/<pid>/fd` and `/proc/net/unix`, then use client-side
+`SO_PEERCRED` and a capture witness for activation. The E0--E3 controls and
+their deliberately limited procfs evidence are specified in
+`docs/MOTIVATION_EXAMPLE_ROOT_CAUSE.md`; this is not a replacement for a
+generic eBPF collector.
+
 The generic command adapter exports an executable
 `$SYNCFUZZ_LIFECYCLE_MARKER` plus `SYNCFUZZ_LIFECYCLE_MARKER_FILE`. A
 cooperating command invokes it with `after-plant`, `after-recovery`, or

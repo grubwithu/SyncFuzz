@@ -156,6 +156,11 @@ def parse_args() -> argparse.Namespace:
         help="Whether lifecycle work happens in a single target process or split across two target processes.",
     )
     parser.add_argument(
+        "--resume-workspace",
+        default=os.environ.get("SYNCFUZZ_LANGGRAPH_RESUME_WORKSPACE", ""),
+        help="Optional workspace used only by the resume phase of a split-process run.",
+    )
+    parser.add_argument(
         "--checkpoint-index",
         type=int,
         default=int(os.environ.get("SYNCFUZZ_LANGGRAPH_CHECKPOINT_INDEX", "-1")),
@@ -267,6 +272,17 @@ def resolve_workspace(args: argparse.Namespace) -> Path:
     value = args.workspace or os.environ.get("SYNCFUZZ_WORKSPACE", "")
     if not value:
         raise SystemExit("workspace is required via --workspace or SYNCFUZZ_WORKSPACE")
+    workspace = Path(value).expanduser()
+    if not workspace.is_absolute():
+        workspace = workspace.resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    return workspace
+
+
+def resolve_resume_workspace(args: argparse.Namespace, initial_workspace: Path) -> Path:
+    value = args.resume_workspace.strip()
+    if not value:
+        return initial_workspace
     workspace = Path(value).expanduser()
     if not workspace.is_absolute():
         workspace = workspace.resolve()
@@ -772,6 +788,7 @@ def build_phase_environment(*, replay: bool, fork_user_message: str) -> dict[str
 
 def run_split_process(args: argparse.Namespace) -> int:
     workspace = resolve_workspace(args)
+    resume_workspace = resolve_resume_workspace(args, workspace)
     model = resolve_model(args)
     validate_model_environment(model)
     thread_id = resolve_thread_id(args)
@@ -812,7 +829,7 @@ def run_split_process(args: argparse.Namespace) -> int:
     resume_command = build_phase_command(
         args=args,
         model=model,
-        workspace=workspace,
+        workspace=resume_workspace,
         thread_id=thread_id,
         checkpoint_dir=checkpoint_dir,
         phase="resume",
@@ -837,11 +854,11 @@ def run_split_process(args: argparse.Namespace) -> int:
         return int(resume_result.returncode)
 
     initial_summary = load_json_file(workspace / initial_summary_name)
-    resume_summary = load_json_file(workspace / resume_summary_name)
+    resume_summary = load_json_file(resume_workspace / resume_summary_name)
     initial_lifecycle = load_json_file(workspace / initial_lifecycle_name)
-    resume_lifecycle = load_json_file(workspace / resume_lifecycle_name)
+    resume_lifecycle = load_json_file(resume_workspace / resume_lifecycle_name)
     initial_checkpointer = load_json_file(workspace / initial_checkpointer_name)
-    resume_checkpointer = load_json_file(workspace / resume_checkpointer_name)
+    resume_checkpointer = load_json_file(resume_workspace / resume_checkpointer_name)
 
     merged_lifecycle = merge_lifecycle_artifacts(
         initial=initial_lifecycle,
@@ -852,6 +869,10 @@ def run_split_process(args: argparse.Namespace) -> int:
         provider=model_provider(model),
         execution_policy=args.execution_policy,
     )
+    merged_lifecycle["phase_workspaces"] = {
+        "initial": str(workspace),
+        "resume": str(resume_workspace),
+    }
     write_json(
         workspace / args.lifecycle_artifact,
         merged_lifecycle,
@@ -875,6 +896,7 @@ def run_split_process(args: argparse.Namespace) -> int:
     )
     merged_summary["shell_identity_summary"] = merged_lifecycle["summary"]
     merged_summary["checkpoint_file_count"] = int(merged_checkpointer["file_count"])
+    merged_summary["resume_workspace"] = str(resume_workspace)
     write_json(
         workspace / args.summary_artifact,
         merged_summary,
@@ -1275,6 +1297,10 @@ def resolve_checkpoint_selector(history: list[Any], selector: str) -> int:
         return checkpoint_before_inherited_fd_leak_holder(history)
     if selector == "before-unix-listener-launch":
         return checkpoint_before_unix_listener_launch(history)
+    if selector == "before-initial-prompt":
+        return checkpoint_before_initial_prompt(history)
+    if selector == "before-unix-socket-connect":
+        return checkpoint_before_unix_socket_connect(history)
     if selector == "before-cwd-change":
         return checkpoint_before_cwd_change(history)
     if selector == "before-umask-change":
@@ -1503,6 +1529,31 @@ def checkpoint_before_unix_listener_launch(history: list[Any]) -> int:
         )
     return -1
 
+
+def checkpoint_before_initial_prompt(history: list[Any]) -> int:
+    for index in range(len(history) - 1, -1, -1):
+        values = getattr(history[index], "values", {}) or {}
+        messages = values.get("messages", []) or []
+        if not messages:
+            return index
+    return -1
+
+
+def checkpoint_before_unix_socket_connect(history: list[Any]) -> int:
+    saw_unix_socket_connect_in_newer_state = False
+    for index in range(len(history) - 1, -1, -1):
+        has_unix_socket_connect = state_has_unix_socket_connect(history[index])
+        if not saw_unix_socket_connect_in_newer_state and has_unix_socket_connect:
+            candidate = index + 1
+            if candidate >= len(history):
+                return -1
+            return candidate
+        saw_unix_socket_connect_in_newer_state = (
+            saw_unix_socket_connect_in_newer_state or has_unix_socket_connect
+        )
+    return -1
+
+
 def checkpoint_before_cwd_change(history: list[Any]) -> int:
     saw_cwd_change_in_newer_state = False
     for index in range(len(history) - 1, -1, -1):
@@ -1717,6 +1768,18 @@ def state_has_unix_listener_launch(state: Any) -> bool:
                 return True
     return False
 
+
+def state_has_unix_socket_connect(state: Any) -> bool:
+    values = getattr(state, "values", {}) or {}
+    messages = values.get("messages", []) or []
+    for message in messages:
+        for command in shell_commands_from_message(message):
+            normalized = normalize_shell_command(command)
+            if command_connects_to_unix_socket(normalized):
+                return True
+    return False
+
+
 def state_has_cwd_change(state: Any) -> bool:
     values = getattr(state, "values", {}) or {}
     messages = values.get("messages", []) or []
@@ -1864,6 +1927,15 @@ def command_launches_unix_listener(command: str) -> bool:
         and (".bind(" in command or "bind(" in command)
         and (".listen(" in command or "listen(" in command)
     )
+
+
+def command_connects_to_unix_socket(command: str) -> bool:
+    return (
+        "branch-listener.sock" in command
+        and ("socket.af_unix" in command or "af_unix" in command)
+        and (".connect(" in command or "connect(" in command)
+    )
+
 
 def command_changes_working_directory(command: str, dirname: str) -> bool:
     dirname = dirname.lower()
