@@ -3,17 +3,19 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type ProcessSnapshot struct {
-	Environment    string         `json:"environment"`
-	ContainerName  string         `json:"container_name,omitempty"`
-	ContainerImage string         `json:"container_image,omitempty"`
-	Workspace      string         `json:"workspace,omitempty"`
-	CapturedAt     string         `json:"captured_at"`
-	Processes      []ProcessEntry `json:"processes"`
+	Environment    string            `json:"environment"`
+	ContainerName  string            `json:"container_name,omitempty"`
+	ContainerImage string            `json:"container_image,omitempty"`
+	Workspace      string            `json:"workspace,omitempty"`
+	CapturedAt     string            `json:"captured_at"`
+	Processes      []ProcessEntry    `json:"processes"`
+	UnixSockets    []UnixSocketEntry `json:"unix_sockets,omitempty"`
 }
 
 type ProcessEntry struct {
@@ -32,8 +34,42 @@ type ProcessFDEntry struct {
 	FD               int    `json:"fd"`
 	Target           string `json:"target"`
 	Kind             string `json:"kind,omitempty"`
+	Device           uint64 `json:"device,omitempty"`
+	Inode            uint64 `json:"inode,omitempty"`
+	SocketID         string `json:"socket_id,omitempty"`
 	Deleted          bool   `json:"deleted,omitempty"`
 	WorkspaceRelated bool   `json:"workspace_related"`
+}
+
+// UnixSocketEntry identifies a filesystem-bound Unix-domain endpoint from
+// procfs. Its SocketID is shared by the endpoint and every process FD that
+// refers to the same kernel socket.
+type UnixSocketEntry struct {
+	SocketID         string `json:"socket_id"`
+	Inode            uint64 `json:"inode"`
+	Path             string `json:"path"`
+	Type             string `json:"type,omitempty"`
+	State            string `json:"state,omitempty"`
+	WorkspaceRelated bool   `json:"workspace_related"`
+}
+
+func UnixSocketID(inode uint64) string {
+	if inode == 0 {
+		return ""
+	}
+	return "socket:" + strconv.FormatUint(inode, 10)
+}
+
+func UnixSocketIDFromTarget(target string) string {
+	target = strings.TrimSpace(target)
+	if !strings.HasPrefix(target, "socket:[") || !strings.HasSuffix(target, "]") {
+		return ""
+	}
+	inode, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]"), 10, 64)
+	if err != nil {
+		return ""
+	}
+	return UnixSocketID(inode)
 }
 
 type ProcessLineageReport struct {

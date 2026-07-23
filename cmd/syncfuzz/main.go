@@ -2,16 +2,24 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/cases"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/corpus"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/coverage"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/environment"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/objective"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/profiling"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/recovery"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/scheduler"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/synthesis"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
@@ -42,6 +50,12 @@ func main() {
 		suite(os.Args[2:])
 	case "campaign":
 		campaign(os.Args[2:])
+	case "profile":
+		profile(os.Args[2:])
+	case "recovery":
+		runRecovery(os.Args[2:])
+	case "synthesis":
+		runSynthesis(os.Args[2:])
 	case "target":
 		runTarget(os.Args[2:])
 	case "corpus":
@@ -78,6 +92,21 @@ Usage:
   syncfuzz suite [--out runs] [--repeat 1] [--corpus corpus] [--cases orphan-process,branch-leakage] [--timing baseline] [--differential] [--env local] [--container-image ubuntu:latest]
   syncfuzz suite --matrix [--out runs] [--repeat 1] [--corpus corpus] [--cases orphan-process] [--timing baseline,tight,wide] [--feedback-from matrix-result.json] [--candidate-limit 5] [--differential] [--env local] [--container-image ubuntu:latest]
   syncfuzz campaign [--rounds 2] [--candidate-limit 3] [--cases action-replay] [--timing baseline,tight,wide] [--feedback-from matrix-result.json] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
+  syncfuzz profile analyze --checkpoints checkpoints.json --events raw-os-events.jsonl --summaries checkpoint-state-summaries.json [--out runs/profile-analysis-<id>]
+  syncfuzz profile calibration-audit --path-run runs/<id> --fd-run runs/<id> --socket-run runs/<id> [--out calibration-audit.json]
+  syncfuzz profile promote-seed --objective objective.json [--profile-run profile-run.json | --target-run runs/<id> --profile-kind synthesis-candidate --synthesis-candidate candidate.json] --frontier before..after --out state-seed.json
+  syncfuzz profile recovery-pair --objective objective.json --seed state-seed.json --passive-observation observation-id --out recovery-pair.json
+  syncfuzz recovery execute --seed state-seed.json --pair recovery-pair.json [--out fork-pair-execution.json] [--timeout 2m]
+  syncfuzz synthesis schedule --objectives objective-a.json,objective-b.json [--coverage-ledger coverage.json] [--limit 0] --out schedule.json
+  syncfuzz synthesis generate --objective objective.json --target <target-id> --adapter <adapter-id> --scaffold <scaffold-artifact> --generator-id <id> --generator-command '<command>' [--attempt 0] --out candidate.json
+  syncfuzz synthesis execute-langgraph --objective objective.json --candidate candidate.json --allow-network [--container-image syncfuzz-langgraph:dev] [--out runs/langgraph-candidate-execution.json] [--out-profile-run profile-run.json]
+  syncfuzz synthesis evaluate --objective objective.json --candidate candidate.json --profile-run profile-run.json --out evaluation.json
+  syncfuzz synthesis promote --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --out state-seed.json
+  syncfuzz synthesis bind-maf-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest maf-workflow-fork-manifest.json --python python3 --runner targets/maf_workflow_checkpoint/run_target.py --prepared-workspace prepared --runtime-root forks --out-plan maf-fork-plan.json --out-profile-run bound-profile-run.json --out-binding native-frontier-binding.json
+  syncfuzz synthesis bind-langgraph-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest langgraph-native-checkpoints.json --out-binding langgraph-native-frontier-binding.json
+  syncfuzz synthesis prepare-langgraph-fork --objective objective.json --candidate candidate.json --profile-run profile-run.json --binding langgraph-native-frontier-binding.json --model provider:model --container-image syncfuzz-langgraph:dev --runtime-root recovery-runtimes --passive-unix-socket-path agent.sock --out-plan langgraph-fork-plan.json --out-profile-run bound-profile-run.json
+  syncfuzz profile container-scope --container <running-container>
+  syncfuzz profile process-monitor --cgroup-id <cgroup-v2-id> [--duration 10s] [--out raw-os-events.jsonl]
   syncfuzz target list
   syncfuzz target tasks
   syncfuzz target seeds
@@ -87,7 +116,7 @@ Usage:
   syncfuzz target prompt-variants
   syncfuzz target matrix [--target langgraph-shell-react] [--task orphan-process] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles all]
   syncfuzz target minimize --from runs/target-suite-<id>/target-suite-result.json [--execute] [--candidate-limit 1] [--max-trials 32] [--out runs]
-  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
+  syncfuzz target run [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process|orphan-process-long-delay|persistent-shell-poisoning|persistent-shell-poisoning-replay|persistent-shell-poisoning-fork|file-residue-fork|directory-residue-fork|delete-residue-fork|symlink-residue-fork] [--prompt-profile baseline|workflow|audit] [--prompt-file task.md] [--expect-files late-effect] [--profile-processes] [--profile-resources] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--env local] [--container-image ubuntu:latest]
   syncfuzz target run [--target maf-github-copilot-shell] [--task orphan-process] [--command-file examples/target-commands/maf-github-copilot-shell.sh] [--observe-delay 500ms] [--out runs]
   syncfuzz target suite [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--task orphan-process] [--tasks orphan-process,persistent-shell-poisoning,persistent-shell-poisoning-replay,persistent-shell-poisoning-fork,file-residue-fork,directory-residue-fork,delete-residue-fork,symlink-residue-fork] [--seed shell-path-residue] [--seeds workspace-object-residue-fork] [--group workspace-residue] [--groups phase5a-baseline] [--prompt-profile baseline] [--prompt-profiles baseline,workflow,audit] [--matrix] [--feedback-from target-matrix-result.json] [--candidate-limit 3] [--repeat 3] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
   syncfuzz target campaign [--command '<agent command>' | --command-file examples/target-commands/orphan-process.sh] [--target local-agent] [--tasks orphan-process-long-delay,persistent-shell-poisoning] [--seed shell-path-residue] [--group phase5a-baseline] [--prompt-profiles baseline,workflow,audit] [--rounds 2] [--candidate-limit 3] [--repeat 1] [--min-coverage-gain-score 0] [--max-stagnant-rounds 0] [--auto-pivot] [--timeout 2m] [--observe-delay 500ms] [--late-observe-delay 7s] [--out runs] [--corpus corpus] [--env local] [--container-image ubuntu:latest]
@@ -99,6 +128,871 @@ Usage:
   syncfuzz version
 
 `, version)
+}
+
+func profile(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "syncfuzz profile requires a subcommand; supported: analyze, calibration-audit, promote-seed, recovery-pair, container-scope, process-monitor")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "analyze":
+		profileAnalyze(args[1:])
+	case "calibration-audit":
+		profileCalibrationAudit(args[1:])
+	case "promote-seed":
+		profilePromoteSeed(args[1:])
+	case "recovery-pair":
+		profileRecoveryPair(args[1:])
+	case "container-scope":
+		profileContainerScope(args[1:])
+	case "process-monitor":
+		profileProcessMonitor(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown syncfuzz profile subcommand %q\n", args[0])
+		os.Exit(2)
+	}
+}
+
+func runRecovery(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "syncfuzz recovery requires a subcommand; supported: execute")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "execute":
+		recoveryExecute(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown syncfuzz recovery subcommand %q\n", args[0])
+		os.Exit(2)
+	}
+}
+
+func recoveryExecute(args []string) {
+	fs := flag.NewFlagSet("recovery execute", flag.ExitOnError)
+	seedPath := fs.String("seed", "", "validated StateSeed JSON path")
+	pairPath := fs.String("pair", "", "fork RecoveryPair JSON path")
+	outPath := fs.String("out", "fork-pair-execution.json", "ForkPairExecution JSON output path")
+	timeout := fs.Duration("timeout", 2*time.Minute, "maximum time for both fresh fork runtimes")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*seedPath) == "" || strings.TrimSpace(*pairPath) == "" || *timeout <= 0 {
+		fmt.Fprintln(os.Stderr, "syncfuzz recovery execute requires --seed, --pair, and a positive --timeout")
+		os.Exit(2)
+	}
+	seed, err := objective.ReadStateSeed(*seedPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
+		os.Exit(1)
+	}
+	pair, err := recovery.ReadRecoveryPair(*pairPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
+		os.Exit(1)
+	}
+	plan := recovery.RecordedPlan{
+		SchemaVersion:        recovery.SchemaVersion,
+		RecordedPlanID:       seed.RecordedPlanID,
+		AdapterID:            seed.AdapterID,
+		TargetID:             seed.TargetID,
+		ExecutionArtifact:    seed.RecordedPlanArtifact,
+		PassiveObservationID: pair.PassiveObservationID,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	execution, err := recovery.DefaultForkExecutorRegistry().Execute(ctx, seed, pair, plan)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := recovery.WriteForkPairExecution(*outPath, *execution); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("comparison_pair_id: %s\n", execution.ComparisonPairID)
+	fmt.Printf("before_runtime: %s\n", execution.Before.RuntimeInstanceID)
+	fmt.Printf("after_runtime: %s\n", execution.After.RuntimeInstanceID)
+	fmt.Printf("outcome: %s\n", execution.Classification.Outcome)
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func runSynthesis(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis requires a subcommand; supported: schedule, generate, execute-langgraph, evaluate, promote, bind-maf-frontier, bind-langgraph-frontier, prepare-langgraph-fork")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "schedule":
+		synthesisSchedule(args[1:])
+	case "generate":
+		synthesisGenerate(args[1:])
+	case "execute-langgraph":
+		synthesisExecuteLangGraph(args[1:])
+	case "evaluate":
+		synthesisEvaluate(args[1:])
+	case "promote":
+		synthesisPromote(args[1:])
+	case "bind-maf-frontier":
+		synthesisBindMAFFrontier(args[1:])
+	case "bind-langgraph-frontier":
+		synthesisBindLangGraphFrontier(args[1:])
+	case "prepare-langgraph-fork":
+		synthesisPrepareLangGraphFork(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown syncfuzz synthesis subcommand %q\n", args[0])
+		os.Exit(2)
+	}
+}
+
+func synthesisSchedule(args []string) {
+	fs := flag.NewFlagSet("synthesis schedule", flag.ExitOnError)
+	objectivePaths := fs.String("objectives", "", "comma-separated StateObjective JSON paths")
+	coverageLedger := fs.String("coverage-ledger", "", "optional V2 coverage ledger JSON array")
+	limit := fs.Int("limit", 0, "maximum scheduled objectives; 0 selects all")
+	outPath := fs.String("out", "synthesis-schedule.json", "ObjectiveSchedule JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePaths) == "" || *limit < 0 {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis schedule requires --objectives and a non-negative --limit")
+		os.Exit(2)
+	}
+	objectives := make([]objective.StateObjective, 0)
+	for _, path := range strings.Split(*objectivePaths, ",") {
+		stateObjective, err := objective.ReadStateObjective(strings.TrimSpace(path))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis schedule failed: %v\n", err)
+			os.Exit(1)
+		}
+		objectives = append(objectives, stateObjective)
+	}
+	var ledger []coverage.CoverageRecord
+	if strings.TrimSpace(*coverageLedger) != "" {
+		var err error
+		ledger, err = synthesis.ReadCoverageLedger(*coverageLedger)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis schedule failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	schedule, err := synthesis.ScheduleObjectives(objectives, ledger, *limit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis schedule failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := synthesis.WriteSchedule(*outPath, schedule); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis schedule failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("scheduled_objectives: %d\n", len(schedule.Selections))
+	for _, selection := range schedule.Selections {
+		fmt.Printf("objective: %s score=%d uncovered_atoms=%d\n", selection.ObjectiveID, selection.Score, len(selection.UncoveredEffects))
+	}
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func synthesisGenerate(args []string) {
+	fs := flag.NewFlagSet("synthesis generate", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	targetID := fs.String("target", "", "target ID")
+	adapterID := fs.String("adapter", "", "framework-native adapter ID")
+	scaffold := fs.String("scaffold", "", "target scaffold artifact path")
+	generatorID := fs.String("generator-id", "", "stable generator implementation ID")
+	generatorCommand := fs.String("generator-command", "", "command that reads $SYNCFUZZ_SYNTHESIS_REQUEST and emits one JSON response")
+	attempt := fs.Int("attempt", 0, "non-negative generation/repair attempt")
+	timeout := fs.Duration("timeout", 2*time.Minute, "generator command timeout")
+	outPath := fs.String("out", "synthesis-candidate.json", "SynthesisCandidate JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*targetID) == "" || strings.TrimSpace(*adapterID) == "" || strings.TrimSpace(*scaffold) == "" || strings.TrimSpace(*generatorID) == "" || strings.TrimSpace(*generatorCommand) == "" || *attempt < 0 || *timeout <= 0 {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis generate requires --objective, --target, --adapter, --scaffold, --generator-id, --generator-command, non-negative --attempt, and positive --timeout")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis generate failed: %v\n", err)
+		os.Exit(1)
+	}
+	request, err := synthesis.NewGeneratorRequest(stateObjective, *targetID, *adapterID, *scaffold, *attempt, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis generate failed: %v\n", err)
+		os.Exit(1)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	candidate, err := synthesis.Generate(ctx, *generatorCommand, request, *generatorID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis generate failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := synthesis.WriteCandidate(*outPath, candidate); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis generate failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("candidate_id: %s\n", candidate.CandidateID)
+	fmt.Printf("objective_id: %s\n", candidate.ObjectiveID)
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+// synthesisExecuteLangGraph is the first execution path that consumes a
+// scheduler-issued natural task rather than a historical TargetTask scenario.
+// It intentionally runs under a dedicated container image with eBPF enabled;
+// a completed result is profile evidence, not a StateSeed or a recovery query.
+func synthesisExecuteLangGraph(args []string) {
+	fs := flag.NewFlagSet("synthesis execute-langgraph", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	candidatePath := fs.String("candidate", "", "scheduler-issued SynthesisCandidate JSON path")
+	outPath := fs.String("out", "langgraph-candidate-execution.json", "LangGraphCandidateExecution JSON output path")
+	profileOutPath := fs.String("out-profile-run", "profile-run.json", "ProfileRun JSON output path")
+	containerImage := fs.String("container-image", synthesis.DefaultLangGraphProfileImage, "prebuilt isolated LangGraph target image")
+	timeout := fs.Duration("timeout", 2*time.Minute, "end-to-end candidate execution timeout")
+	observeDelay := fs.Duration("observe-delay", 500*time.Millisecond, "post-command state-probe delay")
+	allowNetwork := fs.Bool("allow-network", false, "explicitly allow the isolated target container to call its configured model provider")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*outPath) == "" || strings.TrimSpace(*profileOutPath) == "" || strings.TrimSpace(*containerImage) == "" || *timeout <= 0 || *observeDelay < 0 || !*allowNetwork {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis execute-langgraph requires --objective, --candidate, --out, --out-profile-run, positive --timeout, non-negative --observe-delay, a container image, and explicit --allow-network")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis execute-langgraph failed: %v\n", err)
+		os.Exit(1)
+	}
+	candidate, err := synthesis.ReadCandidate(*candidatePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis execute-langgraph failed: %v\n", err)
+		os.Exit(1)
+	}
+	providerEnvironment := make(map[string]string)
+	for _, key := range []string{"LANGCHAIN_MODEL", "OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY"} {
+		if value := os.Getenv(key); value != "" {
+			providerEnvironment[key] = value
+		}
+	}
+	if strings.TrimSpace(providerEnvironment["LANGCHAIN_MODEL"]) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis execute-langgraph failed: LANGCHAIN_MODEL must be set in the invoking environment")
+		os.Exit(1)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout+30*time.Second)
+	defer cancel()
+	execution, err := synthesis.ExecuteLangGraphCandidate(ctx, stateObjective, candidate, synthesis.LangGraphExecutionConfig{
+		OutDir:              filepath.Dir(*outPath),
+		ContainerImage:      *containerImage,
+		Timeout:             *timeout,
+		ObserveDelay:        *observeDelay,
+		AllowNetwork:        *allowNetwork,
+		ProviderEnvironment: providerEnvironment,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis execute-langgraph failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := synthesis.WriteLangGraphCandidateExecution(*outPath, execution); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis execute-langgraph failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := objective.WriteProfileRun(*profileOutPath, execution.ProfileRun); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis execute-langgraph failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("candidate_id: %s\n", execution.CandidateID)
+	fmt.Printf("target_run_id: %s\n", execution.TargetRunID)
+	fmt.Printf("native_checkpoint_run_id: %s\n", execution.NativeCheckpointRunID)
+	fmt.Printf("profile_run_id: %s\n", execution.ProfileRun.ProfileRunID)
+	fmt.Printf("execution_artifact: %s\n", *outPath)
+	fmt.Printf("profile_run_artifact: %s\n", *profileOutPath)
+}
+
+func synthesisEvaluate(args []string) {
+	stateObjective, candidate, profileRun, outPath := synthesisEvaluationInputs("synthesis evaluate", args)
+	evaluation, err := synthesis.EvaluateProfile(stateObjective, candidate, profileRun)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis evaluate failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := synthesis.WriteEvaluation(outPath, evaluation); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis evaluate failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("candidate_id: %s\n", evaluation.CandidateID)
+	fmt.Printf("eligible_for_retention: %t\n", evaluation.EligibleForRetention)
+	fmt.Printf("validated_frontiers: %d\n", len(evaluation.ValidatedFrontiers))
+	fmt.Printf("missing_atoms: %d\n", len(evaluation.MissingEffects))
+	fmt.Printf("artifact: %s\n", outPath)
+}
+
+func synthesisPromote(args []string) {
+	fs := flag.NewFlagSet("synthesis promote", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	candidatePath := fs.String("candidate", "", "SynthesisCandidate JSON path")
+	profileRunPath := fs.String("profile-run", "", "completed ProfileRun JSON path")
+	frontierID := fs.String("frontier", "", "validated checkpoint frontier ID")
+	outPath := fs.String("out", "state-seed.json", "StateSeed JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*profileRunPath) == "" || strings.TrimSpace(*frontierID) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis promote requires --objective, --candidate, --profile-run, and --frontier")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis promote failed: %v\n", err)
+		os.Exit(1)
+	}
+	candidate, err := synthesis.ReadCandidate(*candidatePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis promote failed: %v\n", err)
+		os.Exit(1)
+	}
+	profileRun, err := objective.ReadProfileRun(*profileRunPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis promote failed: %v\n", err)
+		os.Exit(1)
+	}
+	evaluation, err := synthesis.EvaluateProfile(stateObjective, candidate, profileRun)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis promote failed: %v\n", err)
+		os.Exit(1)
+	}
+	if !evaluation.EligibleForRetention {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis promote failed: profile run has not validated every objective atom at a persistent linked frontier")
+		os.Exit(1)
+	}
+	seed, err := objective.PromoteStateSeed(stateObjective, profileRun, *frontierID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis promote failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := objective.WriteStateSeed(*outPath, *seed); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis promote failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("seed_id: %s\n", seed.SeedID)
+	fmt.Printf("synthesis_candidate: %s\n", seed.SynthesisCandidateID)
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func synthesisBindMAFFrontier(args []string) {
+	fs := flag.NewFlagSet("synthesis bind-maf-frontier", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	candidatePath := fs.String("candidate", "", "SynthesisCandidate JSON path")
+	profileRunPath := fs.String("profile-run", "", "completed synthesis ProfileRun JSON path")
+	frontierID := fs.String("frontier", "", "validated checkpoint frontier ID")
+	manifestPath := fs.String("manifest", "", "MAF native checkpoint manifest JSON path")
+	pythonCommand := fs.String("python", "", "Python executable for the MAF fork runner")
+	runnerPath := fs.String("runner", "", "MAF fork runner path")
+	preparedWorkspace := fs.String("prepared-workspace", "", "immutable MAF initial workspace")
+	runtimeRoot := fs.String("runtime-root", "", "directory for separate MAF recovery workspaces")
+	outPlan := fs.String("out-plan", "maf-workflow-fork-plan.json", "MAFWorkflowForkPlan JSON output path")
+	outProfileRun := fs.String("out-profile-run", "bound-profile-run.json", "ProfileRun updated to use the MAF fork plan")
+	outBinding := fs.String("out-binding", "maf-native-frontier-binding.json", "native frontier binding JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*profileRunPath) == "" || strings.TrimSpace(*frontierID) == "" || strings.TrimSpace(*manifestPath) == "" || strings.TrimSpace(*pythonCommand) == "" || strings.TrimSpace(*runnerPath) == "" || strings.TrimSpace(*preparedWorkspace) == "" || strings.TrimSpace(*runtimeRoot) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis bind-maf-frontier requires --objective, --candidate, --profile-run, --frontier, --manifest, --python, --runner, --prepared-workspace, and --runtime-root")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-maf-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	candidate, err := synthesis.ReadCandidate(*candidatePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-maf-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	profileRun, err := objective.ReadProfileRun(*profileRunPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-maf-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	manifest, err := synthesis.ReadMAFNativeCheckpointManifest(*manifestPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-maf-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	binding, forkPlan, err := synthesis.BindMAFNativeFrontier(stateObjective, candidate, profileRun, *frontierID, *manifestPath, manifest, synthesis.MAFBindingConfig{PythonCommand: *pythonCommand, RunnerPath: *runnerPath, PreparedWorkspace: *preparedWorkspace, RuntimeRoot: *runtimeRoot})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-maf-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := recovery.WriteMAFWorkflowForkPlan(*outPlan, forkPlan); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-maf-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	profileRun.RecordedPlanArtifact = *outPlan
+	if err := objective.WriteProfileRun(*outProfileRun, profileRun); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-maf-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := synthesis.WriteMAFNativeFrontierBinding(*outBinding, binding); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-maf-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("frontier_id: %s\n", binding.FrontierID)
+	fmt.Printf("before_native_checkpoint: %s\n", binding.BeforeNativeCheckpointID)
+	fmt.Printf("after_native_checkpoint: %s\n", binding.AfterNativeCheckpointID)
+	fmt.Printf("plan_artifact: %s\n", *outPlan)
+	fmt.Printf("profile_run_artifact: %s\n", *outProfileRun)
+	fmt.Printf("binding_artifact: %s\n", *outBinding)
+}
+
+func synthesisBindLangGraphFrontier(args []string) {
+	fs := flag.NewFlagSet("synthesis bind-langgraph-frontier", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	candidatePath := fs.String("candidate", "", "scheduler-issued LangGraph SynthesisCandidate JSON path")
+	profileRunPath := fs.String("profile-run", "", "completed LangGraph synthesis ProfileRun JSON path")
+	frontierID := fs.String("frontier", "", "validated profiling frontier ID")
+	manifestPath := fs.String("manifest", "", "timestamped LangGraph native checkpoint manifest JSON path")
+	outBinding := fs.String("out-binding", "langgraph-native-frontier-binding.json", "LangGraph native frontier binding JSON output path")
+	outBeforeCoordinate := fs.String("out-before-coordinate", "", "optional fresh-runtime structural coordinate for the native checkpoint before the frontier")
+	outAfterCoordinate := fs.String("out-after-coordinate", "", "optional fresh-runtime structural coordinate for the native checkpoint after the frontier")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*profileRunPath) == "" || strings.TrimSpace(*frontierID) == "" || strings.TrimSpace(*manifestPath) == "" || strings.TrimSpace(*outBinding) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier requires --objective, --candidate, --profile-run, --frontier, --manifest, and --out-binding")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	candidate, err := synthesis.ReadCandidate(*candidatePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	profileRun, err := objective.ReadProfileRun(*profileRunPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	manifest, err := synthesis.ReadLangGraphNativeCheckpointManifest(*manifestPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	binding, err := synthesis.BindLangGraphNativeFrontier(stateObjective, candidate, profileRun, *frontierID, *manifestPath, manifest)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := synthesis.WriteLangGraphNativeFrontierBinding(*outBinding, binding); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	if strings.TrimSpace(*outBeforeCoordinate) != "" {
+		if err := synthesis.WriteLangGraphNativeCheckpointCoordinate(*outBeforeCoordinate, binding.BeforeNativeCoordinate); err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if strings.TrimSpace(*outAfterCoordinate) != "" {
+		if err := synthesis.WriteLangGraphNativeCheckpointCoordinate(*outAfterCoordinate, binding.AfterNativeCoordinate); err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	fmt.Printf("frontier_id: %s\n", binding.FrontierID)
+	fmt.Printf("before_native_checkpoint: %s\n", binding.BeforeNativeCheckpointID)
+	fmt.Printf("after_native_checkpoint: %s\n", binding.AfterNativeCheckpointID)
+	fmt.Printf("effect_window_monotonic_ns: %d..%d\n", binding.FirstEffectMonotonicNS, binding.LastEffectMonotonicNS)
+	fmt.Printf("binding_artifact: %s\n", *outBinding)
+	if strings.TrimSpace(*outBeforeCoordinate) != "" {
+		fmt.Printf("before_coordinate_artifact: %s\n", *outBeforeCoordinate)
+	}
+	if strings.TrimSpace(*outAfterCoordinate) != "" {
+		fmt.Printf("after_coordinate_artifact: %s\n", *outAfterCoordinate)
+	}
+}
+
+func synthesisPrepareLangGraphFork(args []string) {
+	fs := flag.NewFlagSet("synthesis prepare-langgraph-fork", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	candidatePath := fs.String("candidate", "", "scheduler-issued LangGraph SynthesisCandidate JSON path")
+	profileRunPath := fs.String("profile-run", "", "completed LangGraph synthesis ProfileRun JSON path")
+	bindingPath := fs.String("binding", "", "timestamp-validated LangGraph native frontier binding JSON path")
+	model := fs.String("model", "", "LangChain model ID fixed for the recovery plan")
+	containerImage := fs.String("container-image", synthesis.DefaultLangGraphProfileImage, "isolated LangGraph recovery container image")
+	runtimeRoot := fs.String("runtime-root", "", "host directory for independent LangGraph recovery workspaces")
+	passiveUnixSocketPath := fs.String("passive-unix-socket-path", "", "workspace-relative Unix endpoint observed without connecting")
+	outPlan := fs.String("out-plan", "langgraph-fork-plan.json", "LangGraph recorded fork plan JSON output path")
+	outProfileRun := fs.String("out-profile-run", "bound-profile-run.json", "ProfileRun updated to use the LangGraph fork plan")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*profileRunPath) == "" || strings.TrimSpace(*bindingPath) == "" || strings.TrimSpace(*model) == "" || strings.TrimSpace(*containerImage) == "" || strings.TrimSpace(*runtimeRoot) == "" || strings.TrimSpace(*passiveUnixSocketPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork requires --objective, --candidate, --profile-run, --binding, --model, --container-image, --runtime-root, and --passive-unix-socket-path")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
+		os.Exit(1)
+	}
+	candidate, err := synthesis.ReadCandidate(*candidatePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
+		os.Exit(1)
+	}
+	profileRun, err := objective.ReadProfileRun(*profileRunPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
+		os.Exit(1)
+	}
+	binding, err := synthesis.ReadLangGraphNativeFrontierBinding(*bindingPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
+		os.Exit(1)
+	}
+	plan, err := synthesis.PrepareLangGraphForkPlan(stateObjective, candidate, profileRun, binding, synthesis.LangGraphForkPlanConfig{Model: *model, ContainerImage: *containerImage, RuntimeRoot: *runtimeRoot, PassiveUnixSocketPath: *passiveUnixSocketPath})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := recovery.WriteLangGraphForkPlan(*outPlan, plan); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
+		os.Exit(1)
+	}
+	profileRun.RecordedPlanArtifact = *outPlan
+	if err := objective.WriteProfileRun(*outProfileRun, profileRun); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("plan_artifact: %s\n", *outPlan)
+	fmt.Printf("profile_run_artifact: %s\n", *outProfileRun)
+}
+
+func synthesisEvaluationInputs(name string, args []string) (objective.StateObjective, synthesis.SynthesisCandidate, objective.ProfileRun, string) {
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	candidatePath := fs.String("candidate", "", "SynthesisCandidate JSON path")
+	profileRunPath := fs.String("profile-run", "", "completed ProfileRun JSON path")
+	outPath := fs.String("out", "synthesis-evaluation.json", "CandidateEvaluation JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*profileRunPath) == "" {
+		fmt.Fprintf(os.Stderr, "syncfuzz %s requires --objective, --candidate, and --profile-run\n", name)
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz %s failed: %v\n", name, err)
+		os.Exit(1)
+	}
+	candidate, err := synthesis.ReadCandidate(*candidatePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz %s failed: %v\n", name, err)
+		os.Exit(1)
+	}
+	profileRun, err := objective.ReadProfileRun(*profileRunPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz %s failed: %v\n", name, err)
+		os.Exit(1)
+	}
+	return stateObjective, candidate, profileRun, *outPath
+}
+
+func profilePromoteSeed(args []string) {
+	fs := flag.NewFlagSet("profile promote-seed", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	profileRunPath := fs.String("profile-run", "", "validated ProfileRun JSON path")
+	targetRunDir := fs.String("target-run", "", "completed real target profiling artifact directory")
+	profileKind := fs.String("profile-kind", "", "required with --target-run: synthesis-candidate or calibration-fixture")
+	synthesisCandidatePath := fs.String("synthesis-candidate", "", "scheduler-issued SynthesisCandidate JSON artifact; required for a synthesis-candidate profile")
+	frontierID := fs.String("frontier", "", "checkpoint frontier ID, for example before-command..after-command")
+	outPath := fs.String("out", "state-seed.json", "StateSeed JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*frontierID) == "" || (strings.TrimSpace(*profileRunPath) == "" && strings.TrimSpace(*targetRunDir) == "") || (strings.TrimSpace(*profileRunPath) != "" && strings.TrimSpace(*targetRunDir) != "") || (strings.TrimSpace(*targetRunDir) != "" && strings.TrimSpace(*profileKind) == "") || (objective.ProfileRunKind(*profileKind) == objective.ProfileRunKindSynthesisCandidate && strings.TrimSpace(*targetRunDir) != "" && strings.TrimSpace(*synthesisCandidatePath) == "") {
+		fmt.Fprintln(os.Stderr, "syncfuzz profile promote-seed requires --objective, --frontier, exactly one of --profile-run or --target-run, --profile-kind with --target-run, and --synthesis-candidate for a synthesis-candidate target run")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile promote-seed failed: %v\n", err)
+		os.Exit(1)
+	}
+	var candidate *synthesis.SynthesisCandidate
+	if strings.TrimSpace(*synthesisCandidatePath) != "" {
+		loaded, err := synthesis.ReadCandidate(*synthesisCandidatePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz profile promote-seed failed: %v\n", err)
+			os.Exit(1)
+		}
+		if err := loaded.ValidateFor(stateObjective); err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz profile promote-seed failed: %v\n", err)
+			os.Exit(1)
+		}
+		candidate = &loaded
+	}
+	var profileRun objective.ProfileRun
+	if strings.TrimSpace(*profileRunPath) != "" {
+		profileRun, err = objective.ReadProfileRun(*profileRunPath)
+	} else {
+		candidateID := ""
+		if candidate != nil {
+			candidateID = candidate.CandidateID
+		}
+		profileRun, err = objective.ImportTargetProfileRun(*targetRunDir, stateObjective.ObjectiveID, objective.ProfileRunKind(*profileKind), candidateID)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile promote-seed failed: %v\n", err)
+		os.Exit(1)
+	}
+	if profileRun.Kind == objective.ProfileRunKindSynthesisCandidate {
+		if candidate == nil {
+			fmt.Fprintln(os.Stderr, "syncfuzz profile promote-seed failed: synthesis profile run requires --synthesis-candidate")
+			os.Exit(1)
+		}
+		if profileRun.SynthesisCandidateID != candidate.CandidateID || profileRun.TargetID != candidate.TargetID || profileRun.AdapterID != candidate.AdapterID {
+			fmt.Fprintln(os.Stderr, "syncfuzz profile promote-seed failed: synthesis candidate does not match profile run identity")
+			os.Exit(1)
+		}
+	} else if candidate != nil {
+		fmt.Fprintln(os.Stderr, "syncfuzz profile promote-seed failed: calibration profile run must not receive --synthesis-candidate")
+		os.Exit(1)
+	}
+	seed, err := objective.PromoteStateSeed(stateObjective, profileRun, *frontierID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile promote-seed failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := objective.WriteStateSeed(*outPath, *seed); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile promote-seed failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("seed_id: %s\n", seed.SeedID)
+	fmt.Printf("frontier_id: %s\n", seed.FrontierID)
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func profileRecoveryPair(args []string) {
+	fs := flag.NewFlagSet("profile recovery-pair", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	seedPath := fs.String("seed", "", "validated StateSeed JSON path")
+	passiveObservation := fs.String("passive-observation", "", "fixed passive observation ID")
+	outPath := fs.String("out", "recovery-pair.json", "RecoveryPair JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*seedPath) == "" || strings.TrimSpace(*passiveObservation) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz profile recovery-pair requires --objective, --seed, and --passive-observation")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-pair failed: %v\n", err)
+		os.Exit(1)
+	}
+	seed, err := objective.ReadStateSeed(*seedPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-pair failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := seed.ValidateFor(stateObjective); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-pair failed: %v\n", err)
+		os.Exit(1)
+	}
+	pair, err := recovery.NewForkPair(seed, recovery.RecordedPlan{
+		SchemaVersion:        recovery.SchemaVersion,
+		RecordedPlanID:       seed.RecordedPlanID,
+		AdapterID:            seed.AdapterID,
+		TargetID:             seed.TargetID,
+		ExecutionArtifact:    seed.RecordedPlanArtifact,
+		PassiveObservationID: *passiveObservation,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-pair failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := recovery.WriteRecoveryPair(*outPath, *pair); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-pair failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("comparison_pair_id: %s\n", pair.ComparisonPairID)
+	fmt.Printf("before_checkpoint: %s\n", pair.Before.CheckpointID)
+	fmt.Printf("after_checkpoint: %s\n", pair.After.CheckpointID)
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func profileContainerScope(args []string) {
+	fs := flag.NewFlagSet("profile container-scope", flag.ExitOnError)
+	container := fs.String("container", "", "running Docker container name or ID")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*container) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz profile container-scope requires --container")
+		os.Exit(2)
+	}
+	scope, err := environment.ResolveContainerProfilingScope(context.Background(), *container, "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile container-scope failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("container_id: %s\n", scope.ContainerID)
+	fmt.Printf("cgroup_path: %s\n", scope.CgroupPath)
+	fmt.Printf("cgroup_id: %d\n", scope.CgroupID)
+}
+
+func profileProcessMonitor(args []string) {
+	fs := flag.NewFlagSet("profile process-monitor", flag.ExitOnError)
+	cgroupID := fs.Uint64("cgroup-id", 0, "required cgroup-v2 identity used for kernel-side filtering")
+	duration := fs.Duration("duration", 10*time.Second, "collection duration")
+	outPath := fs.String("out", "raw-os-events.jsonl", "raw event JSONL output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if *cgroupID == 0 || *duration <= 0 {
+		fmt.Fprintln(os.Stderr, "syncfuzz profile process-monitor requires a non-zero --cgroup-id and positive --duration")
+		os.Exit(2)
+	}
+	collector, err := profiling.StartProcessCollector(profiling.ProfilingScope{CgroupID: *cgroupID})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile process-monitor failed: %v\n", err)
+		os.Exit(1)
+	}
+	timer := time.AfterFunc(*duration, func() { _ = collector.Close() })
+	defer timer.Stop()
+	defer collector.Close()
+
+	events := make([]profiling.RawEvent, 0)
+	for {
+		event, err := collector.Read()
+		if err != nil {
+			if profiling.IsProcessCollectorClosed(err) || errors.Is(err, os.ErrClosed) {
+				break
+			}
+			fmt.Fprintf(os.Stderr, "syncfuzz profile process-monitor failed: %v\n", err)
+			os.Exit(1)
+		}
+		events = append(events, event)
+	}
+	if err := profiling.WriteRawEventsJSONL(*outPath, events); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile process-monitor failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("events: %d\n", len(events))
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+// profileAnalyze is the offline half of the profiling pipeline. The future
+// host-side eBPF collector emits the raw JSONL input; keeping analysis here
+// makes effect and frontier semantics testable without BPF privileges.
+func profileAnalyze(args []string) {
+	fs := flag.NewFlagSet("profile analyze", flag.ExitOnError)
+	checkpointPath := fs.String("checkpoints", "", "checkpoint catalog JSON path")
+	eventsPath := fs.String("events", "", "raw eBPF event JSONL path")
+	summariesPath := fs.String("summaries", "", "checkpoint state summaries JSON path")
+	outDir := fs.String("out", "", "artifact directory; defaults to runs/profile-analysis-<id>")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*checkpointPath) == "" || strings.TrimSpace(*eventsPath) == "" || strings.TrimSpace(*summariesPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz profile analyze requires --checkpoints, --events, and --summaries")
+		os.Exit(2)
+	}
+
+	catalog, err := profiling.ReadCheckpointCatalog(*checkpointPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile analyze failed: %v\n", err)
+		os.Exit(1)
+	}
+	events, err := profiling.ReadRawEventsJSONL(*eventsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile analyze failed: %v\n", err)
+		os.Exit(1)
+	}
+	summaries, err := profiling.ReadCheckpointStateSummaries(*summariesPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile analyze failed: %v\n", err)
+		os.Exit(1)
+	}
+	effects, err := profiling.NormalizeRawEvents(events)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile analyze failed: %v\n", err)
+		os.Exit(1)
+	}
+	result, err := profiling.BuildCheckpointEffectMap(catalog, effects, summaries)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile analyze failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	artifactDir := strings.TrimSpace(*outDir)
+	if artifactDir == "" {
+		artifactDir = fmt.Sprintf("runs/profile-analysis-%d", time.Now().UnixNano())
+	}
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile analyze failed: create artifact directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := profiling.WriteNormalizedEffects(filepath.Join(artifactDir, "normalized-effects.json"), effects); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile analyze failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := profiling.WriteCheckpointEffectMap(filepath.Join(artifactDir, "checkpoint-effect-map.json"), *result); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile analyze failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("run_id: %s\n", result.RunID)
+	fmt.Printf("normalized_effects: %d\n", len(effects))
+	fmt.Printf("hot_frontiers: %d\n", len(result.HotFrontiers()))
+	fmt.Printf("artifacts: %s\n", artifactDir)
+}
+
+// profileCalibrationAudit evaluates the bounded V2.2 known-answer fixtures
+// without rerunning privileged collection. It reports fixture-scoped link
+// precision/recall, never a global detector or coverage claim.
+func profileCalibrationAudit(args []string) {
+	fs := flag.NewFlagSet("profile calibration-audit", flag.ExitOnError)
+	pathRunDir := fs.String("path-run", "", "completed canonical-path calibration run directory")
+	fdRunDir := fs.String("fd-run", "", "completed deleted-open-FD calibration run directory")
+	socketRunDir := fs.String("socket-run", "", "completed Unix socket calibration run directory")
+	outPath := fs.String("out", "calibration-audit.json", "calibration audit JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*pathRunDir) == "" || strings.TrimSpace(*fdRunDir) == "" || strings.TrimSpace(*socketRunDir) == "" || strings.TrimSpace(*outPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz profile calibration-audit requires --path-run, --fd-run, --socket-run, and --out")
+		os.Exit(2)
+	}
+	report, err := profiling.AuditStandardCalibrations(*pathRunDir, *fdRunDir, *socketRunDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile calibration-audit failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.MkdirAll(filepath.Dir(*outPath), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile calibration-audit failed: create output directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := profiling.WriteCalibrationAudit(*outPath, *report); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile calibration-audit failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("expected_links: %d\n", report.ExpectedLinks)
+	fmt.Printf("observed_links: %d\n", report.ObservedLinks)
+	fmt.Printf("matched_links: %d\n", report.MatchedLinks)
+	fmt.Printf("fixture_scoped_precision: %.2f\n", report.FixtureScopedPrecision)
+	fmt.Printf("fixture_scoped_recall: %.2f\n", report.FixtureScopedRecall)
+	fmt.Printf("artifact: %s\n", *outPath)
+	if !report.Passed {
+		fmt.Fprintln(os.Stderr, "syncfuzz profile calibration-audit failed: one or more calibration expectations were not satisfied")
+		os.Exit(1)
+	}
 }
 
 func list() {
@@ -745,28 +1639,34 @@ func targetRun(args []string) {
 	lateObserveDelay := fs.Duration("late-observe-delay", 0, "optional delay after immediate observation for delayed target effects")
 	envKind := fs.String("env", "local", "execution environment backend")
 	containerImage := fs.String("container-image", "ubuntu:latest", "container backend image")
+	profileProcesses := fs.Bool("profile-processes", false, "record host-side eBPF process lifecycle events; requires --env container and BPF privileges")
+	profileResources := fs.Bool("profile-resources", false, "record host-side eBPF resource syscalls; requires --env container, linux/amd64, and BPF privileges")
+	allowNetwork := fs.Bool("allow-network", false, "allow the target container to reach an explicitly configured external service or model provider")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
 	result, err := target.RunTarget(context.Background(), target.TargetRunOptions{
-		AdapterID:        *adapterID,
-		TargetID:         *targetID,
-		TaskID:           *taskID,
-		Objective:        *objective,
-		PromptProfileID:  *promptProfile,
-		Prompt:           *prompt,
-		PromptFile:       *promptFile,
-		Command:          *command,
-		CommandFile:      *commandFile,
-		OutDir:           *outDir,
-		Workspace:        *workspace,
-		Timeout:          *timeout,
-		ObserveDelay:     *observeDelay,
-		LateObserveDelay: *lateObserveDelay,
-		EnvKind:          *envKind,
-		ContainerImage:   *containerImage,
-		ExpectedFiles:    splitCSV(*expectFiles),
+		AdapterID:               *adapterID,
+		TargetID:                *targetID,
+		TaskID:                  *taskID,
+		Objective:               *objective,
+		PromptProfileID:         *promptProfile,
+		Prompt:                  *prompt,
+		PromptFile:              *promptFile,
+		Command:                 *command,
+		CommandFile:             *commandFile,
+		OutDir:                  *outDir,
+		Workspace:               *workspace,
+		Timeout:                 *timeout,
+		ObserveDelay:            *observeDelay,
+		LateObserveDelay:        *lateObserveDelay,
+		EnvKind:                 *envKind,
+		ContainerImage:          *containerImage,
+		EnableProcessProfiling:  *profileProcesses,
+		EnableResourceProfiling: *profileResources,
+		AllowNetwork:            *allowNetwork,
+		ExpectedFiles:           splitCSV(*expectFiles),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz target run failed: %v\n", err)
@@ -792,6 +1692,19 @@ func targetRun(args []string) {
 		fmt.Printf("oracle_status: %s\n", result.TargetOracle.Status)
 	}
 	fmt.Printf("oracle_confirmed: %t\n", result.TargetOracle.Confirmed)
+	if result.ProcessProfiling != nil {
+		fmt.Printf("ebpf_process_events: %d\n", result.ProcessProfiling.EventCount)
+		fmt.Printf("ebpf_cgroup_id: %d\n", result.ProcessProfiling.Scope.CgroupID)
+	}
+	if result.ResourceProfiling != nil {
+		fmt.Printf("ebpf_resource_events: %d\n", result.ResourceProfiling.EventCount)
+		fmt.Printf("ebpf_resource_cgroup_id: %d\n", result.ResourceProfiling.Scope.CgroupID)
+	}
+	if result.ProfilingAnalysis != nil {
+		fmt.Printf("profiling_checkpoints: %d\n", result.ProfilingAnalysis.CheckpointCount)
+		fmt.Printf("profiling_normalized_effects: %d\n", result.ProfilingAnalysis.NormalizedEffects)
+		fmt.Printf("profiling_hot_frontiers: %d\n", result.ProfilingAnalysis.HotFrontiers)
+	}
 	if result.TaskCompliance.Name != "" {
 		fmt.Printf("task_compliance: %s\n", result.TaskCompliance.Name)
 	}

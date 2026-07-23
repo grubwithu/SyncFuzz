@@ -7,9 +7,11 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from collections import defaultdict
 from contextlib import ExitStack
@@ -150,6 +152,14 @@ def parse_args() -> argparse.Namespace:
         help="Artifact filename written inside the workspace with checkpoint backend metadata.",
     )
     parser.add_argument(
+        "--native-checkpoint-manifest-artifact",
+        default=os.environ.get(
+            "SYNCFUZZ_LANGGRAPH_NATIVE_CHECKPOINT_MANIFEST_ARTIFACT",
+            "langgraph-native-checkpoints.json",
+        ),
+        help="Artifact filename written inside the workspace with exact LangGraph checkpoint IDs.",
+    )
+    parser.add_argument(
         "--process-mode",
         choices=("single", "split-process"),
         default=os.environ.get("SYNCFUZZ_LANGGRAPH_PROCESS_MODE", "single"),
@@ -161,6 +171,18 @@ def parse_args() -> argparse.Namespace:
         default=int(os.environ.get("SYNCFUZZ_LANGGRAPH_CHECKPOINT_INDEX", "-1")),
         help="Optional replay/fork checkpoint index into state history."
         " 0 means most recent checkpoint.",
+    )
+    parser.add_argument(
+        "--checkpoint-id",
+        default=os.environ.get("SYNCFUZZ_LANGGRAPH_CHECKPOINT_ID", "").strip(),
+        help="Exact durable LangGraph checkpoint ID for replay or fork. It is mutually exclusive with --checkpoint-index and --checkpoint-selector.",
+    )
+    parser.add_argument(
+        "--checkpoint-coordinate-file",
+        default=os.environ.get(
+            "SYNCFUZZ_LANGGRAPH_CHECKPOINT_COORDINATE_FILE", ""
+        ).strip(),
+        help="JSON file describing one native checkpoint shape to resolve in this runtime; mutually exclusive with ID, index, and selector.",
     )
     parser.add_argument(
         "--checkpoint-selector",
@@ -177,6 +199,30 @@ def parse_args() -> argparse.Namespace:
         "--fork-user-message",
         default=os.environ.get("SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE", ""),
         help="If set, fork from --checkpoint-index by appending a new user message.",
+    )
+    parser.add_argument(
+        "--passive-fork-observe",
+        action="store_true",
+        default=env_bool("SYNCFUZZ_LANGGRAPH_PASSIVE_FORK_OBSERVE"),
+        help="Recreate the runtime at a selected durable checkpoint and write only the fixed passive observation; no follow-up user message is invoked.",
+    )
+    parser.add_argument(
+        "--passive-unix-socket-path",
+        default=os.environ.get("SYNCFUZZ_LANGGRAPH_PASSIVE_UNIX_SOCKET_PATH", "").strip(),
+        help="Optional workspace-relative Unix socket to probe immediately before and after a fork. The probe never creates, replaces, or unlinks the endpoint.",
+    )
+    parser.add_argument(
+        "--recovery-observation-artifact",
+        default=os.environ.get(
+            "SYNCFUZZ_LANGGRAPH_RECOVERY_OBSERVATION_ARTIFACT",
+            "langgraph-recovery-observation.json",
+        ),
+        help="Artifact filename written by a resume/fork process with deterministic passive probe evidence.",
+    )
+    parser.add_argument(
+        "--runtime-instance-id",
+        default=os.environ.get("SYNCFUZZ_LANGGRAPH_RUNTIME_INSTANCE_ID", "").strip(),
+        help="Controller-issued runtime identity for a recovery observation.",
     )
     parser.add_argument(
         "--require-tool-use",
@@ -412,6 +458,7 @@ def build_durable_checkpointer(
     InMemorySaver: Any,
     PersistentDict: Any,
     checkpoint_dir: Path,
+    on_checkpoint_persisted: Any | None = None,
 ) -> Any:
     class DurableInMemorySaver(InMemorySaver):
         def __init__(self) -> None:
@@ -492,6 +539,22 @@ def build_durable_checkpointer(
             with self._lock:
                 value = super().put(config, checkpoint, metadata, new_versions)
                 self._sync_locked()
+                checkpoint_id = str(
+                    (checkpoint or {}).get("id", "")
+                    if isinstance(checkpoint, dict)
+                    else ""
+                ).strip()
+                if not checkpoint_id and isinstance(value, dict):
+                    checkpoint_id = str(
+                        (value.get("configurable", {}) or {}).get(
+                            "checkpoint_id", ""
+                        )
+                    ).strip()
+                if checkpoint_id and on_checkpoint_persisted is not None:
+                    # Python's monotonic clock uses CLOCK_MONOTONIC, the same
+                    # boot-relative clock domain used by the controller and
+                    # bpf_ktime_get_ns on the default Docker time namespace.
+                    on_checkpoint_persisted(checkpoint_id, time.monotonic_ns())
                 return value
 
         def put_writes(
@@ -539,6 +602,54 @@ def summarize_checkpoint_backend(
         "checkpoint_dir": str(checkpoint_dir) if checkpoint_dir is not None else "",
         "file_count": len(files),
         "files": files,
+    }
+
+
+def native_checkpoint_runtime_id(thread_id: str) -> str:
+    # thread_id is controller-issued for SyncFuzz runs. Prefixing its role
+    # avoids confusing this durable checkpoint namespace with a controller
+    # profiling checkpoint or a shell-session identity.
+    return f"langgraph-native-runtime:{thread_id}"
+
+
+def summarize_native_checkpoints(
+    history_summary: list[dict[str, Any]],
+    *,
+    thread_id: str,
+    backend: str,
+    checkpoint_dir: Path | None,
+    persisted_monotonic_ns: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    checkpoints: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in history_summary:
+        checkpoint_id = str(item.get("checkpoint_id", "")).strip()
+        if not checkpoint_id or checkpoint_id in seen:
+            continue
+        seen.add(checkpoint_id)
+        checkpoints.append(
+            {
+                "checkpoint_id": checkpoint_id,
+                # LangGraph exposes history in newest-first order. Preserve
+                # that exact coordinate rather than inventing a semantic name.
+                "history_index": int(item.get("index", -1)),
+                "message_count": int(item.get("message_count", 0)),
+                "next": list(item.get("next", []) or []),
+                "persisted_monotonic_ns": int(
+                    (persisted_monotonic_ns or {}).get(checkpoint_id, 0)
+                ),
+            }
+        )
+    return {
+        "schema_version": "syncfuzz.langgraph-native-checkpoint-manifest.v1",
+        "generated_at": utc_now_rfc3339(),
+        "initial_runtime_instance_id": native_checkpoint_runtime_id(thread_id),
+        "thread_id": thread_id,
+        "checkpoint_backend": backend,
+        "durable": backend == "disk",
+        "clock_domain": "CLOCK_MONOTONIC",
+        "checkpoint_dir": str(checkpoint_dir) if checkpoint_dir is not None else "",
+        "native_checkpoints": checkpoints,
     }
 
 
@@ -645,6 +756,12 @@ def merge_run_summaries(
             initial.get("requested_checkpoint_index", -1),
         )
     )
+    merged["requested_checkpoint_id"] = str(
+        resume.get("requested_checkpoint_id", initial.get("requested_checkpoint_id", ""))
+    )
+    merged["checkpoint_coordinate_file"] = str(
+        resume.get("checkpoint_coordinate_file", "")
+    )
     merged["checkpoint_selector"] = str(
         resume.get("checkpoint_selector", initial.get("checkpoint_selector", ""))
     )
@@ -662,6 +779,9 @@ def merge_run_summaries(
     )
     merged["replay_requested"] = bool(resume.get("replay_requested"))
     merged["fork_requested"] = bool(resume.get("fork_requested"))
+    merged["passive_fork_observe_requested"] = bool(
+        resume.get("passive_fork_observe_requested")
+    )
     merged["tool_use_observed"] = bool(initial.get("tool_use_observed")) or bool(
         resume.get("tool_use_observed")
     )
@@ -683,6 +803,13 @@ def merge_run_summaries(
     merged["result"] = list(initial.get("result", []) or [])
     merged["replay_result"] = list(resume.get("replay_result", []) or [])
     merged["fork_result"] = list(resume.get("fork_result", []) or [])
+    merged["runtime_instance_id"] = str(resume.get("runtime_instance_id", ""))
+    merged["passive_unix_socket_path"] = str(
+        resume.get("passive_unix_socket_path", "")
+    )
+    merged["recovery_observation_artifact"] = str(
+        resume.get("recovery_observation_artifact", "")
+    )
     merged["phase_summaries"] = {
         "initial": initial,
         "resume": resume,
@@ -707,6 +834,7 @@ def build_phase_command(
     fork_artifact: str,
     replay: bool,
     fork_user_message: str,
+    runtime_instance_id: str,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -739,6 +867,8 @@ def build_phase_command(
         replay_artifact,
         "--fork-artifact",
         fork_artifact,
+        "--recovery-observation-artifact",
+        args.recovery_observation_artifact,
     ]
     if args.prompt:
         command.extend(["--prompt", args.prompt])
@@ -750,16 +880,36 @@ def build_phase_command(
         command.extend(["--docker-image", args.docker_image])
     if args.system_prompt:
         command.extend(["--system-prompt", args.system_prompt])
-    if args.require_tool_use:
+    # Passive resume deliberately invokes no user follow-up. Tool-use evidence
+    # belongs to the initial candidate execution, not to this read-only
+    # recovery observation.
+    if args.require_tool_use and phase != "resume":
         command.append("--require-tool-use")
-    if args.checkpoint_index >= 0:
-        command.extend(["--checkpoint-index", str(args.checkpoint_index)])
-    if args.checkpoint_selector:
-        command.extend(["--checkpoint-selector", args.checkpoint_selector])
+    # The initial child must not try to resolve a checkpoint coordinate from a
+    # different runtime. Exact checkpoint IDs are allocated by LangGraph when
+    # the initial child persists them, and selection only has meaning in the
+    # fresh resume child which reopens that same durable store.
+    if phase == "resume":
+        if args.checkpoint_index >= 0:
+            command.extend(["--checkpoint-index", str(args.checkpoint_index)])
+        if args.checkpoint_id:
+            command.extend(["--checkpoint-id", args.checkpoint_id])
+        if args.checkpoint_coordinate_file:
+            command.extend(
+                ["--checkpoint-coordinate-file", args.checkpoint_coordinate_file]
+            )
+        if args.checkpoint_selector:
+            command.extend(["--checkpoint-selector", args.checkpoint_selector])
     if replay:
         command.append("--replay")
     if fork_user_message.strip():
         command.extend(["--fork-user-message", fork_user_message])
+    if phase == "resume" and args.passive_fork_observe:
+        command.append("--passive-fork-observe")
+    if args.passive_unix_socket_path:
+        command.extend(["--passive-unix-socket-path", args.passive_unix_socket_path])
+    if runtime_instance_id:
+        command.extend(["--runtime-instance-id", runtime_instance_id])
     return command
 
 
@@ -800,6 +950,9 @@ def run_split_process(args: argparse.Namespace) -> int:
         fork_artifact=args.fork_artifact,
         replay=False,
         fork_user_message="",
+        runtime_instance_id=(args.runtime_instance_id + ":initial")
+        if args.runtime_instance_id
+        else "",
     )
     initial_result = subprocess.run(
         initial_command,
@@ -824,6 +977,7 @@ def run_split_process(args: argparse.Namespace) -> int:
         fork_artifact=args.fork_artifact,
         replay=args.replay,
         fork_user_message=args.fork_user_message,
+        runtime_instance_id=args.runtime_instance_id,
     )
     resume_result = subprocess.run(
         resume_command,
@@ -908,7 +1062,27 @@ class LangGraphLifecycleRecorder:
         self._events: list[dict[str, Any]] = []
         self._shells: dict[int, dict[str, Any]] = {}
         self._seen_checkpoints: set[str] = set()
+        self._native_checkpoint_monotonic_ns: dict[str, int] = {}
         self._current_operation = ""
+
+    def note_native_checkpoint_persisted(
+        self, checkpoint_id: str, monotonic_ns: int
+    ) -> None:
+        checkpoint_id = checkpoint_id.strip()
+        if not checkpoint_id or monotonic_ns <= 0:
+            return
+        previous = self._native_checkpoint_monotonic_ns.get(checkpoint_id, 0)
+        if previous:
+            return
+        self._native_checkpoint_monotonic_ns[checkpoint_id] = monotonic_ns
+        self.record(
+            "native_checkpoint_persisted",
+            checkpoint_id=checkpoint_id,
+            monotonic_ns=monotonic_ns,
+        )
+
+    def native_checkpoint_monotonic_ns(self) -> dict[str, int]:
+        return dict(self._native_checkpoint_monotonic_ns)
 
     def record(self, event: str, **fields: Any) -> None:
         item: dict[str, Any] = {
@@ -1228,10 +1402,106 @@ def resolve_history_state(history: list[Any], index: int) -> Any | None:
     return history[index]
 
 
+def read_checkpoint_coordinate(path_value: str) -> dict[str, Any]:
+    path = Path(path_value).expanduser()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise SystemExit(f"read native checkpoint coordinate {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"decode native checkpoint coordinate {path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise SystemExit(f"native checkpoint coordinate {path} must be a JSON object")
+    if raw.get("schema_version") != "syncfuzz.langgraph-native-coordinate.v1":
+        raise SystemExit(
+            f"native checkpoint coordinate {path} has unsupported schema "
+            f"{raw.get('schema_version')!r}"
+        )
+    history_index = raw.get("history_index")
+    message_count = raw.get("message_count")
+    next_nodes = raw.get("next")
+    if (
+        not isinstance(history_index, int)
+        or history_index < 0
+        or not isinstance(message_count, int)
+        or message_count < 0
+        or not isinstance(next_nodes, list)
+        or any(not isinstance(item, str) for item in next_nodes)
+    ):
+        raise SystemExit(
+            f"native checkpoint coordinate {path} requires non-negative "
+            "history_index/message_count and a string next array"
+        )
+    return {
+        "schema_version": raw["schema_version"],
+        "source_checkpoint_id": str(raw.get("source_checkpoint_id", "")).strip(),
+        "history_index": history_index,
+        "message_count": message_count,
+        "next": list(next_nodes),
+    }
+
+
+def resolve_native_checkpoint_coordinate(
+    history: list[Any], coordinate_path: str
+) -> int:
+    coordinate = read_checkpoint_coordinate(coordinate_path)
+    matches: list[int] = []
+    for index, state in enumerate(history):
+        values = getattr(state, "values", {}) or {}
+        messages = values.get("messages", [])
+        if (
+            # History order is runtime-local: an LLM may take a different
+            # number of harmless setup turns before reaching the same native
+            # semantic state. Keep it as provenance, but resolve a fresh
+            # runtime from the state shape that survives such reordering.
+            len(messages) == coordinate["message_count"]
+            and list(getattr(state, "next", ()) or ()) == coordinate["next"]
+        ):
+            matches.append(index)
+    if len(matches) != 1:
+        raise SystemExit(
+            "native checkpoint coordinate did not resolve to exactly one durable "
+            f"checkpoint in this runtime (matches={len(matches)})"
+        )
+    return matches[0]
+
+
 def resolve_operation_checkpoint(
-    history: list[Any], checkpoint_index: int, checkpoint_selector: str
+    history: list[Any],
+    checkpoint_index: int,
+    checkpoint_selector: str,
+    checkpoint_id: str,
+    checkpoint_coordinate_file: str,
 ) -> tuple[int, str]:
+    native_checkpoint_id = checkpoint_id.strip()
+    native_coordinate_path = checkpoint_coordinate_file.strip()
     selector = checkpoint_selector.strip()
+    selection_count = sum(
+        (
+            checkpoint_index >= 0,
+            bool(native_checkpoint_id),
+            bool(native_coordinate_path),
+            bool(selector),
+        )
+    )
+    if selection_count > 1:
+        raise SystemExit(
+            "only one of --checkpoint-index, --checkpoint-id, "
+            "--checkpoint-coordinate-file, or --checkpoint-selector may be set"
+        )
+    if native_checkpoint_id:
+        for index, state in enumerate(history):
+            if extract_checkpoint_id(state) == native_checkpoint_id:
+                return index, "native-checkpoint-id"
+        raise SystemExit(
+            f"native checkpoint ID {native_checkpoint_id!r} did not match any "
+            "durable checkpoint in this runtime"
+        )
+    if native_coordinate_path:
+        return (
+            resolve_native_checkpoint_coordinate(history, native_coordinate_path),
+            "native-checkpoint-coordinate",
+        )
     if selector:
         resolved = resolve_checkpoint_selector(history, selector)
         if resolved < 0:
@@ -1910,6 +2180,130 @@ def maybe_fork(
     )
 
 
+def resolve_passive_unix_socket_path(workspace: Path, value: str) -> Path:
+    """Return a workspace-contained socket path without following its final entry.
+
+    A recovery observation is allowed to inspect one endpoint, never to create
+    it or to traverse a workspace symlink into an unrelated host location.
+    Resolving the parent is sufficient because the final entry may be a live
+    socket (which ``Path.resolve`` cannot usefully dereference).
+    """
+
+    raw = value.strip()
+    if not raw:
+        raise SystemExit("passive Unix socket path is required")
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = workspace / candidate
+    root = workspace.resolve()
+    parent = candidate.parent.resolve()
+    try:
+        parent.relative_to(root)
+    except ValueError as exc:
+        raise SystemExit(
+            f"passive Unix socket path {value!r} escapes workspace {workspace}"
+        ) from exc
+    return parent / candidate.name
+
+
+def passive_unix_socket_observation(workspace: Path, value: str) -> dict[str, Any]:
+    """Capture non-mutating endpoint identity evidence for one fork boundary.
+
+    This deliberately uses only ``lstat``: opening a client connection can
+    consume an application-level request and would no longer be a passive
+    observation. A later adapter may define a protocol-aware observation, but
+    it must be a separately named recorded-plan condition.
+    """
+
+    endpoint = resolve_passive_unix_socket_path(workspace, value)
+    root = workspace.resolve()
+    try:
+        relative_path = str(endpoint.relative_to(root))
+    except ValueError:  # guarded by resolve_passive_unix_socket_path
+        relative_path = ""
+    observation: dict[str, Any] = {
+        "kind": "unix-socket-metadata",
+        "clock_domain": "CLOCK_MONOTONIC",
+        "observed_monotonic_ns": time.monotonic_ns(),
+        "workspace_relative_path": relative_path,
+        "endpoint_path": str(endpoint),
+        "exists": False,
+        "is_unix_socket": False,
+    }
+    try:
+        metadata = os.lstat(endpoint)
+    except FileNotFoundError:
+        return observation
+    except OSError as exc:
+        observation["error"] = f"lstat: {exc}"
+        return observation
+    observation.update(
+        {
+            "exists": True,
+            "is_unix_socket": stat.S_ISSOCK(metadata.st_mode),
+            "device": int(metadata.st_dev),
+            "inode": int(metadata.st_ino),
+            "mode": stat.S_IMODE(metadata.st_mode),
+        }
+    )
+    return observation
+
+
+def summarize_passive_recovery_observation(
+    *,
+    args: argparse.Namespace,
+    thread_id: str,
+    selected_state: Any | None,
+    selected_checkpoint_index: int,
+    checkpoint_selection: str,
+    fork_invoked: bool,
+    before_fork: dict[str, Any],
+    after_fork: dict[str, Any],
+    fork_result: Any | None,
+) -> dict[str, Any]:
+    same_endpoint_identity = (
+        bool(before_fork.get("is_unix_socket"))
+        and bool(after_fork.get("is_unix_socket"))
+        and before_fork.get("device") == after_fork.get("device")
+        and before_fork.get("inode") == after_fork.get("inode")
+    )
+    fork_messages = result_messages(fork_result)
+    return {
+        "schema_version": "syncfuzz.langgraph-recovery-observation.v1",
+        "observation_kind": "unix-socket-metadata",
+        "runtime_instance_id": args.runtime_instance_id
+        or f"langgraph-runtime:{thread_id}:pid:{os.getpid()}",
+        "runtime_pid": os.getpid(),
+        "thread_id": thread_id,
+        "process_mode": args.process_mode,
+        "internal_phase": args.internal_phase,
+        "runtime_recreated": args.internal_phase == "resume",
+        "checkpoint_selector": checkpoint_selection,
+        "requested_checkpoint_id": args.checkpoint_id.strip(),
+        "checkpoint_coordinate_file": args.checkpoint_coordinate_file,
+        "restored_checkpoint_index": selected_checkpoint_index,
+        "restored_checkpoint_id": extract_checkpoint_id(selected_state),
+        "restored_checkpoint_message_count": len(
+            (getattr(selected_state, "values", {}) or {}).get("messages", [])
+        )
+        if selected_state is not None
+        else -1,
+        "restored_checkpoint_next": list(
+            getattr(selected_state, "next", ()) or ()
+        )
+        if selected_state is not None
+        else [],
+        "fork_invoked": fork_invoked,
+        "passive_unix_socket": {
+            "before_fork": before_fork,
+            "after_fork": after_fork,
+            "same_endpoint_identity": same_endpoint_identity,
+        },
+        "fork_tool_message_count": tool_message_count(fork_messages),
+        "fork_ai_tool_call_count": ai_tool_call_count(fork_messages),
+    }
+
+
 def extract_checkpoint_id(state: Any) -> str:
     try:
         configurable = state.config.get("configurable", {})
@@ -2048,7 +2442,11 @@ def main() -> int:
     if (
         args.internal_phase == "full"
         and args.process_mode == "split-process"
-        and (args.replay or args.fork_user_message.strip())
+        and (
+            args.replay
+            or args.fork_user_message.strip()
+            or args.passive_fork_observe
+        )
     ):
         return run_split_process(args)
     workspace = resolve_workspace(args)
@@ -2103,6 +2501,7 @@ def main() -> int:
             InMemorySaver,
             PersistentDict,
             checkpoint_dir,
+            lifecycle.note_native_checkpoint_persisted,
         )
     else:
         checkpointer = InMemorySaver()
@@ -2150,10 +2549,32 @@ def main() -> int:
     history_source = "resume-load" if args.internal_phase == "resume" else "initial-run"
     lifecycle.note_history(history_summary, history_source)
     write_json(workspace / args.history_artifact, history_summary)
+    native_checkpoint_manifest = summarize_native_checkpoints(
+        history_summary,
+        thread_id=thread_id,
+        backend=args.checkpoint_backend,
+        checkpoint_dir=checkpoint_dir,
+        persisted_monotonic_ns=lifecycle.native_checkpoint_monotonic_ns(),
+    )
+    write_json(
+        workspace / args.native_checkpoint_manifest_artifact,
+        native_checkpoint_manifest,
+    )
     selected_checkpoint_index, checkpoint_selector = resolve_operation_checkpoint(
-        history, args.checkpoint_index, args.checkpoint_selector
+        history,
+        args.checkpoint_index,
+        args.checkpoint_selector,
+        args.checkpoint_id,
+        args.checkpoint_coordinate_file,
     )
     selected_state = resolve_history_state(history, selected_checkpoint_index)
+    if (
+        args.replay or args.fork_user_message.strip() or args.passive_fork_observe
+    ) and selected_state is None:
+        raise SystemExit(
+            "replay or fork requested but checkpoint index "
+            f"{selected_checkpoint_index} is unavailable"
+        )
     replay_result = None
     if args.replay:
         lifecycle.begin_operation(
@@ -2174,7 +2595,13 @@ def main() -> int:
             replay_history = collect_state_history(agent, selected_state.config)
             lifecycle.note_history(summarize_history(replay_history), "replay")
     fork_result = None
+    passive_recovery_observation = None
     if args.fork_user_message.strip():
+        passive_before_fork = None
+        if args.passive_unix_socket_path:
+            passive_before_fork = passive_unix_socket_observation(
+                workspace, args.passive_unix_socket_path
+            )
         lifecycle.begin_operation(
             "fork",
             checkpoint_index=selected_checkpoint_index,
@@ -2191,6 +2618,25 @@ def main() -> int:
                 args.fork_user_message.strip(),
             )
         finally:
+            if passive_before_fork is not None:
+                passive_after_fork = passive_unix_socket_observation(
+                    workspace, args.passive_unix_socket_path
+                )
+                passive_recovery_observation = summarize_passive_recovery_observation(
+                    args=args,
+                    thread_id=thread_id,
+                    selected_state=selected_state,
+                    selected_checkpoint_index=selected_checkpoint_index,
+                    checkpoint_selection=checkpoint_selector,
+                    fork_invoked=True,
+                    before_fork=passive_before_fork,
+                    after_fork=passive_after_fork,
+                    fork_result=fork_result,
+                )
+                write_json(
+                    workspace / args.recovery_observation_artifact,
+                    passive_recovery_observation,
+                )
             lifecycle.complete_operation("fork", result_messages(fork_result))
         if fork_result is None:
             raise SystemExit(
@@ -2199,6 +2645,39 @@ def main() -> int:
         if selected_state is not None:
             fork_history = collect_state_history(agent, selected_state.config)
             lifecycle.note_history(summarize_history(fork_history), "fork")
+    elif args.passive_fork_observe:
+        if not args.passive_unix_socket_path:
+            raise SystemExit(
+                "--passive-fork-observe requires --passive-unix-socket-path"
+            )
+        lifecycle.begin_operation(
+            "passive_fork_observe",
+            checkpoint_index=selected_checkpoint_index,
+            checkpoint_selector=checkpoint_selector,
+            checkpoint_id=extract_checkpoint_id(selected_state),
+        )
+        passive_before_fork = passive_unix_socket_observation(
+            workspace, args.passive_unix_socket_path
+        )
+        passive_after_fork = passive_unix_socket_observation(
+            workspace, args.passive_unix_socket_path
+        )
+        passive_recovery_observation = summarize_passive_recovery_observation(
+            args=args,
+            thread_id=thread_id,
+            selected_state=selected_state,
+            selected_checkpoint_index=selected_checkpoint_index,
+            checkpoint_selection=checkpoint_selector,
+            fork_invoked=False,
+            before_fork=passive_before_fork,
+            after_fork=passive_after_fork,
+            fork_result=None,
+        )
+        write_json(
+            workspace / args.recovery_observation_artifact,
+            passive_recovery_observation,
+        )
+        lifecycle.complete_operation("passive_fork_observe", [])
 
     openai_endpoint = openai_base_url() if provider == "openai" else ""
     openai_endpoint_source = ""
@@ -2241,6 +2720,10 @@ def main() -> int:
         "checkpoint_backend": args.checkpoint_backend,
         "checkpoint_dir": str(checkpoint_dir) if checkpoint_dir is not None else "",
         "checkpoint_artifact": args.checkpoint_artifact,
+        "native_checkpoint_manifest_artifact": args.native_checkpoint_manifest_artifact,
+        "native_checkpoint_run_id": native_checkpoint_manifest[
+            "initial_runtime_instance_id"
+        ],
         "workspace": str(workspace),
         "task_file": task_path,
         "task_id": str(task_contract.get("task_id", "")),
@@ -2251,6 +2734,8 @@ def main() -> int:
         "ai_tool_call_count": ai_tool_calls,
         "validation_error": validation_error,
         "requested_checkpoint_index": args.checkpoint_index,
+        "requested_checkpoint_id": args.checkpoint_id.strip(),
+        "checkpoint_coordinate_file": args.checkpoint_coordinate_file,
         "checkpoint_selector": checkpoint_selector,
         "checkpoint_index": selected_checkpoint_index,
         "resolved_checkpoint_index": selected_checkpoint_index,
@@ -2259,6 +2744,12 @@ def main() -> int:
         else "",
         "replay_requested": args.replay,
         "fork_requested": bool(args.fork_user_message.strip()),
+        "passive_fork_observe_requested": args.passive_fork_observe,
+        "runtime_instance_id": args.runtime_instance_id,
+        "passive_unix_socket_path": args.passive_unix_socket_path,
+        "recovery_observation_artifact": args.recovery_observation_artifact
+        if passive_recovery_observation is not None
+        else "",
         "history_count": len(history),
         "lifecycle_artifact": args.lifecycle_artifact,
         "checkpoint_ids": [

@@ -76,7 +76,10 @@ func TestLocalProcessSnapshotFindsWorkspaceFDProcess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SnapshotProcesses failed: %v", err)
 		}
-		if containsWorkspaceFDProcess(snapshot, heldFile) {
+		if fd, found := workspaceFD(snapshot, heldFile); found {
+			if fd.Device == 0 || fd.Inode == 0 {
+				t.Fatalf("workspace FD has no device/inode identity: %#v", fd)
+			}
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -85,7 +88,7 @@ func TestLocalProcessSnapshotFindsWorkspaceFDProcess(t *testing.T) {
 }
 
 func TestParseContainerProcessLines(t *testing.T) {
-	output := "1\t0\tS (sleeping)\tsleep\t/workspace\ttrue\tsleep infinity \n"
+	output := "P\t1\t0\tS (sleeping)\tsleep\t/workspace\ttrue\tsleep infinity \nF\t1\t9\tdeleted-path\ttrue\t42\t99\t/workspace/secret (deleted)\n"
 	entries, err := environment.ParseContainerProcessLines(output)
 	if err != nil {
 		t.Fatalf("environment.ParseContainerProcessLines failed: %v", err)
@@ -99,6 +102,13 @@ func TestParseContainerProcessLines(t *testing.T) {
 	if entries[0].PID != 1 || entries[0].PPID != 0 || entries[0].Name != "sleep" {
 		t.Fatalf("unexpected process entry: %#v", entries[0])
 	}
+	if len(entries[0].OpenFDs) != 1 {
+		t.Fatalf("expected one workspace FD, got %#v", entries[0])
+	}
+	fd := entries[0].OpenFDs[0]
+	if fd.FD != 9 || fd.Device != 42 || fd.Inode != 99 || !fd.Deleted || fd.Target != "/workspace/secret (deleted)" {
+		t.Fatalf("unexpected container FD: %#v", fd)
+	}
 }
 
 func TestParseContainerProcessLinesFiltersProbeProcess(t *testing.T) {
@@ -109,6 +119,26 @@ func TestParseContainerProcessLinesFiltersProbeProcess(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("expected probe process to be filtered, got %#v", entries)
+	}
+}
+
+func TestParseContainerProcessSnapshotLinesRecordsWorkspaceUnixSocketFD(t *testing.T) {
+	output := "U\t123\t0001\t01\tlistener.sock\n" +
+		"P\t7\t1\tS (sleeping)\tpython\t/workspace\ttrue\tpython listener.py\n" +
+		"F\t7\t3\tsocket\tfalse\t9\t123\tsocket:[123]\n"
+	entries, sockets, err := environment.ParseContainerProcessSnapshotLines(output)
+	if err != nil {
+		t.Fatalf("environment.ParseContainerProcessSnapshotLines failed: %v", err)
+	}
+	if len(sockets) != 1 || sockets[0].SocketID != "socket:123" || sockets[0].Path != "listener.sock" {
+		t.Fatalf("unexpected Unix socket entries: %#v", sockets)
+	}
+	if len(entries) != 1 || !entries[0].WorkspaceRelated || len(entries[0].OpenFDs) != 1 {
+		t.Fatalf("expected socket holder to be workspace-related: %#v", entries)
+	}
+	fd := entries[0].OpenFDs[0]
+	if fd.Kind != "socket" || fd.SocketID != "socket:123" || fd.Inode != 123 {
+		t.Fatalf("unexpected Unix socket FD: %#v", fd)
 	}
 }
 
@@ -258,15 +288,20 @@ func hasProcessEdge(edges []core.ProcessEdge, parentPID int, childPID int) bool 
 }
 
 func containsWorkspaceFDProcess(snapshot core.ProcessSnapshot, target string) bool {
+	_, found := workspaceFD(snapshot, target)
+	return found
+}
+
+func workspaceFD(snapshot core.ProcessSnapshot, target string) (core.ProcessFDEntry, bool) {
 	for _, process := range snapshot.Processes {
 		if !process.WorkspaceRelated {
 			continue
 		}
 		for _, fd := range process.OpenFDs {
 			if fd.WorkspaceRelated && strings.TrimSuffix(fd.Target, " (deleted)") == target {
-				return true
+				return fd, true
 			}
 		}
 	}
-	return false
+	return core.ProcessFDEntry{}, false
 }

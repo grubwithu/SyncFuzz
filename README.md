@@ -8,6 +8,10 @@ The project starts from one narrow claim:
 
 SyncFuzz focuses on terminal/code agents that execute shell commands, maintain checkpoints, retry failed work, cancel runs, fork branches, or resume from old state. The first milestone is a deterministic known-answer testbed, then a cross-layer differential fuzzer.
 
+## Active Research Route
+
+The active route is [state-objective-driven checkpoint frontier fuzzing](docs/RESEARCH_PLAN.md): SyncFuzz first validates that an agent execution actually formed a persistent OS effect, then compares recovery from the checkpoints immediately before and after that effect. The previous mutation catalog and trusted-action experiments are retained only as historical/regression material; they are not the basis for new discovery claims.
+
 ## Current MVP
 
 The Go CLI currently runs six deterministic known-answer seed cases:
@@ -39,6 +43,11 @@ go run ./cmd/syncfuzz suite --out runs --corpus corpus --repeat 1 --differential
 go run ./cmd/syncfuzz suite --matrix --cases action-replay --timing baseline,tight --out runs --corpus corpus
 go run ./cmd/syncfuzz suite --matrix --feedback-from runs/suite-<id>/matrix-result.json --candidate-limit 3 --out runs --corpus corpus
 go run ./cmd/syncfuzz campaign --rounds 2 --candidate-limit 3 --cases action-replay --timing baseline,tight --out runs --corpus corpus
+go run ./cmd/syncfuzz profile analyze --checkpoints examples/profiling/unix-listener-checkpoints.example.json --events examples/profiling/unix-listener-events.example.jsonl --summaries examples/profiling/unix-listener-summaries.example.json --out runs/profile-example
+go run ./cmd/syncfuzz profile container-scope --container <running-container>
+GOCACHE=/tmp/syncfuzz-go-cache go build -o /tmp/syncfuzz-ebpf ./cmd/syncfuzz
+sudo /tmp/syncfuzz-ebpf profile process-monitor --cgroup-id <cgroup-v2-id> --duration 10s --out raw-os-events.jsonl
+sudo /tmp/syncfuzz-ebpf target run --env container --profile-processes --profile-resources --command 'sh -c "sleep 1 &"' --out runs
 go run ./cmd/syncfuzz target list
 go run ./cmd/syncfuzz target tasks
 go run ./cmd/syncfuzz target seeds
@@ -61,6 +70,75 @@ go run ./cmd/syncfuzz corpus show --corpus corpus --id <entry_id>
 go run ./cmd/syncfuzz corpus verify --corpus corpus --out runs
 go run ./cmd/syncfuzz replay --corpus corpus --id <entry_id> --out runs
 ```
+
+`target run --profile-processes --profile-resources` writes cgroup-scoped process and selected resource syscall events together
+with controller observation checkpoints, probe-confirmed state summaries, and
+a checkpoint-effect map whose frontiers require an explicit resource evidence
+link. Path matches use exact canonical paths. For a live FD and a checkpoint
+probe that can both resolve it, the link instead uses the exact `(device,
+inode)` pair; this preserves the identity of an unlinked-but-still-open file.
+Short-lived FDs may disappear before resolution and therefore produce no
+identity link. Unix-socket probes record the bound pathname, kernel socket ID,
+holder FD, and holder process as an explicit dependency closure; `bind` and
+`listen` only link to the endpoint through `exact-socket-id`. These controller
+checkpoints do not claim a framework-native durable Agent checkpoint API.
+
+For the privileged calibration path, `make ebpf-profile-smoke` builds the
+embedded-BPF binary and runs the persistent-workspace-effect smoke test. Use
+`make target-profile-processes TARGET_COMMAND_FILE=... EXPECT_FILES=...` for a
+custom container command. `make ebpf-fd-identity-smoke` keeps an unlinked
+workspace file open in a background FD so the emitted artifacts can validate
+an `exact-device-inode` evidence link. `make ebpf-unix-socket-smoke` validates
+the Unix endpoint closure: bound pathname, kernel socket ID, holder FD, and
+holder process, with `bind`/`listen` linked through `exact-socket-id`.
+`make ebpf-calibration-audit` combines the completed canonical-path,
+deleted-FD, and Unix-socket runs into a JSON report with fixture-scoped link
+precision/recall; it deliberately does not claim global detector quality.
+
+The V2.1b artifact contract is available through `profile promote-seed` and
+`profile recovery-pair`. A real profiling artifact can be promoted only when
+it is marked `synthesis-candidate`, the selected frontier validates every atom
+in a supplied `StateObjective`, and persistent linked evidence exists. A
+`calibration-fixture` can never become a StateSeed or add coverage. The
+resulting fork pair fixes the recorded plan and passive observation, varying
+only the checkpoint.
+
+V2.4a adds `synthesis schedule`, `synthesis generate`, `synthesis evaluate`,
+and `synthesis promote`. Scheduling uses only objective atoms and the V2
+coverage ledger; a generator reads a bounded JSON request through
+`SYNCFUZZ_SYNTHESIS_REQUEST` and emits one natural task JSON object. The
+scheduler assigns the candidate ID, and every synthesis ProfileRun/StateSeed
+must carry that ID before it can be retained. There is no built-in LLM
+generator: [the MAF scaffold example](examples/synthesis/maf-workflow-scaffold.example.json)
+defines the context a separately configured generator may read.
+The corresponding [LangGraph scaffold](examples/synthesis/langgraph-shell-react-scaffold.example.json)
+is used by the isolated real-candidate execution path.
+`synthesis execute-langgraph` is the first real candidate-execution path: it
+runs one scheduler-issued LangGraph task in the dedicated isolated image with
+both eBPF collectors, writes a candidate-bound `ProfileRun`, and preserves the
+exact disk-backed LangGraph checkpoint namespace in
+`langgraph-native-checkpoints.json`. Each exact native ID now carries the
+monotonic time at which the durable saver persisted it, in the same clock
+domain as the eBPF/controller trace. `synthesis bind-langgraph-frontier` uses
+that evidence to bind a validated controller frontier only when a native
+checkpoint strictly brackets the linked objective-effect window; it refuses
+an older manifest with history order alone. This produces a mapping artifact,
+not a recovery execution: the fresh-runtime LangGraph fork executor remains
+the next step. The command requires explicit network permission for the model
+provider and does not serialize provider credentials. `synthesis bind-maf-frontier` then requires the profile's native-runtime ID to
+match the MAF checkpoint manifest before it can write the durable recovery
+plan; it verifies the persisted before/after queue coordinates rather than
+guessing from checkpoint-file order.
+
+The V2.3 recovery executor additionally registers the first real durable
+adapter, `maf-workflow`. Its adapter-owned plan maps V2 coordinates to exact
+MAF Workflow file-checkpoint IDs; each query runs in a separate cloned
+workspace and rebuilt Workflow object. `make maf-workflow-native-fork-smoke`
+calibrates that native restore path and leaves `prepared`, `before`, and
+`after` observations under an explicitly new run root. It is a local adapter
+fixture—not a StateSeed, a coverage result, or a container-profiling claim.
+The generic command adapter remains profiling-only and is intentionally
+ineligible.
 
 Execution uses the `local` environment backend by default. Container isolation is available with a locally available Docker image:
 
@@ -132,6 +210,7 @@ make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-partial-commit-repl
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-approval-pending-replay
 make target-maf-workflow-checkpoint TARGET_TASK=maf-workflow-rehydrate-divergence
 make target-maf-workflow-checkpoint-suite TARGET_GROUP=maf-workflow REPEAT=1
+make maf-workflow-native-fork-smoke MAF_WORKFLOW_FORK_ROOT=runs/maf-v2.3-fork-smoke
 make target-langgraph-shell-react-suite TARGET_GROUP=workspace-residue REPEAT=5
 make target-langgraph-shell-react OPENAI_BASE_URL=https://api.example.com/v1
 make target-langgraph-shell-react TARGET_TASK=orphan-process-long-delay

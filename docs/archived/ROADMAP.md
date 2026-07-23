@@ -1,5 +1,7 @@
 # SyncFuzz 分阶段路线
 
+> **当前路线说明（2026-07-23）**：本文件以下内容保留项目的历史实现记录。新的开发优先级、术语、实验主张和验收标准以 [RESEARCH_PLAN.md](RESEARCH_PLAN.md) 为准：先自动合成并验证 OS state objective，再使用 eBPF / state-probe 识别 persistent effect frontier，最后对 frontier 前后的 checkpoint 做成对恢复测试。旧的 Scenario mutation、activation substitution、cross-seed crossover 与 Query genealogy 不再是后续 backlog。
+
 ## Phase 0：项目创立与问题收束
 
 目标：把方向从泛泛的 Agent Security 收束到主动漏洞挖掘。

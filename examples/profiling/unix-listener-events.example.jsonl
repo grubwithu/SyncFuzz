@@ -1,0 +1,4 @@
+{"event_id":"event-0001","monotonic_ns":120,"kind":"process-fork","pid":4100,"parent_pid":4000,"comm":"listener-launcher","cgroup_id":1234,"resource":{"kind":"process"}}
+{"event_id":"event-0002","monotonic_ns":135,"kind":"process-setsid","pid":4100,"comm":"listener-daemon","cgroup_id":1234,"resource":{"kind":"process"}}
+{"event_id":"event-0003","monotonic_ns":150,"kind":"bind","pid":4100,"comm":"listener-daemon","cgroup_id":1234,"resource":{"kind":"unix-socket","path":"branch-listener.sock","socket_id":"socket:123"}}
+{"event_id":"event-0004","monotonic_ns":160,"kind":"listen","pid":4100,"comm":"listener-daemon","cgroup_id":1234,"resource":{"kind":"unix-socket","path":"branch-listener.sock","socket_id":"socket:123","fd":3}}

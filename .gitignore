@@ -1,4 +1,5 @@
 /runs/
+/runs-archive/
 /corpus/
 tmp/
 *.log
@@ -24,3 +25,6 @@ dist/
 # Target-local environments
 targets/*/venv/
 targets/*/.venv/
+
+*.o
+!internal/syncfuzz/profiling/*.o

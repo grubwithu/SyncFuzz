@@ -1,0 +1,17 @@
+{
+  "schema_version": "syncfuzz.objective.v1",
+  "objective_id": "ipc.unix-listener.survival",
+  "effects": [
+    {
+      "family": "ipc",
+      "operation": "bind"
+    },
+    {
+      "family": "ipc",
+      "operation": "listen"
+    }
+  ],
+  "lifetime": "survive-tool-return",
+  "resource_relation": "fixed-path-served-by-descendant",
+  "persistence": "across-checkpoint"
+}

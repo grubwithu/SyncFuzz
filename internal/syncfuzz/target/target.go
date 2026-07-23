@@ -15,6 +15,7 @@ import (
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/core"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/environment"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/profiling"
 )
 
 const (
@@ -115,6 +116,7 @@ const (
 	targetMAFWorkflowAuthorityMarker             = "SYNCFUZZ_MAF_WORKFLOW_AUTHORITY_TOKEN"
 
 	DefaultTargetAdapterID                     = "command"
+	LangGraphTargetAdapterID                   = "langgraph"
 	DefaultTargetTaskID                        = "orphan-process"
 	LongDelayTargetTaskID                      = "orphan-process-long-delay"
 	PersistentShellTargetTaskID                = "persistent-shell-poisoning"
@@ -173,48 +175,60 @@ type TargetAdapterInfo struct {
 }
 
 type TargetRunOptions struct {
-	AdapterID        string
-	TargetID         string
-	TaskID           string
-	Objective        string
-	ExecutionPlan    *TargetScenarioExecutionPlan
-	PromptProfileID  string
-	PromptVariantID  string
-	Prompt           string
-	PromptFile       string
-	Command          string
-	CommandFile      string
-	OutDir           string
-	Workspace        string
-	Timeout          time.Duration
-	ObserveDelay     time.Duration
-	LateObserveDelay time.Duration
-	EnvKind          string
-	ContainerImage   string
-	ExpectedFiles    []string
+	AdapterID               string
+	TargetID                string
+	TaskID                  string
+	Objective               string
+	ExecutionPlan           *TargetScenarioExecutionPlan
+	PromptProfileID         string
+	PromptVariantID         string
+	Prompt                  string
+	PromptFile              string
+	Command                 string
+	CommandFile             string
+	OutDir                  string
+	Workspace               string
+	Timeout                 time.Duration
+	ObserveDelay            time.Duration
+	LateObserveDelay        time.Duration
+	EnvKind                 string
+	ContainerImage          string
+	EnableProcessProfiling  bool
+	EnableResourceProfiling bool
+	ExpectedFiles           []string
+	AllowNetwork            bool
+	// SynthesisCandidateID is set only by the V2 synthesis executor. It is
+	// recorded with the real target task so an arbitrary historical run cannot
+	// later be relabelled as scheduler-issued evidence.
+	SynthesisCandidateID string
+	// CommandEnvironment is an explicit, non-persisted environment allowlist
+	// for the target command (for example model-provider credentials).
+	CommandEnvironment map[string]string
 }
 
 type TargetTask struct {
-	SchemaVersion      string              `json:"schema_version"`
-	RunID              string              `json:"run_id"`
-	AdapterID          string              `json:"adapter_id"`
-	TargetID           string              `json:"target_id"`
-	TaskID             string              `json:"task_id"`
-	Objective          string              `json:"objective"`
-	PromptProfileID    string              `json:"prompt_profile_id,omitempty"`
-	PromptVariantID    string              `json:"prompt_variant_id,omitempty"`
-	Scenario           *TargetScenarioInfo `json:"scenario,omitempty"`
-	Prompt             string              `json:"prompt"`
-	PromptFile         string              `json:"prompt_file"`
-	Command            string              `json:"command"`
-	TimeoutMillis      int64               `json:"timeout_ms"`
-	ObserveDelayMs     int64               `json:"observe_delay_ms"`
-	LateObserveDelayMs int64               `json:"late_observe_delay_ms,omitempty"`
-	Environment        string              `json:"environment"`
-	ContainerImage     string              `json:"container_image,omitempty"`
-	Workspace          string              `json:"workspace"`
-	ExpectedFiles      []string            `json:"expected_files,omitempty"`
-	CreatedAt          string              `json:"created_at"`
+	SchemaVersion        string              `json:"schema_version"`
+	RunID                string              `json:"run_id"`
+	AdapterID            string              `json:"adapter_id"`
+	TargetID             string              `json:"target_id"`
+	TaskID               string              `json:"task_id"`
+	SynthesisCandidateID string              `json:"synthesis_candidate_id,omitempty"`
+	Objective            string              `json:"objective"`
+	PromptProfileID      string              `json:"prompt_profile_id,omitempty"`
+	PromptVariantID      string              `json:"prompt_variant_id,omitempty"`
+	Scenario             *TargetScenarioInfo `json:"scenario,omitempty"`
+	Prompt               string              `json:"prompt"`
+	PromptFile           string              `json:"prompt_file"`
+	Command              string              `json:"command"`
+	TimeoutMillis        int64               `json:"timeout_ms"`
+	ObserveDelayMs       int64               `json:"observe_delay_ms"`
+	LateObserveDelayMs   int64               `json:"late_observe_delay_ms,omitempty"`
+	Environment          string              `json:"environment"`
+	ContainerImage       string              `json:"container_image,omitempty"`
+	AllowNetwork         bool                `json:"allow_network"`
+	Workspace            string              `json:"workspace"`
+	ExpectedFiles        []string            `json:"expected_files,omitempty"`
+	CreatedAt            string              `json:"created_at"`
 }
 
 type TargetCommandResult struct {
@@ -251,40 +265,58 @@ const (
 
 type TargetOracleStatus string
 
+type TargetProfilingAnalysisResult struct {
+	CheckpointCount   int `json:"checkpoint_count"`
+	NormalizedEffects int `json:"normalized_effects"`
+	HotFrontiers      int `json:"hot_frontiers"`
+}
+
 type TargetRunResult struct {
-	SchemaVersion            string                        `json:"schema_version"`
-	RunID                    string                        `json:"run_id"`
-	AdapterID                string                        `json:"adapter_id"`
-	TargetID                 string                        `json:"target_id"`
-	TaskID                   string                        `json:"task_id"`
-	Objective                string                        `json:"objective"`
-	PromptProfileID          string                        `json:"prompt_profile_id,omitempty"`
-	PromptVariantID          string                        `json:"prompt_variant_id,omitempty"`
-	Environment              string                        `json:"environment"`
-	ContainerImage           string                        `json:"container_image,omitempty"`
-	Command                  string                        `json:"command"`
-	TimeoutMillis            int64                         `json:"timeout_ms"`
-	ObserveDelayMs           int64                         `json:"observe_delay_ms"`
-	LateObserveDelayMs       int64                         `json:"late_observe_delay_ms,omitempty"`
-	Completed                bool                          `json:"completed"`
-	ExpectationsMet          bool                          `json:"expectations_met"`
-	ExpectedFiles            []string                      `json:"expected_files,omitempty"`
-	ExpectedFilesPresent     []string                      `json:"expected_files_present,omitempty"`
-	ExpectedFilesMissing     []string                      `json:"expected_files_missing,omitempty"`
-	LateObserved             bool                          `json:"late_observed"`
-	LateExpectedFiles        []string                      `json:"late_expected_files,omitempty"`
-	LateExpectedFilesPresent []string                      `json:"late_expected_files_present,omitempty"`
-	LateExpectedFilesMissing []string                      `json:"late_expected_files_missing,omitempty"`
-	CommandResult            TargetCommandResult           `json:"command_result"`
-	ProcessLineage           core.ProcessLineageSummary    `json:"process_lineage"`
-	TargetOracle             TargetOracleResult            `json:"target_oracle"`
-	TaskCompliance           TargetTaskComplianceResult    `json:"task_compliance"`
-	ContractInterpretation   *TargetContractInterpretation `json:"contract_interpretation,omitempty"`
-	Signature                core.MismatchSignature        `json:"signature"`
-	ArtifactDir              string                        `json:"artifact_dir"`
-	Workspace                string                        `json:"workspace"`
-	StartedAt                string                        `json:"started_at"`
-	FinishedAt               string                        `json:"finished_at"`
+	SchemaVersion            string                         `json:"schema_version"`
+	RunID                    string                         `json:"run_id"`
+	AdapterID                string                         `json:"adapter_id"`
+	TargetID                 string                         `json:"target_id"`
+	TaskID                   string                         `json:"task_id"`
+	Objective                string                         `json:"objective"`
+	PromptProfileID          string                         `json:"prompt_profile_id,omitempty"`
+	PromptVariantID          string                         `json:"prompt_variant_id,omitempty"`
+	Environment              string                         `json:"environment"`
+	ContainerImage           string                         `json:"container_image,omitempty"`
+	AllowNetwork             bool                           `json:"allow_network"`
+	Command                  string                         `json:"command"`
+	TimeoutMillis            int64                          `json:"timeout_ms"`
+	ObserveDelayMs           int64                          `json:"observe_delay_ms"`
+	LateObserveDelayMs       int64                          `json:"late_observe_delay_ms,omitempty"`
+	Completed                bool                           `json:"completed"`
+	ExpectationsMet          bool                           `json:"expectations_met"`
+	ExpectedFiles            []string                       `json:"expected_files,omitempty"`
+	ExpectedFilesPresent     []string                       `json:"expected_files_present,omitempty"`
+	ExpectedFilesMissing     []string                       `json:"expected_files_missing,omitempty"`
+	LateObserved             bool                           `json:"late_observed"`
+	LateExpectedFiles        []string                       `json:"late_expected_files,omitempty"`
+	LateExpectedFilesPresent []string                       `json:"late_expected_files_present,omitempty"`
+	LateExpectedFilesMissing []string                       `json:"late_expected_files_missing,omitempty"`
+	CommandResult            TargetCommandResult            `json:"command_result"`
+	ProcessLineage           core.ProcessLineageSummary     `json:"process_lineage"`
+	ProcessProfiling         *TargetProcessProfilingResult  `json:"process_profiling,omitempty"`
+	ResourceProfiling        *TargetResourceProfilingResult `json:"resource_profiling,omitempty"`
+	ProfilingAnalysis        *TargetProfilingAnalysisResult `json:"profiling_analysis,omitempty"`
+	TargetOracle             TargetOracleResult             `json:"target_oracle"`
+	TaskCompliance           TargetTaskComplianceResult     `json:"task_compliance"`
+	ContractInterpretation   *TargetContractInterpretation  `json:"contract_interpretation,omitempty"`
+	Signature                core.MismatchSignature         `json:"signature"`
+	ArtifactDir              string                         `json:"artifact_dir"`
+	// Workspace is the target-visible path. For a container target it is
+	// deliberately the stable in-container mount point (/workspace), rather
+	// than the controller's host path.
+	Workspace string `json:"workspace"`
+	// HostWorkspace is the controller-visible backing directory for Workspace.
+	// It is intentionally omitted from persisted artifacts: host paths are not
+	// portable provenance, but adapter code may need them to import files the
+	// target wrote through its bind mount.
+	HostWorkspace string `json:"-"`
+	StartedAt     string `json:"started_at"`
+	FinishedAt    string `json:"finished_at"`
 }
 
 func TargetAdapters() []TargetAdapterInfo {
@@ -296,10 +328,10 @@ func TargetAdapters() []TargetAdapterInfo {
 			Capabilities: []string{"run", "reset-by-workspace", "workspace-binding", "stdout-stderr-capture", "filesystem-snapshot", "process-snapshot"},
 		},
 		{
-			AdapterID:    "langgraph",
-			Implemented:  false,
-			Description:  "planned LangGraph wrapper with checkpoint/replay lifecycle hooks",
-			Capabilities: []string{"run", "checkpoint", "replay", "cancel-resume"},
+			AdapterID:    LangGraphTargetAdapterID,
+			Implemented:  true,
+			Description:  "run the repository LangGraph wrapper as a profile target; native recovery still needs a durable adapter plan",
+			Capabilities: []string{"run", "checkpoint", "durable-disk", "profile-provenance"},
 		},
 		{
 			AdapterID:    "maf",
@@ -326,7 +358,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if opts.AdapterID == "" {
 		opts.AdapterID = DefaultTargetAdapterID
 	}
-	if opts.AdapterID != DefaultTargetAdapterID {
+	if opts.AdapterID != DefaultTargetAdapterID && opts.AdapterID != LangGraphTargetAdapterID {
 		return nil, fmt.Errorf("target adapter %q is not implemented", opts.AdapterID)
 	}
 	if opts.TargetID == "" {
@@ -334,6 +366,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 	if opts.TaskID == "" {
 		opts.TaskID = DefaultTargetTaskID
+	}
+	if strings.TrimSpace(opts.SynthesisCandidateID) != "" && opts.AdapterID != LangGraphTargetAdapterID {
+		return nil, fmt.Errorf("synthesis candidate provenance requires target adapter %q", LangGraphTargetAdapterID)
 	}
 	if opts.OutDir == "" {
 		opts.OutDir = "runs"
@@ -346,6 +381,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 	if opts.EnvKind == "" {
 		opts.EnvKind = "local"
+	}
+	if (opts.EnableProcessProfiling || opts.EnableResourceProfiling) && environment.NormalizedEnvKind(opts.EnvKind) != "container" {
+		return nil, fmt.Errorf("eBPF profiling requires --env container so events have a dedicated cgroup scope")
 	}
 	command, err := resolveTargetCommand(opts)
 	if err != nil {
@@ -367,7 +405,10 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 
 	started := time.Now().UTC()
-	env, err := environment.NewEnvironment(opts.EnvKind, opts.ContainerImage)
+	if err := validateTargetCommandEnvironment(opts.CommandEnvironment); err != nil {
+		return nil, err
+	}
+	env, err := environment.NewTargetEnvironment(opts.EnvKind, opts.ContainerImage, opts.AllowNetwork)
 	if err != nil {
 		return nil, err
 	}
@@ -391,6 +432,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"task_id":            opts.TaskID,
 		"environment":        run.Environment,
 		"container_image":    run.ContainerImage,
+		"allow_network":      opts.AllowNetwork,
 		"workspace":          workspacePath,
 		"timeout":            opts.Timeout.String(),
 		"observe_delay":      opts.ObserveDelay.String(),
@@ -407,25 +449,27 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		return nil, fmt.Errorf("write target prompt artifact: %w", err)
 	}
 	task := TargetTask{
-		SchemaVersion:      "syncfuzz.target-task.v1",
-		RunID:              run.RunID,
-		AdapterID:          opts.AdapterID,
-		TargetID:           opts.TargetID,
-		TaskID:             opts.TaskID,
-		Objective:          opts.Objective,
-		PromptProfileID:    opts.PromptProfileID,
-		PromptVariantID:    opts.PromptVariantID,
-		Prompt:             opts.Prompt,
-		PromptFile:         TargetPromptArtifact,
-		Command:            opts.Command,
-		TimeoutMillis:      opts.Timeout.Milliseconds(),
-		ObserveDelayMs:     opts.ObserveDelay.Milliseconds(),
-		LateObserveDelayMs: opts.LateObserveDelay.Milliseconds(),
-		Environment:        run.Environment,
-		ContainerImage:     run.ContainerImage,
-		Workspace:          workspacePath,
-		ExpectedFiles:      opts.ExpectedFiles,
-		CreatedAt:          started.Format(time.RFC3339Nano),
+		SchemaVersion:        "syncfuzz.target-task.v1",
+		RunID:                run.RunID,
+		AdapterID:            opts.AdapterID,
+		TargetID:             opts.TargetID,
+		TaskID:               opts.TaskID,
+		SynthesisCandidateID: opts.SynthesisCandidateID,
+		Objective:            opts.Objective,
+		PromptProfileID:      opts.PromptProfileID,
+		PromptVariantID:      opts.PromptVariantID,
+		Prompt:               opts.Prompt,
+		PromptFile:           TargetPromptArtifact,
+		Command:              opts.Command,
+		TimeoutMillis:        opts.Timeout.Milliseconds(),
+		ObserveDelayMs:       opts.ObserveDelay.Milliseconds(),
+		LateObserveDelayMs:   opts.LateObserveDelay.Milliseconds(),
+		Environment:          run.Environment,
+		ContainerImage:       run.ContainerImage,
+		AllowNetwork:         opts.AllowNetwork,
+		Workspace:            workspacePath,
+		ExpectedFiles:        opts.ExpectedFiles,
+		CreatedAt:            started.Format(time.RFC3339Nano),
 	}
 	if scenario, ok := targetScenarioByID(opts.TaskID); ok {
 		info := scenario.Info
@@ -467,6 +511,60 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err != nil {
 		return nil, err
 	}
+	var checkpointRecorder *profiling.CheckpointRecorder
+	var checkpointSummaries []profiling.CheckpointStateSummary
+	profilingEnabled := opts.EnableProcessProfiling || opts.EnableResourceProfiling
+	if profilingEnabled {
+		checkpointRecorder, err = profiling.NewCheckpointRecorder(run.RunID)
+		if err != nil {
+			return nil, err
+		}
+		checkpoint, err := checkpointRecorder.Mark("before-command", "P1")
+		if err != nil {
+			return nil, err
+		}
+		checkpointSummaries = append(checkpointSummaries, targetCheckpointStateSummary(checkpoint, workspacePath, before, processBefore))
+	}
+	var processProfiler *targetProcessProfiler
+	if opts.EnableProcessProfiling {
+		processProfiler, err = startTargetProcessProfiler(ctx, run)
+		if err != nil {
+			return nil, err
+		}
+		defer processProfiler.Stop()
+		if err := core.WriteJSON(filepath.Join(run.RunDir, TargetEBPFProcessScopeArtifact), processProfiler.Scope()); err != nil {
+			return nil, err
+		}
+		if err := run.Trace.Write(core.NewEvent(run, "P1", "ebpf_process_collector_started", map[string]any{
+			"artifact":    TargetEBPFProcessScopeArtifact,
+			"cgroup_id":   processProfiler.Scope().CgroupID,
+			"cgroup_path": processProfiler.Scope().CgroupPath,
+		})); err != nil {
+			return nil, err
+		}
+	}
+	var resourceProfiler *targetResourceProfiler
+	if opts.EnableResourceProfiling {
+		if processProfiler != nil {
+			resourceProfiler, err = startTargetResourceProfilerForScope(processProfiler.Scope())
+		} else {
+			resourceProfiler, err = startTargetResourceProfiler(ctx, run)
+		}
+		if err != nil {
+			return nil, err
+		}
+		defer resourceProfiler.Stop()
+		if err := core.WriteJSON(filepath.Join(run.RunDir, TargetEBPFResourceScopeArtifact), resourceProfiler.Scope()); err != nil {
+			return nil, err
+		}
+		if err := run.Trace.Write(core.NewEvent(run, "P1", "ebpf_resource_collector_started", map[string]any{
+			"artifact":    TargetEBPFResourceScopeArtifact,
+			"cgroup_id":   resourceProfiler.Scope().CgroupID,
+			"cgroup_path": resourceProfiler.Scope().CgroupPath,
+		})); err != nil {
+			return nil, err
+		}
+	}
 
 	commandResult, output, err := execTargetCommand(ctx, env, run, opts, workspacePath)
 	if err != nil {
@@ -484,9 +582,59 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	})); err != nil {
 		return nil, err
 	}
+	var processProfiling *TargetProcessProfilingResult
+	if processProfiler != nil {
+		processProfiling, err = processProfiler.Stop()
+		if err != nil {
+			return nil, err
+		}
+		if err := profiling.WriteRawEventsJSONL(filepath.Join(run.RunDir, TargetEBPFProcessEventsArtifact), processProfiling.Events); err != nil {
+			return nil, err
+		}
+		if err := run.Trace.Write(core.NewEvent(run, "P5", "ebpf_process_collector_stopped", map[string]any{
+			"artifact": TargetEBPFProcessEventsArtifact,
+			"events":   processProfiling.EventCount,
+		})); err != nil {
+			return nil, err
+		}
+	}
+	var resourceProfiling *TargetResourceProfilingResult
+	if resourceProfiler != nil {
+		resourceProfiling, err = resourceProfiler.Stop()
+		if err != nil {
+			return nil, err
+		}
+		resourceProfiling.Events = profiling.CanonicalizeWorkspaceEventPaths(resourceProfiling.Events, workspacePath)
+		if err := profiling.WriteRawEventsJSONL(filepath.Join(run.RunDir, TargetEBPFResourceEventsArtifact), resourceProfiling.Events); err != nil {
+			return nil, err
+		}
+		if err := run.Trace.Write(core.NewEvent(run, "P5", "ebpf_resource_collector_stopped", map[string]any{
+			"artifact": TargetEBPFResourceEventsArtifact,
+			"events":   resourceProfiling.EventCount,
+		})); err != nil {
+			return nil, err
+		}
+	}
+	var afterCommand core.Snapshot
+	if checkpointRecorder != nil {
+		afterCommand, err = core.SnapshotFilesystem(run.Workspace)
+		if err != nil {
+			return nil, err
+		}
+		if err := core.WriteJSON(filepath.Join(run.RunDir, "snapshot-after-command.json"), afterCommand); err != nil {
+			return nil, err
+		}
+	}
 	processAfterCommand, err := core.RecordProcessSnapshot(ctx, env, run, "P5", "process-after-command.json")
 	if err != nil {
 		return nil, err
+	}
+	if checkpointRecorder != nil {
+		checkpoint, err := checkpointRecorder.Mark("after-command", "P5")
+		if err != nil {
+			return nil, err
+		}
+		checkpointSummaries = append(checkpointSummaries, targetCheckpointStateSummary(checkpoint, workspacePath, afterCommand, processAfterCommand))
 	}
 
 	if err := waitForTargetObservation(ctx, run, "P6", "target_observation_delay", opts.ObserveDelay); err != nil {
@@ -496,32 +644,88 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err != nil {
 		return nil, err
 	}
+	if checkpointRecorder != nil {
+		checkpoint, err := checkpointRecorder.Mark("after-observation", "P6")
+		if err != nil {
+			return nil, err
+		}
+		checkpointSummaries = append(checkpointSummaries, targetCheckpointStateSummary(checkpoint, workspacePath, after, processAfter))
+	}
 	processLineage, err := core.RecordProcessLineage(run, "P6", "process-lineage.json", processBefore, processAfterCommand, processAfter, "process-before.json", "process-after-command.json", "process-after.json")
 	if err != nil {
 		return nil, err
 	}
-	if _, err := core.RecordFilesystemMetadata(run, "P6", "filesystem-metadata.json", []core.FilesystemSnapshotArtifact{
-		{Phase: "P0", Artifact: "snapshot-before.json", Snapshot: before},
-		{Phase: "P6", Artifact: "snapshot-after.json", Snapshot: after},
-	}); err != nil {
+	metadataSnapshots := []core.FilesystemSnapshotArtifact{{Phase: "P0", Artifact: "snapshot-before.json", Snapshot: before}}
+	if checkpointRecorder != nil {
+		metadataSnapshots = append(metadataSnapshots, core.FilesystemSnapshotArtifact{Phase: "P5", Artifact: "snapshot-after-command.json", Snapshot: afterCommand})
+	}
+	metadataSnapshots = append(metadataSnapshots, core.FilesystemSnapshotArtifact{Phase: "P6", Artifact: "snapshot-after.json", Snapshot: after})
+	if _, err := core.RecordFilesystemMetadata(run, "P6", "filesystem-metadata.json", metadataSnapshots); err != nil {
 		return nil, err
 	}
 
 	lateObserved := opts.LateObserveDelay > 0
 	var late core.Snapshot
+	var lateProcess core.ProcessSnapshot
 	if lateObserved {
 		if err := waitForTargetObservation(ctx, run, "P7", "target_late_observation_delay", opts.LateObserveDelay); err != nil {
 			return nil, err
 		}
-		if late, _, err = observeTargetWorkspace(ctx, env, run, "P7", TargetSnapshotLateArtifact, TargetProcessLateArtifact); err != nil {
+		if late, lateProcess, err = observeTargetWorkspace(ctx, env, run, "P7", TargetSnapshotLateArtifact, TargetProcessLateArtifact); err != nil {
 			return nil, err
 		}
-		if _, err := core.RecordFilesystemMetadata(run, "P7", TargetFilesystemLateArtifact, []core.FilesystemSnapshotArtifact{
-			{Phase: "P0", Artifact: "snapshot-before.json", Snapshot: before},
-			{Phase: "P6", Artifact: "snapshot-after.json", Snapshot: after},
-			{Phase: "P7", Artifact: TargetSnapshotLateArtifact, Snapshot: late},
-		}); err != nil {
+		if checkpointRecorder != nil {
+			checkpoint, err := checkpointRecorder.Mark("late-observation", "P7")
+			if err != nil {
+				return nil, err
+			}
+			checkpointSummaries = append(checkpointSummaries, targetCheckpointStateSummary(checkpoint, workspacePath, late, lateProcess))
+		}
+		lateMetadataSnapshots := append([]core.FilesystemSnapshotArtifact{}, metadataSnapshots...)
+		lateMetadataSnapshots = append(lateMetadataSnapshots, core.FilesystemSnapshotArtifact{Phase: "P7", Artifact: TargetSnapshotLateArtifact, Snapshot: late})
+		if _, err := core.RecordFilesystemMetadata(run, "P7", TargetFilesystemLateArtifact, lateMetadataSnapshots); err != nil {
 			return nil, err
+		}
+	}
+
+	var profilingAnalysis *TargetProfilingAnalysisResult
+	if checkpointRecorder != nil {
+		catalog := checkpointRecorder.Catalog()
+		if err := catalog.Validate(); err != nil {
+			return nil, fmt.Errorf("validate target checkpoint catalog: %w", err)
+		}
+		if err := core.WriteJSON(filepath.Join(run.RunDir, TargetCheckpointCatalogArtifact), catalog); err != nil {
+			return nil, err
+		}
+		if err := core.WriteJSON(filepath.Join(run.RunDir, TargetCheckpointStateSummariesArtifact), checkpointSummaries); err != nil {
+			return nil, err
+		}
+		rawEvents := make([]profiling.RawEvent, 0)
+		if processProfiling != nil {
+			rawEvents = append(rawEvents, processProfiling.Events...)
+		}
+		if resourceProfiling != nil {
+			rawEvents = append(rawEvents, resourceProfiling.Events...)
+		}
+		rawEvents = profiling.CanonicalizeWorkspaceEventPaths(rawEvents, workspacePath)
+		effects, err := profiling.NormalizeRawEvents(rawEvents)
+		if err != nil {
+			return nil, fmt.Errorf("normalize target eBPF events: %w", err)
+		}
+		if err := profiling.WriteNormalizedEffects(filepath.Join(run.RunDir, TargetNormalizedEffectsArtifact), effects); err != nil {
+			return nil, err
+		}
+		effectMap, err := profiling.BuildCheckpointEffectMap(catalog, effects, checkpointSummaries)
+		if err != nil {
+			return nil, fmt.Errorf("build target checkpoint effect map: %w", err)
+		}
+		if err := profiling.WriteCheckpointEffectMap(filepath.Join(run.RunDir, TargetCheckpointEffectMapArtifact), *effectMap); err != nil {
+			return nil, err
+		}
+		profilingAnalysis = &TargetProfilingAnalysisResult{
+			CheckpointCount:   len(catalog.Checkpoints),
+			NormalizedEffects: len(effects),
+			HotFrontiers:      len(effectMap.HotFrontiers()),
 		}
 	}
 
@@ -553,6 +757,15 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		}
 		evidence = append(evidence, contractInterpretation.Evidence...)
 	}
+	if processProfiling != nil {
+		evidence = append(evidence, fmt.Sprintf("eBPF process collector recorded %d cgroup-scoped events", processProfiling.EventCount))
+	}
+	if resourceProfiling != nil {
+		evidence = append(evidence, fmt.Sprintf("eBPF resource collector recorded %d cgroup-scoped events", resourceProfiling.EventCount))
+	}
+	if profilingAnalysis != nil {
+		evidence = append(evidence, fmt.Sprintf("checkpoint analysis normalized %d effects and selected %d hot frontiers", profilingAnalysis.NormalizedEffects, profilingAnalysis.HotFrontiers))
+	}
 	artifacts := []string{
 		"trace.jsonl",
 		TargetTaskArtifact,
@@ -567,6 +780,21 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"filesystem-metadata.json",
 		TargetResultArtifact,
 	}
+	if processProfiling != nil {
+		artifacts = append(artifacts, TargetEBPFProcessScopeArtifact, TargetEBPFProcessEventsArtifact)
+	}
+	if resourceProfiling != nil {
+		artifacts = append(artifacts, TargetEBPFResourceScopeArtifact, TargetEBPFResourceEventsArtifact)
+	}
+	if profilingAnalysis != nil {
+		artifacts = append(artifacts,
+			"snapshot-after-command.json",
+			TargetCheckpointCatalogArtifact,
+			TargetCheckpointStateSummariesArtifact,
+			TargetNormalizedEffectsArtifact,
+			TargetCheckpointEffectMapArtifact,
+		)
+	}
 	observations := []core.StateObservation{
 		{Layer: "agent", StateClass: "target-task", Phase: "P1", Artifact: TargetTaskArtifact, Kind: "target-task", Description: "prompt and command contract passed to the real target adapter"},
 		{Layer: "agent", StateClass: "target-output", Phase: "P5", Artifact: TargetOutputArtifact, Kind: "stdout-stderr", Description: "combined stdout/stderr from the target command"},
@@ -577,6 +805,25 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-after.json", Kind: "process-snapshot"},
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-lineage.json", Kind: "process-lineage"},
 		{Layer: "os", StateClass: "filesystem-metadata", Phase: "P6", Artifact: "filesystem-metadata.json", Kind: "filesystem-metadata"},
+	}
+	if processProfiling != nil {
+		observations = append(observations,
+			core.StateObservation{Layer: "os", StateClass: "ebpf-process-scope", Phase: "P1", Artifact: TargetEBPFProcessScopeArtifact, Kind: "cgroup-scope", Description: "host-side eBPF collector filter bound to the target container cgroup"},
+			core.StateObservation{Layer: "os", StateClass: "ebpf-process-events", Phase: "P5", Artifact: TargetEBPFProcessEventsArtifact, Kind: "ebpf-raw-events", Description: "cgroup-scoped process lifecycle events recorded while the target command executed"},
+		)
+	}
+	if resourceProfiling != nil {
+		observations = append(observations,
+			core.StateObservation{Layer: "os", StateClass: "ebpf-resource-scope", Phase: "P1", Artifact: TargetEBPFResourceScopeArtifact, Kind: "cgroup-scope", Description: "host-side eBPF resource collector filter bound to the target container cgroup"},
+			core.StateObservation{Layer: "os", StateClass: "ebpf-resource-events", Phase: "P5", Artifact: TargetEBPFResourceEventsArtifact, Kind: "ebpf-raw-events", Description: "cgroup-scoped successful filesystem, FD, and IPC syscalls recorded while the target command executed"},
+		)
+	}
+	if profilingAnalysis != nil {
+		observations = append(observations,
+			core.StateObservation{Layer: "agent", StateClass: "controller-checkpoint", Phase: "P6", Artifact: TargetCheckpointCatalogArtifact, Kind: "monotonic-checkpoint-catalog", Description: "SyncFuzz controller observation boundaries in the same clock domain as eBPF events; not an agent-durable checkpoint claim"},
+			core.StateObservation{Layer: "os", StateClass: "checkpoint-state-summary", Phase: "P6", Artifact: TargetCheckpointStateSummariesArtifact, Kind: "probe-confirmed-state", Description: "workspace, live process, and open-FD state independently observed at each controller checkpoint"},
+			core.StateObservation{Layer: "os", StateClass: "checkpoint-effect-map", Phase: "P6", Artifact: TargetCheckpointEffectMapArtifact, Kind: "effect-frontier-analysis", Description: "intervals requiring both eBPF effect evidence and a confirmed persistent state delta"},
+		)
 	}
 	if contractProfile != nil {
 		artifacts = append(artifacts, TargetContractProfileArtifact)
@@ -603,9 +850,19 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	artifacts = append(artifacts, adapterArtifacts...)
 	observations = append(observations, adapterObservations...)
 
+	stateClasses := []string{"workspace", "process", "target-command"}
+	if processProfiling != nil {
+		stateClasses = append(stateClasses, "ebpf-process")
+	}
+	if resourceProfiling != nil {
+		stateClasses = append(stateClasses, "ebpf-resource")
+	}
+	if profilingAnalysis != nil {
+		stateClasses = append(stateClasses, "checkpoint-frontier")
+	}
 	manifest := core.CaseManifest{
 		Objective:         opts.Objective,
-		StateClasses:      []string{"workspace", "process", "target-command"},
+		StateClasses:      stateClasses,
 		FaultPhases:       faultPhases,
 		Primitives:        []string{"real target command adapter", opts.AdapterID, opts.TaskID},
 		ExpectedSignature: signature,
@@ -630,6 +887,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		PromptVariantID:          opts.PromptVariantID,
 		Environment:              run.Environment,
 		ContainerImage:           run.ContainerImage,
+		AllowNetwork:             opts.AllowNetwork,
 		Command:                  opts.Command,
 		TimeoutMillis:            opts.Timeout.Milliseconds(),
 		ObserveDelayMs:           opts.ObserveDelay.Milliseconds(),
@@ -645,12 +903,16 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		LateExpectedFilesMissing: lateMissing,
 		CommandResult:            commandResult,
 		ProcessLineage:           processLineage.Summary,
+		ProcessProfiling:         processProfiling,
+		ResourceProfiling:        resourceProfiling,
+		ProfilingAnalysis:        profilingAnalysis,
 		TargetOracle:             targetOracle,
 		TaskCompliance:           taskCompliance,
 		ContractInterpretation:   contractInterpretation,
 		Signature:                signature,
 		ArtifactDir:              run.RunDir,
 		Workspace:                workspacePath,
+		HostWorkspace:            run.Workspace,
 		StartedAt:                started.Format(time.RFC3339Nano),
 		FinishedAt:               finished.Format(time.RFC3339Nano),
 	}
@@ -2816,6 +3078,12 @@ func targetAdapterRuntimeObservations(workspace string) ([]string, []core.StateO
 			description: "LangGraph checkpoint backend metadata including durable checkpoint files when disk mode is enabled",
 		},
 		{
+			artifact:    langgraphNativeCheckpointManifestArtifact,
+			stateClass:  "langgraph-native-checkpoints",
+			kind:        "json-summary",
+			description: "exact durable LangGraph checkpoint IDs and their runtime namespace",
+		},
+		{
 			artifact:    LanggraphReplayArtifact,
 			stateClass:  "langgraph-replay",
 			kind:        "json-summary",
@@ -2914,7 +3182,26 @@ func targetCommandEnv(opts TargetRunOptions, runID string, workspacePath string)
 	for key, value := range targetTaskEnvOverridesWithPlan(opts.TaskID, opts.ExecutionPlan) {
 		env[key] = value
 	}
+	for key, value := range opts.CommandEnvironment {
+		env[key] = value
+	}
 	return env
+}
+
+func validateTargetCommandEnvironment(values map[string]string) error {
+	for key := range values {
+		name := strings.TrimSpace(key)
+		if name == "" || strings.Contains(name, "=") {
+			return fmt.Errorf("target command environment has invalid variable name %q", key)
+		}
+		// The controller, rather than a caller supplied map, fixes workspace,
+		// task and run provenance. This environment is intentionally only for
+		// target dependencies such as a provider credential.
+		if strings.HasPrefix(name, "SYNCFUZZ_") {
+			return fmt.Errorf("target command environment may not override reserved variable %q", name)
+		}
+	}
+	return nil
 }
 
 func targetTaskEnvOverrides(taskID string) map[string]string {

@@ -88,6 +88,49 @@ printf target-output`,
 	}
 }
 
+func TestRunTargetLangGraphProfileAdapterKeepsItsOwnProvenance(t *testing.T) {
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		AdapterID: LangGraphTargetAdapterID,
+		TargetID:  "langgraph-shell-react",
+		TaskID:    "synthesis-candidate",
+		Prompt:    "Inspect the local workspace.",
+		Command:   "printf profile-only",
+		OutDir:    filepath.Join(t.TempDir(), "runs"),
+		Timeout:   5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget LangGraph profile adapter failed: %v", err)
+	}
+	if !result.Completed || result.AdapterID != LangGraphTargetAdapterID {
+		t.Fatalf("expected completed LangGraph profile result, got %#v", result)
+	}
+	if _, err := RunTarget(context.Background(), TargetRunOptions{
+		Command: "true",
+		OutDir:  filepath.Join(t.TempDir(), "runs"),
+		CommandEnvironment: map[string]string{
+			"SYNCFUZZ_WORKSPACE": "/unsafe",
+		},
+	}); err == nil {
+		t.Fatal("expected reserved command environment to be rejected")
+	}
+}
+
+func TestRunTargetRejectsEBPFProfilingOutsideContainer(t *testing.T) {
+	for _, options := range []TargetRunOptions{
+		{EnableProcessProfiling: true},
+		{EnableResourceProfiling: true},
+	} {
+		options.TargetID = "local-smoke"
+		options.TaskID = DefaultTargetTaskID
+		options.Command = "true"
+		options.OutDir = t.TempDir()
+		options.EnvKind = "local"
+		if _, err := RunTarget(context.Background(), options); err == nil || !strings.Contains(err.Error(), "requires --env container") {
+			t.Fatalf("expected container profiling requirement, got %v", err)
+		}
+	}
+}
+
 func TestRunTargetSupportsCommandFile(t *testing.T) {
 	tmp := t.TempDir()
 	commandFile := filepath.Join(tmp, "target-command.sh")

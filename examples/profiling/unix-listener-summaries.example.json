@@ -1,0 +1,60 @@
+[
+  {
+    "checkpoint_id": "C0",
+    "monotonic_ns": 100
+  },
+  {
+    "checkpoint_id": "C1",
+    "monotonic_ns": 200,
+    "resources": [
+      {
+        "resource": {
+          "resource_id": "process:4100",
+          "family": "process",
+          "kind": "process",
+          "holder_pid": 4100
+        },
+        "observed": true
+      },
+      {
+        "resource": {
+          "resource_id": "unix:branch-listener.sock",
+          "family": "ipc",
+          "kind": "unix-listener",
+          "path": "branch-listener.sock",
+          "socket_id": "socket:123",
+          "fd": 3,
+          "holder_pid": 4100
+        },
+        "observed": true
+      }
+    ]
+  },
+  {
+    "checkpoint_id": "C2",
+    "monotonic_ns": 300,
+    "resources": [
+      {
+        "resource": {
+          "resource_id": "process:4100",
+          "family": "process",
+          "kind": "process",
+          "holder_pid": 4100
+        },
+        "observed": true
+      },
+      {
+        "resource": {
+          "resource_id": "unix:branch-listener.sock",
+          "family": "ipc",
+          "kind": "unix-listener",
+          "path": "branch-listener.sock",
+          "socket_id": "socket:123",
+          "fd": 3,
+          "holder_pid": 4100
+        },
+        "observed": true
+      }
+    ]
+  }
+]

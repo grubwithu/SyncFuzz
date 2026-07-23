@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,20 @@ func NewEnvironment(kind string, containerImage string) (core.Environment, error
 	default:
 		return nil, fmt.Errorf("unsupported environment %q", kind)
 	}
+}
+
+// NewTargetEnvironment creates the environment for a real target run. Network
+// access remains disabled unless the target explicitly opts in to reach its
+// model provider; collector privileges never change the target sandbox policy.
+func NewTargetEnvironment(kind string, containerImage string, allowNetwork bool) (core.Environment, error) {
+	kind = NormalizedEnvKind(kind)
+	if kind == "container" {
+		return ContainerEnvironment{
+			Image:        NormalizedContainerImage(containerImage),
+			AllowNetwork: allowNetwork,
+		}, nil
+	}
+	return NewEnvironment(kind, containerImage)
 }
 
 func ValidateEnvironmentKind(kind string) error {
@@ -122,7 +137,8 @@ func (e LocalEnvironment) SnapshotProcesses(_ context.Context, run *core.RunCont
 }
 
 type ContainerEnvironment struct {
-	Image string
+	Image        string
+	AllowNetwork bool
 }
 
 func (e ContainerEnvironment) Kind() string {
@@ -154,22 +170,31 @@ func (e ContainerEnvironment) PrepareRun(ctx context.Context, opts core.RunOptio
 		return nil, fmt.Errorf("resolve workspace path: %w", err)
 	}
 
+	sandboxUID, sandboxGID := sandboxUserIDs()
+	if os.Getuid() == 0 && (sandboxUID != 0 || sandboxGID != 0) {
+		if err := os.Chown(workspace, sandboxUID, sandboxGID); err != nil {
+			_ = run.Close()
+			return nil, fmt.Errorf("assign workspace to sandbox user: %w", err)
+		}
+	}
 	args := []string{
 		"run",
 		"-d",
 		"--rm",
 		"--name", containerName,
-		"--network", "none",
 		"--pids-limit", "128",
 		"--memory", "256m",
 		"--cpus", "1",
 		"--security-opt", "no-new-privileges",
 		"--cap-drop", "ALL",
-		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		"--user", fmt.Sprintf("%d:%d", sandboxUID, sandboxGID),
 		"-v", workspace + ":/workspace",
 		"-w", "/workspace",
 		e.Image,
 		"sleep", "infinity",
+	}
+	if !e.AllowNetwork {
+		args = append(args[:4], append([]string{"--network", "none"}, args[4:]...)...)
 	}
 	output, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
 	if err != nil {
@@ -186,6 +211,26 @@ func (e ContainerEnvironment) PrepareRun(ctx context.Context, opts core.RunOptio
 		return nil
 	}
 	return run, nil
+}
+
+// sandboxUserIDs preserves the invoking user's identity when the controller is
+// started through sudo solely to acquire CAP_BPF/CAP_PERFMON. The agent stays
+// non-root inside its container even though the host-side collector is
+// privileged.
+func sandboxUserIDs() (int, int) {
+	return sandboxUserIDsForRunner(os.Getuid(), os.Getgid(), os.Getenv("SUDO_UID"), os.Getenv("SUDO_GID"))
+}
+
+func sandboxUserIDsForRunner(runnerUID int, runnerGID int, sudoUID string, sudoGID string) (int, int) {
+	if runnerUID != 0 {
+		return runnerUID, runnerGID
+	}
+	uid, uidErr := strconv.Atoi(strings.TrimSpace(sudoUID))
+	gid, gidErr := strconv.Atoi(strings.TrimSpace(sudoGID))
+	if uidErr != nil || gidErr != nil || uid < 0 || gid < 0 {
+		return runnerUID, runnerGID
+	}
+	return uid, gid
 }
 
 func (e ContainerEnvironment) ExecShell(ctx context.Context, run *core.RunContext, command string) (core.CommandResult, error) {

@@ -1,5 +1,7 @@
 # MVP Specification
 
+> **路线状态（2026-07-23）**：本文件描述已完成的 deterministic MVP 与其 artifact contract。后续研究开发遵循 [RESEARCH_PLAN.md](RESEARCH_PLAN.md)；尤其不再将当前 mutation matrix 视为自动发现新 Query 的机制。V2.1a 已新增离线 profiling evidence contract；V2.2 的真实 eBPF/container collector 已完成 process、resource、FD identity 与 Unix-socket closure calibration。
+
 ## Goal
 
 The first usable version of SyncFuzz should prove the whole research loop without relying on an LLM:
@@ -12,6 +14,83 @@ state primitive
   -> mismatch signature
   -> reproducible artifacts
 ```
+
+## V2.1a Profiling Evidence
+
+`syncfuzz profile analyze` is the offline, deterministic half of the new profiling pipeline. It consumes a target-produced checkpoint catalog, collector-produced raw-event JSONL, and probe-produced checkpoint state summaries. It writes normalized OS effects and a checkpoint-effect map; an interval becomes a frontier only when both event evidence and a confirmed persistent state delta are present.
+
+```bash
+go run ./cmd/syncfuzz profile analyze \
+  --checkpoints examples/profiling/unix-listener-checkpoints.example.json \
+  --events examples/profiling/unix-listener-events.example.jsonl \
+  --summaries examples/profiling/unix-listener-summaries.example.json \
+  --out runs/profile-example
+```
+
+The current command is intentionally offline. The V2.2 host-side eBPF collector will produce its raw-event input while filtering by the per-run container cgroup; it must fail explicitly when the required BPF privilege or cgroup-v2 scope is unavailable.
+
+The first V2.2 collector is available for an isolated smoke test. It records cgroup-filtered process `fork` / `exec` / `exit` events on the host; it does not run inside the Agent container.
+
+```bash
+GOCACHE=/tmp/syncfuzz-go-cache go build -o /tmp/syncfuzz-ebpf ./cmd/syncfuzz
+docker run -d --rm --name syncfuzz-ebpf-probe --network none ubuntu:latest sleep infinity
+/tmp/syncfuzz-ebpf profile container-scope --container syncfuzz-ebpf-probe
+# Use the reported cgroup_id, then start this command before docker exec work.
+sudo /tmp/syncfuzz-ebpf profile process-monitor --cgroup-id <cgroup_id> --duration 10s --out raw-os-events.jsonl
+```
+
+The collector requires Linux cgroup v2 and `CAP_BPF`/`CAP_PERFMON` (or root). The container remains unprivileged; when the controller is invoked through `sudo`, it preserves the original caller UID/GID for the container user.
+
+For a real target command, add `--profile-processes`; SyncFuzz records controller observation checkpoints with `CLOCK_MONOTONIC` after the pre-command snapshot, after command return, and after the immediate observation. It starts the collector after the pre-command snapshot and stops it as soon as the command returns, avoiding observer-process noise in the lifecycle trace. Add `--profile-resources` to also collect successful cgroup-scoped filesystem, FD, and IPC syscalls on Linux/amd64.
+
+```bash
+sudo /tmp/syncfuzz-ebpf target run \
+  --env container \
+  --profile-processes \
+  --profile-resources \
+  --command 'sh -c "sleep 1 &"' \
+  --out runs
+```
+
+The resulting target artifact directory contains `ebpf-process-scope.json`, `ebpf-process-events.jsonl`, `ebpf-resource-scope.json`, `ebpf-resource-events.jsonl`, `checkpoint-catalog.json`, `checkpoint-state-summaries.json`, `normalized-effects.json`, and `checkpoint-effect-map.json`. The resource collector records only successful selected syscalls and bounded path/FD facts. For target commands run from `/workspace`, SyncFuzz canonicalizes relative resource paths against that root and emits `evidence_links` only for an exact canonical-path, exact-path, or exact `(device,inode)` match to an added/removed probe resource. The latter is best-effort: eBPF events resolve a still-live host FD through procfs, while process snapshots resolve workspace-held FDs in the target namespace; both fields must be present, so a short-lived FD does not become a synthetic match. This retains a deleted-but-open file's identity despite its changed pathname. A target interval becomes a frontier only when such a link exists; unrelated loader or shell-initialization events in the same interval are insufficient. For a workspace-bound Unix socket, the probe separately emits the namespace pathname, kernel socket ID, holder FD, and holder process, with explicit `bound-at-path`, `references-unix-socket`, and `held-by-process` dependency edges. IPC effects link only through the exact socket ID. These are controller observation checkpoints, not yet framework-native durable Agent checkpoints.
+
+`make ebpf-fd-identity-smoke` is the focused calibration: it writes a workspace file, opens it as FD 9 in a background process, unlinks it, and keeps that FD alive through the immediate checkpoint. A successful calibration has a deleted `container-fd` resource with nonzero `device` and `inode`, an `openat` event with the same pair, and an `exact-device-inode` entry in `checkpoint-effect-map.json`.
+
+`make ebpf-unix-socket-smoke` is the IPC calibration. It starts a workspace-bound Unix listener and leaves it alive through the immediate checkpoint. The probe must emit the endpoint's bound pathname, kernel `socket_id`, holder FD, holder process, and their explicit dependency edges. A successful privileged run also links the eBPF `bind` and/or `listen` IPC effects to the endpoint through `exact-socket-id`.
+
+The privileged calibration run `1784805732832067342` satisfies that contract: its cgroup-scoped resource trace records `bind` and `listen` with `socket:177721907`, while the container checkpoint records the same socket ID on a listener endpoint, FD 3, and its Perl holder. The frontier map includes two `exact-socket-id` links and the three closure edges. Its negative target oracle is expected: this command is a collector calibration fixture, not an `orphan-process` violation testcase.
+
+Audit the three completed known-answer runs without BPF privileges:
+
+```bash
+make ebpf-calibration-audit \
+  CALIBRATION_PATH_RUN=runs/<canonical-path-run-id> \
+  CALIBRATION_FD_RUN=runs/<deleted-fd-run-id> \
+  CALIBRATION_SOCKET_RUN=runs/<unix-socket-run-id>
+```
+
+The report states fixture-scoped precision/recall only. It is an audit of the declared known-answer links, not a global detector-quality or coverage result.
+
+After a real profiling run, V2.1b can promote a seed directly from its artifact directory:
+
+```bash
+go run ./cmd/syncfuzz profile promote-seed \
+  --objective examples/objectives/unix-listener-survival.example.json \
+  --target-run runs/<run_id> \
+  --profile-kind synthesis-candidate \
+  --synthesis-candidate runs/<candidate>.json \
+  --frontier before-command..after-command \
+  --out runs/<run_id>/state-seed.json
+go run ./cmd/syncfuzz profile recovery-pair \
+  --objective examples/objectives/unix-listener-survival.example.json \
+  --seed runs/<run_id>/state-seed.json \
+  --passive-observation passive-unix-listener-response \
+  --out runs/<run_id>/recovery-pair.json
+```
+
+Promotion rejects an incomplete command, an unprofiled run, a calibration fixture, unlinked effects, non-persistent deltas, or an objective atom absent from the selected frontier. `synthesis-candidate` is reserved for V2.4 scheduler output: its `SynthesisCandidateID` is mandatory, and a hand-authored smoke or calibration run must use `calibration-fixture` and cannot create a StateSeed. `synthesis schedule`, `generate`, `execute-langgraph`, `evaluate`, and `promote` provide the objective-only scheduler, strict generator command contract, real candidate execution, execution-derived feedback, and retention gate. `execute-langgraph` requires the repository’s dedicated image, process/resource eBPF privileges, and explicit network permission for the model provider; it forwards provider credentials only as process environment and does not persist them. Its `langgraph-native-checkpoints.json` proves the disk-backed native checkpoint namespace and records the `persisted_monotonic_ns` of each exact checkpoint. `synthesis bind-langgraph-frontier` accepts only a matching native runtime and selects the closest native checkpoints strictly before and after the linked objective-effect window; manifest history order or controller checkpoint names alone are rejected. The resulting binding is not yet a recovery plan or executor. `synthesis bind-maf-frontier` additionally requires a matching native MAF runtime identity and persisted before/after queue coordinates before it writes a durable recovery plan. No built-in LLM generator is selected. Pair construction reuses the seed's recorded plan artifact; it cannot substitute a different plan artifact.
+
+The V2.3 recovery core requires an adapter to expose a real durable checkpoint/fork API. It binds both observations to the same recorded plan and passive observation, requires separate runtime instances, and classifies deterministic evidence as `consistent`, `residual`, `missing`, `duplicate`, `reconstruction`, or `inconclusive`. The first registered adapter is `maf-workflow`: its adapter plan records the mapping from V2 coordinate to the exact MAF `FileCheckpointStorage` ID, and its runner rebuilds a Workflow object in each recovery runtime. `make maf-workflow-native-fork-smoke` is the associated local calibration; it is deliberately not eligible for StateSeed promotion or coverage. The generic command adapter is deliberately ineligible: its controller checkpoints are profiling observations, not durable Agent recovery points.
 
 ## Implemented Seed: Orphan Process
 

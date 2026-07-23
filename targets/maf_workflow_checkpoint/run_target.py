@@ -6,11 +6,14 @@ import hashlib
 import http.server
 import json
 import os
+import shutil
 import sys
 import threading
+import time
 import traceback
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +36,8 @@ APPROVAL_PENDING_ARTIFACT = "maf-workflow-approval-pending-check.txt"
 REHYDRATE_DIVERGENCE_ARTIFACT = "maf-workflow-rehydrate-divergence-check.txt"
 SUMMARY_ARTIFACT = "maf-workflow-summary.json"
 CHECKPOINT_DIR = "maf-workflow-checkpoints"
+FORK_MANIFEST_ARTIFACT = "maf-workflow-fork-manifest.json"
+FORK_OBSERVATION_ARTIFACT = "maf-workflow-fork-observation.json"
 CHECKPOINT_CONTINUITY_TASK = "maf-workflow-checkpoint-continuity"
 EXTERNAL_EFFECT_REPLAY_TASK = "maf-workflow-external-effect-replay"
 HTTP_EFFECT_REPLAY_TASK = "maf-workflow-http-effect-replay"
@@ -66,6 +71,10 @@ def sha256_text(value: str) -> str:
 
 
 def checkpoint_ids(checkpoint_dir: Path) -> list[str]:
+    return [record["checkpoint_id"] for record in checkpoint_records(checkpoint_dir)]
+
+
+def checkpoint_records(checkpoint_dir: Path) -> list[dict[str, Any]]:
     def sort_key(path: Path) -> tuple[int, str, str]:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -74,7 +83,36 @@ def checkpoint_ids(checkpoint_dir: Path) -> list[str]:
             return 0, "", path.name
 
     checkpoints = sorted(checkpoint_dir.glob("*.json"), key=sort_key)
-    return [path.stem for path in checkpoints]
+    records: list[dict[str, Any]] = []
+    for path in checkpoints:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        records.append(
+            {
+                "checkpoint_id": path.stem,
+                "iteration_count": int(data.get("iteration_count") or 0),
+                "timestamp": str(data.get("timestamp") or ""),
+                "logical_states": sorted(_json_string_values(data, "logical_state")),
+                "message_targets": sorted(str(target) for target in data.get("messages", {}).keys()),
+            }
+        )
+    return records
+
+
+def _json_string_values(value: Any, field: str) -> set[str]:
+    values: set[str] = set()
+    if isinstance(value, dict):
+        direct = value.get(field)
+        if isinstance(direct, str):
+            values.add(direct)
+        for child in value.values():
+            values.update(_json_string_values(child, field))
+    elif isinstance(value, list):
+        for child in value:
+            values.update(_json_string_values(child, field))
+    return values
 
 
 async def run_probe(workspace: Path, task_id: str, pre_timeout: float, restore_timeout: float) -> int:
@@ -220,6 +258,295 @@ async def run_checkpoint_continuity(workspace: Path, pre_timeout: float, restore
     if summary["restored"] and summary["continuity_observed"]:
         return 0
     return 1
+
+
+def _read_marker_effect(effect_path: Path) -> bool:
+    return effect_path.exists() and MARKER in effect_path.read_text(encoding="utf-8")
+
+
+def _build_v2_checkpoint_continuity_workflow(
+    workspace: Path,
+    storage: Any,
+    events: list[dict[str, Any]],
+    *,
+    write_witness: bool,
+):
+    """Build the smallest real MAF workflow used by the V2.3 fork adapter.
+
+    The extra Start executor deliberately makes two durable MAF checkpoints:
+    one before Plant writes the workspace effect, and one after it.  These are
+    Agent-native coordinates, not SyncFuzz controller observation markers.
+    """
+
+    from agent_framework import Executor, WorkflowBuilder, WorkflowContext, handler
+
+    effect_path = workspace / EFFECT_ARTIFACT
+    witness_path = workspace / WITNESS_ARTIFACT
+
+    class StartExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="v2-start")
+
+        @handler
+        async def process(self, message: str, ctx: WorkflowContext[str]) -> None:
+            events.append({"phase": "start", "message": message, "monotonic_ns": time.monotonic_ns()})
+            await ctx.send_message(message)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            events.append({"phase": "checkpoint-save", "executor": "start", "monotonic_ns": time.monotonic_ns()})
+            return {"logical_state": "before-effect", "effect_exists": _read_marker_effect(effect_path)}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "start-restore", "state": state, "monotonic_ns": time.monotonic_ns()})
+
+    class PlantExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="v2-plant")
+
+        @handler
+        async def process(self, message: str, ctx: WorkflowContext[str]) -> None:
+            effect_path.write_text(f"{MARKER}\nSOURCE={message}\n", encoding="utf-8")
+            events.append({"phase": "plant", "monotonic_ns": time.monotonic_ns()})
+            await ctx.send_message(MARKER)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            events.append({"phase": "checkpoint-save", "executor": "plant", "monotonic_ns": time.monotonic_ns()})
+            return {"logical_state": "after-effect", "effect_exists": _read_marker_effect(effect_path)}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "plant-restore", "state": state, "monotonic_ns": time.monotonic_ns()})
+
+    class CheckExecutor(Executor):
+        def __init__(self) -> None:
+            super().__init__(id="v2-check")
+
+        @handler
+        async def process(self, marker: str, ctx: WorkflowContext[Never, str]) -> None:
+            present = _read_marker_effect(effect_path)
+            label = "PRESENT_MAF_WORKFLOW_MARKER" if present else "MISSING_MAF_WORKFLOW_MARKER"
+            events.append(
+                {
+                    "phase": "check",
+                    "marker": marker,
+                    "present": present,
+                    "write_witness": write_witness,
+                    "monotonic_ns": time.monotonic_ns(),
+                }
+            )
+            if write_witness:
+                witness_path.write_text(f"{label}\nVALUE={marker if present else 'MISSING'}\n", encoding="utf-8")
+                await ctx.yield_output(label)
+
+        async def on_checkpoint_save(self) -> dict[str, Any]:
+            events.append({"phase": "checkpoint-save", "executor": "check", "monotonic_ns": time.monotonic_ns()})
+            return {"logical_state": "after-effect", "effect_exists": _read_marker_effect(effect_path)}
+
+        async def on_checkpoint_restore(self, state: dict[str, Any]) -> None:
+            events.append({"phase": "check-restore", "state": state, "monotonic_ns": time.monotonic_ns()})
+
+    start = StartExecutor()
+    plant = PlantExecutor()
+    check = CheckExecutor()
+    return (
+        WorkflowBuilder(
+            start_executor=start,
+            name=WORKFLOW_NAME + "-v2-fork",
+            checkpoint_storage=storage,
+            max_iterations=100,
+            output_from=[check],
+        )
+        .add_edge(start, plant)
+        .add_edge(plant, check)
+        .build()
+    )
+
+
+async def prepare_v2_fork(workspace: Path, task_id: str, pre_timeout: float) -> int:
+    """Create a reusable, real MAF durable-checkpoint fixture for fork tests."""
+
+    from agent_framework import FileCheckpointStorage
+
+    if task_id != CHECKPOINT_CONTINUITY_TASK:
+        raise ValueError("V2.3 MAF fork preparation currently supports only " + CHECKPOINT_CONTINUITY_TASK)
+    checkpoint_dir = workspace / CHECKPOINT_DIR
+    manifest_path = workspace / FORK_MANIFEST_ARTIFACT
+    if checkpoint_dir.exists() and any(checkpoint_dir.iterdir()):
+        raise ValueError(f"refusing to reuse non-empty MAF checkpoint directory: {checkpoint_dir}")
+    if manifest_path.exists():
+        raise ValueError(f"refusing to overwrite existing fork manifest: {manifest_path}")
+    workspace.mkdir(parents=True, exist_ok=True)
+    storage = FileCheckpointStorage(checkpoint_dir)
+    events: list[dict[str, Any]] = []
+    try:
+        await asyncio.wait_for(
+            _build_v2_checkpoint_continuity_workflow(workspace, storage, events, write_witness=False).run("syncfuzz-v2-start"),
+            timeout=pre_timeout,
+        )
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError("initial MAF workflow did not complete while preparing V2.3 fork checkpoints") from exc
+
+    records = checkpoint_records(checkpoint_dir)
+    if len(records) < 2:
+        raise RuntimeError(
+            "MAF workflow did not persist the required before/after durable checkpoints; "
+            f"observed {len(records)} checkpoint(s)"
+        )
+    if not _read_marker_effect(workspace / EFFECT_ARTIFACT):
+        raise RuntimeError("initial MAF workflow did not form the expected workspace effect")
+    # MAF serializes every executor's custom state in every checkpoint, so the
+    # executor-state payload alone cannot identify the active recovery
+    # coordinate. Its native checkpoint message queue can: v2-start is the
+    # queue before Plant executes, while v2-plant carries Plant's marker after
+    # the effect was formed. This checks that persisted native data directly;
+    # it never assigns before/after from file order.
+    before_record = next((record for record in records if "v2-start" in record["message_targets"]), None)
+    after_record = next((record for record in records if "v2-plant" in record["message_targets"]), None)
+    if before_record is None or after_record is None or before_record["checkpoint_id"] == after_record["checkpoint_id"]:
+        raise RuntimeError(
+            "MAF durable checkpoints did not preserve distinct active-message recovery coordinates; "
+            "the V2.3 adapter will not infer them from checkpoint order"
+        )
+    native_checkpoints = [
+        {
+            **before_record,
+            "coordinate": "before-effect",
+            "agent_state": "absent",
+            "expected_effect": "absent",
+        },
+        {
+            **after_record,
+            "coordinate": "after-effect",
+            "agent_state": "present",
+            "expected_effect": "present",
+        },
+    ]
+    manifest = {
+        "schema_version": "syncfuzz.maf-workflow-fork-manifest.v1",
+        "task_id": task_id,
+        "workflow_name": WORKFLOW_NAME + "-v2-fork",
+        "checkpoint_backend": "file",
+        "checkpoint_dir": str(checkpoint_dir),
+        "native_checkpoints": native_checkpoints,
+        "initial_runtime_instance_id": "maf-workflow-initial-" + uuid.uuid4().hex,
+        "initial_events": events,
+    }
+    write_json(manifest_path, manifest)
+    return 0
+
+
+def _copy_fork_workspace(source_workspace: Path, destination_workspace: Path) -> None:
+    source = source_workspace.resolve()
+    destination = destination_workspace.resolve()
+    if not source.is_dir():
+        raise ValueError(f"prepared MAF fork workspace does not exist: {source}")
+    if destination.exists():
+        raise ValueError(f"refusing to overwrite fork runtime workspace: {destination}")
+    try:
+        destination.relative_to(source)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("fork runtime workspace must not be created inside the prepared workspace")
+    shutil.copytree(source, destination)
+
+
+async def observe_v2_fork(
+    source_workspace: Path,
+    workspace: Path,
+    task_id: str,
+    checkpoint_id: str,
+    runtime_instance_id: str,
+    restore_timeout: float,
+    observation_out: Path,
+) -> int:
+    """Restore one exact MAF file checkpoint in a new Python runtime.
+
+    `source_workspace` is immutable input from preparation.  Every invocation
+    creates a separate copy, rebuilds the Workflow object, and restores the
+    selected file checkpoint inside that fresh process/runtime.
+    """
+
+    from agent_framework import FileCheckpointStorage
+
+    if task_id != CHECKPOINT_CONTINUITY_TASK:
+        raise ValueError("V2.3 MAF fork observation currently supports only " + CHECKPOINT_CONTINUITY_TASK)
+    _copy_fork_workspace(source_workspace, workspace)
+    manifest_path = workspace / FORK_MANIFEST_ARTIFACT
+    if not manifest_path.exists():
+        raise ValueError(f"prepared MAF fork manifest is missing: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != "syncfuzz.maf-workflow-fork-manifest.v1":
+        raise ValueError("prepared MAF fork manifest has an unsupported schema")
+    selected = next(
+        (record for record in manifest.get("native_checkpoints", []) if record.get("checkpoint_id") == checkpoint_id),
+        None,
+    )
+    if selected is None:
+        raise ValueError(f"checkpoint {checkpoint_id!r} is not listed by the prepared MAF fork manifest")
+    checkpoint_dir = workspace / CHECKPOINT_DIR
+    if not (checkpoint_dir / f"{checkpoint_id}.json").is_file():
+        raise ValueError(f"durable MAF checkpoint file is missing: {checkpoint_id}")
+
+    effect_path = workspace / EFFECT_ARTIFACT
+    effect_before = _read_marker_effect(effect_path)
+    events: list[dict[str, Any]] = []
+    storage = FileCheckpointStorage(checkpoint_dir)
+    restored = False
+    restore_error = ""
+    outputs: list[str] = []
+    try:
+        result = await asyncio.wait_for(
+            _build_v2_checkpoint_continuity_workflow(workspace, storage, events, write_witness=True).run(
+                checkpoint_id=checkpoint_id,
+                checkpoint_storage=storage,
+            ),
+            timeout=restore_timeout,
+        )
+        outputs = [str(value) for value in result.get_outputs()]
+        restored = True
+    except Exception as exc:
+        restore_error = f"{type(exc).__name__}: {exc}"
+
+    effect_after = _read_marker_effect(effect_path)
+    plant_reexecuted = any(event.get("phase") == "plant" for event in events)
+    if not effect_after:
+        os_state = "absent"
+        os_state_origin = "none"
+    elif plant_reexecuted:
+        os_state = "present"
+        os_state_origin = "reconstructed"
+    else:
+        os_state = "present"
+        os_state_origin = "residual"
+    multiplicity = "duplicate" if sum(1 for event in events if event.get("phase") == "plant") > 1 else "single"
+    evidence = [
+        "restored exact MAF file checkpoint " + checkpoint_id,
+        "recreated Workflow object in runtime " + runtime_instance_id,
+        "logical checkpoint coordinate " + str(selected.get("coordinate") or "unknown"),
+        "workspace effect before recovery=" + str(effect_before).lower(),
+        "workspace effect after recovery=" + str(effect_after).lower(),
+        "plant reexecuted during recovery=" + str(plant_reexecuted).lower(),
+    ]
+    if restore_error:
+        evidence.append("restore error: " + restore_error)
+    observation = {
+        "schema_version": "syncfuzz.maf-workflow-fork-observation.v1",
+        "task_id": task_id,
+        "checkpoint_id": checkpoint_id,
+        "checkpoint_coordinate": selected.get("coordinate", ""),
+        "runtime_instance_id": runtime_instance_id,
+        "workflow_object_recreated": True,
+        "restored": restored,
+        "agent_state": selected.get("agent_state", "unknown"),
+        "os_state": os_state,
+        "os_state_origin": os_state_origin,
+        "effect_multiplicity": multiplicity,
+        "outputs": outputs,
+        "events": events,
+        "evidence": evidence,
+    }
+    write_json(observation_out, observation)
+    return 0 if restored and effect_after else 1
 
 
 async def run_external_effect_replay(workspace: Path, pre_timeout: float, restore_timeout: float) -> int:
@@ -1815,9 +2142,15 @@ def load_task_id(task_file: str | None) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="SyncFuzz MAF Workflow checkpoint target")
     parser.add_argument("--workspace", required=False)
+    parser.add_argument("--source-workspace", help="immutable prepared workspace used by --mode fork-observe")
+    parser.add_argument("--task-id", help="explicit target task id; used by the V2.3 recovery adapter")
     parser.add_argument("--task-file")
     parser.add_argument("--prompt-file")
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--mode", choices=("full", "prepare-fork", "fork-observe"), default="full")
+    parser.add_argument("--checkpoint-id", help="exact native MAF checkpoint ID used by --mode fork-observe")
+    parser.add_argument("--runtime-instance-id", help="unique fresh runtime identity recorded by --mode fork-observe")
+    parser.add_argument("--observation-out", help="fork observation JSON path; defaults inside the fork workspace")
     parser.add_argument("--pre-timeout", type=float, default=float(os.environ.get("MAF_WORKFLOW_PRE_TIMEOUT", "2.0")))
     parser.add_argument("--restore-timeout", type=float, default=float(os.environ.get("MAF_WORKFLOW_RESTORE_TIMEOUT", "5.0")))
     args = parser.parse_args()
@@ -1829,9 +2162,27 @@ def main() -> int:
         return 0
 
     workspace = Path(args.workspace or os.environ.get("SYNCFUZZ_WORKSPACE", ".")).resolve()
-    task_id = load_task_id(args.task_file)
+    task_id = args.task_id or load_task_id(args.task_file)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    if args.mode == "prepare-fork":
+        return loop.run_until_complete(prepare_v2_fork(workspace, task_id, args.pre_timeout))
+    if args.mode == "fork-observe":
+        if not args.source_workspace or not args.checkpoint_id:
+            parser.error("--mode fork-observe requires --source-workspace and --checkpoint-id")
+        runtime_instance_id = args.runtime_instance_id or "maf-workflow-fork-" + uuid.uuid4().hex
+        observation_out = Path(args.observation_out).resolve() if args.observation_out else workspace / FORK_OBSERVATION_ARTIFACT
+        return loop.run_until_complete(
+            observe_v2_fork(
+                Path(args.source_workspace).resolve(),
+                workspace,
+                task_id,
+                args.checkpoint_id,
+                runtime_instance_id,
+                args.restore_timeout,
+                observation_out,
+            )
+        )
     return loop.run_until_complete(run_probe(workspace, task_id, args.pre_timeout, args.restore_timeout))
 
 

@@ -179,6 +179,25 @@ The run writes extra workspace artifacts:
 
 These summarize thread history, checkpoint ids, checkpoint backend selection, shell/session identity, replay/fork boundaries, and the final messages returned by the agent.
 
+## V2 Synthesis Profiling Container
+
+`Dockerfile` builds the dedicated runtime image used by the V2 candidate path.
+It contains this wrapper and its Python dependencies, but no provider
+credentials. SyncFuzz launches it as an unprivileged, capability-dropped
+container; the eBPF collectors remain on the host and filter the container
+cgroup.
+
+The profile command requires an explicit network opt-in because the agent must
+reach its model provider. It forwards only the provider variables needed by the
+wrapper (`LANGCHAIN_MODEL`, provider key, and optional endpoint) and does not
+store them in run artifacts. A completed run records both normal profiling
+artifacts and `langgraph-native-checkpoints.json`. The latter identifies the
+durable LangGraph checkpoint namespace and records `persisted_monotonic_ns`
+for every exact checkpoint write. `synthesis bind-langgraph-frontier` can use
+those timestamps, the controller frontier, and linked eBPF objective effects
+to prove a before/after native binding. It still is not a recovery plan: the
+fresh-runtime native fork executor has not yet been implemented.
+
 The run artifact directory now also includes `target-contract-profile.json` when `--target langgraph-shell-react` is used. That profile describes the current SyncFuzz contract reading for this integrated target.
 
 In `target-result.json`, the embedded `target_oracle` now exposes both a backward-compatible boolean `confirmed` and a more explicit `status` field. `status=negative` means the run produced evidence for a clean or non-vulnerable outcome, while `status=inconclusive` means the run produced some evidence but not enough to support a confident residue attribution.
@@ -232,6 +251,8 @@ For `socket-response-poisoning`, SyncFuzz automatically forks from `before-unix-
 Replay and fork lifecycle tasks now default to the durable `disk` checkpoint backend. That backend persists checkpoint state under `langgraph-checkpoints/` inside the SyncFuzz workspace and describes the resulting files in `langgraph-checkpointer.json`.
 
 If you set `LANGGRAPH_PROCESS_MODE=split-process`, the wrapper performs the initial branch and the replay/fork follow-up in separate Python processes while reusing the same durable checkpoint directory. In that mode the workspace keeps phase artifacts such as `langgraph-run-summary-initial.json`, `langgraph-run-summary-resume.json`, `langgraph-lifecycle-initial.json`, `langgraph-lifecycle-resume.json`, `langgraph-checkpointer-initial.json`, and `langgraph-checkpointer-resume.json`, then merges them back into the canonical artifact names.
+
+For native-checkpoint recovery plumbing, `--checkpoint-id` selects one exact durable LangGraph checkpoint in the fresh resume process. It is mutually exclusive with `--checkpoint-index` and `--checkpoint-selector`; a native ID from another initial runtime is rejected rather than falling back by history order. A bound recovery run instead uses `--checkpoint-coordinate-file`: it retains the profiled history index as provenance but resolves the fresh runtime from the semantic state shape (`message_count` and `next` nodes), which must match exactly one newly persisted native ID. This tolerates harmless extra setup turns without falling back to an arbitrary checkpoint. `--passive-fork-observe` then performs no follow-up agent turn; it only rehydrates that selected state in a fresh Python process and records the fixed observation. It requires `--passive-unix-socket-path branch-listener.sock`, which writes `langgraph-recovery-observation.json` with pre/post `lstat` metadata (device, inode, mode and existence) for that workspace-contained endpoint. It never connects to, creates, replaces, or unlinks the socket, so this is a fixed OS-level passive observation, not a protocol-level client action.
 
 When `--late-observe-delay` is enabled, SyncFuzz also writes `snapshot-late.json`, `process-late.json`, and `filesystem-late-metadata.json` in the run artifact directory.
 

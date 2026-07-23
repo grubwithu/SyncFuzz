@@ -9,12 +9,13 @@ import (
 )
 
 const (
-	langgraphHistoryArtifact    = "langgraph-history.json"
-	langgraphSummaryArtifact    = "langgraph-run-summary.json"
-	langgraphLifecycleArtifact  = "langgraph-lifecycle.json"
-	langgraphCheckpointArtifact = "langgraph-checkpointer.json"
-	LanggraphReplayArtifact     = "langgraph-replay-summary.json"
-	LanggraphForkArtifact       = "langgraph-fork-summary.json"
+	langgraphHistoryArtifact                  = "langgraph-history.json"
+	langgraphSummaryArtifact                  = "langgraph-run-summary.json"
+	langgraphLifecycleArtifact                = "langgraph-lifecycle.json"
+	langgraphCheckpointArtifact               = "langgraph-checkpointer.json"
+	langgraphNativeCheckpointManifestArtifact = "langgraph-native-checkpoints.json"
+	LanggraphReplayArtifact                   = "langgraph-replay-summary.json"
+	LanggraphForkArtifact                     = "langgraph-fork-summary.json"
 )
 
 type langgraphHistoryCheckpoint struct {

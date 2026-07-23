@@ -1,0 +1,92 @@
+{
+  "schema_version": "syncfuzz.objective.v1",
+  "profile_run_id": "profile-unix-listener-example",
+  "kind": "calibration-fixture",
+  "objective_id": "ipc.unix-listener.survival",
+  "target_id": "calibration-fixture",
+  "adapter_id": "fixture",
+  "recorded_plan_id": "recorded-plan:profile-unix-listener-example",
+  "recorded_plan_artifact": "examples/profiling/unix-listener-recorded-plan.example.json",
+  "checkpoint_effect_map": {
+    "schema_version": "syncfuzz.profiling.v2",
+    "run_id": "profile-unix-listener-example",
+    "intervals": [
+      {
+        "frontier_id": "C0..C1",
+        "before_checkpoint_id": "C0",
+        "after_checkpoint_id": "C1",
+        "start_monotonic_ns": 100,
+        "end_monotonic_ns": 200,
+        "effects": [
+          {
+            "effect_id": "event-0003/2",
+            "source_event_id": "event-0003",
+            "monotonic_ns": 150,
+            "family": "ipc",
+            "operation": "bind",
+            "resource": {
+              "kind": "unix-socket",
+              "path": "branch-listener.sock",
+              "socket_id": "socket:123"
+            },
+            "process": {
+              "pid": 4100,
+              "comm": "listener-daemon"
+            },
+            "persistence_potential": true
+          },
+          {
+            "effect_id": "event-0004/2",
+            "source_event_id": "event-0004",
+            "monotonic_ns": 160,
+            "family": "ipc",
+            "operation": "listen",
+            "resource": {
+              "kind": "unix-socket",
+              "path": "branch-listener.sock",
+              "socket_id": "socket:123",
+              "fd": 3
+            },
+            "process": {
+              "pid": 4100,
+              "comm": "listener-daemon"
+            },
+            "persistence_potential": true
+          }
+        ],
+        "persistent_delta": {
+          "added": [
+            {
+              "resource": {
+                "resource_id": "unix:branch-listener.sock",
+                "family": "ipc",
+                "kind": "unix-listener",
+                "path": "branch-listener.sock",
+                "socket_id": "socket:123",
+                "fd": 3,
+                "holder_pid": 4100
+              },
+              "observed": true
+            }
+          ]
+        },
+        "evidence_links": [
+          {
+            "link_id": "event-0003/2=>unix:branch-listener.sock",
+            "effect_id": "event-0003/2",
+            "resource_id": "unix:branch-listener.sock",
+            "relation": "exact-socket-id"
+          },
+          {
+            "link_id": "event-0004/2=>unix:branch-listener.sock",
+            "effect_id": "event-0004/2",
+            "resource_id": "unix:branch-listener.sock",
+            "relation": "exact-socket-id"
+          }
+        ],
+        "score": 30,
+        "is_frontier": true
+      }
+    ]
+  }
+}

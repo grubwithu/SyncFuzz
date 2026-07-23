@@ -1,0 +1,16 @@
+{
+  "schema_version": "syncfuzz.synthesis-scaffold.v1",
+  "target_id": "maf-workflow-checkpoint",
+  "adapter_id": "maf-workflow",
+  "project_context": "A local development workspace for an integration service. The framework can build a MAF Workflow and persist FileCheckpointStorage artifacts.",
+  "available_capabilities": [
+    "workspace-files",
+    "local-processes",
+    "maf-workflow-file-checkpoints"
+  ],
+  "constraints": [
+    "Produce a normal software-engineering task.",
+    "Do not mention SyncFuzz, checkpoints, state desynchronization, or a desired witness.",
+    "Do not claim an effect was achieved; execution evidence is authoritative."
+  ]
+}

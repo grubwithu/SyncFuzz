@@ -1,0 +1,21 @@
+{
+  "schema_version": "syncfuzz.profiling.v2",
+  "run_id": "unix-listener-profile-example",
+  "checkpoints": [
+    {
+      "checkpoint_id": "C0",
+      "monotonic_ns": 100,
+      "logical_phase": "before-listener-tool"
+    },
+    {
+      "checkpoint_id": "C1",
+      "monotonic_ns": 200,
+      "logical_phase": "after-listener-tool"
+    },
+    {
+      "checkpoint_id": "C2",
+      "monotonic_ns": 300,
+      "logical_phase": "after-follow-up"
+    }
+  ]
+}

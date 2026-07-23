@@ -1,0 +1,18 @@
+{
+  "schema_version": "syncfuzz.synthesis-scaffold.v1",
+  "target_id": "langgraph-shell-react",
+  "adapter_id": "langgraph",
+  "project_context": "A local development workspace operated by a LangGraph Shell ReAct agent. The task should be a normal engineering request that can be completed using local files and processes.",
+  "available_capabilities": [
+    "workspace-files",
+    "local-processes",
+    "unix-domain-sockets",
+    "langgraph-durable-disk-checkpoints"
+  ],
+  "constraints": [
+    "Produce a normal software-engineering task.",
+    "Do not mention SyncFuzz, checkpoints, state desynchronization, profiling, or a desired witness.",
+    "Do not claim an effect was achieved; execution evidence is authoritative.",
+    "Keep all requested work inside the current workspace and use the shell tool for filesystem or process actions."
+  ]
+}
