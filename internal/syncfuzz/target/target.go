@@ -911,7 +911,10 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	}
 
 	var retainedRuntime *TargetRuntimeLease
-	if opts.RetainEnvironment {
+	// A failed or timed-out target run is never eligible for recovery. Keep the
+	// normal cleanup path in that case so --retain-runtime cannot leak an
+	// unusable source container without a persisted, valid profile lease.
+	if opts.RetainEnvironment && completed {
 		if run.Environment != "container" || strings.TrimSpace(run.ContainerName) == "" {
 			return nil, fmt.Errorf("retaining a target runtime requires a container environment")
 		}

@@ -98,10 +98,15 @@ Usage:
   syncfuzz profile recovery-pair --objective objective.json --seed state-seed.json --passive-observation observation-id --out recovery-pair.json
   syncfuzz profile recovery-set --objective objective.json --seed state-seed.json --passive-observation observation-id [--retention-policy retain-relevant-os-state] --out historical-recovery-set.json
   syncfuzz recovery execute --seed state-seed.json [--pair recovery-pair.json | --set historical-recovery-set.json] [--out recovery-execution.json] [--timeout 2m]
+  syncfuzz recovery fidelity-report --roots runs/<trial-a>,runs/<trial-b> --out fidelity-report.json
+  syncfuzz recovery fidelity-batch-report --root runs/<batch> --target-accepted-trials 3 --max-attempts 6 --out fidelity-report.json
   syncfuzz synthesis schedule --objectives objective-a.json,objective-b.json [--coverage-ledger coverage.json] [--limit 0] --out schedule.json
-  syncfuzz synthesis generate --objective objective.json --target <target-id> --adapter <adapter-id> --scaffold <scaffold-artifact> --generator-id <id> --generator-command '<command>' [--attempt 0] --out candidate.json
+  syncfuzz synthesis generate --objective objective.json --target <target-id> --adapter <adapter-id> --scaffold <scaffold-artifact> --generator-id <id> --generator-command '<command>' [--attempt 0] [--feedback candidate-evaluation.json] --out candidate.json
   syncfuzz synthesis execute-langgraph --objective objective.json --candidate candidate.json --allow-network --retain-runtime [--container-image syncfuzz-langgraph:dev] [--out runs/langgraph-candidate-execution.json] [--out-profile-run profile-run.json]
   syncfuzz synthesis evaluate --objective objective.json --candidate candidate.json --profile-run profile-run.json --out evaluation.json
+  syncfuzz synthesis evaluation-status --objective objective.json --evaluation evaluation.json [--require-eligible]
+  syncfuzz synthesis statefuzz-attempt-status --objective objective.json --candidate candidate.json [--evaluation evaluation.json] --attempt 0 --artifact-root runs/<attempt> --status accepted|rejected-evaluation|rejected-source-baseline|execution-failed [--reason reason] --out statefuzz-attempt.json
+  syncfuzz synthesis statefuzz-batch-report --objective objective.json --root runs/<batch> --out statefuzz-batch-report.json
   syncfuzz synthesis promote --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --out state-seed.json
   syncfuzz synthesis bind-maf-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest maf-workflow-fork-manifest.json --python python3 --runner targets/maf_workflow_checkpoint/run_target.py --prepared-workspace prepared --runtime-root forks --out-plan maf-fork-plan.json --out-profile-run bound-profile-run.json --out-binding native-frontier-binding.json
   syncfuzz synthesis bind-langgraph-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest langgraph-native-checkpoints.json --out-binding langgraph-native-frontier-binding.json
@@ -160,16 +165,123 @@ func profile(args []string) {
 
 func runRecovery(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "syncfuzz recovery requires a subcommand; supported: execute")
+		fmt.Fprintln(os.Stderr, "syncfuzz recovery requires a subcommand; supported: execute, fidelity-report, fidelity-attempt, fidelity-batch-report")
 		os.Exit(2)
 	}
 	switch args[0] {
 	case "execute":
 		recoveryExecute(args[1:])
+	case "fidelity-report":
+		recoveryFidelityReport(args[1:])
+	case "fidelity-attempt":
+		recoveryFidelityAttempt(args[1:])
+	case "fidelity-batch-report":
+		recoveryFidelityBatchReport(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown syncfuzz recovery subcommand %q\n", args[0])
 		os.Exit(2)
 	}
+}
+
+func recoveryFidelityReport(args []string) {
+	fs := flag.NewFlagSet("recovery fidelity-report", flag.ExitOnError)
+	rootsValue := fs.String("roots", "", "comma-separated synthesis-langgraph-v3-fidelity trial roots")
+	outPath := fs.String("out", "fidelity-report.json", "probe fidelity report JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	roots := splitCSV(*rootsValue)
+	if len(roots) == 0 || strings.TrimSpace(*outPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz recovery fidelity-report requires --roots and --out")
+		os.Exit(2)
+	}
+	inputs := make([]recovery.LangGraphProbeFidelityTrialInput, 0, len(roots))
+	for _, root := range roots {
+		input, err := recovery.ReadLangGraphProbeFidelityTrial(root)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz recovery fidelity-report failed: %v\n", err)
+			os.Exit(1)
+		}
+		inputs = append(inputs, input)
+	}
+	report, err := recovery.BuildLangGraphProbeFidelityReport(inputs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery fidelity-report failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := recovery.WriteLangGraphProbeFidelityReport(*outPath, report); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery fidelity-report failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("paired_trials: %d\n", report.Comparison.PairedTrials)
+	fmt.Printf("full_mean_probe_duration_ns: %d\n", report.Full.Metrics.MeanDurationNS)
+	fmt.Printf("pruned_mean_probe_duration_ns: %d\n", report.Pruned.Metrics.MeanDurationNS)
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func recoveryFidelityAttempt(args []string) {
+	fs := flag.NewFlagSet("recovery fidelity-attempt", flag.ExitOnError)
+	attemptIndex := fs.Int("attempt-index", 0, "one-based provider attempt index")
+	artifactRoot := fs.String("artifact-root", "", "attempt artifact root")
+	status := fs.String("status", "", "accepted, rejected-source-baseline, or execution-failed")
+	reason := fs.String("reason", "", "stable failure reason for a rejected or failed attempt")
+	failureStage := fs.String("failure-stage", "", "stage that rejected or failed the attempt")
+	logArtifact := fs.String("log-artifact", "", "attempt log artifact path")
+	outPath := fs.String("out", "attempt.json", "attempt record JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	attempt := recovery.LangGraphProbeFidelityAttempt{
+		SchemaVersion: recovery.LangGraphProbeFidelityAttemptSchema,
+		AttemptIndex:  *attemptIndex,
+		ArtifactRoot:  strings.TrimSpace(*artifactRoot),
+		Status:        recovery.LangGraphProbeFidelityAttemptStatus(strings.TrimSpace(*status)),
+		Reason:        strings.TrimSpace(*reason),
+		FailureStage:  strings.TrimSpace(*failureStage),
+		LogArtifact:   strings.TrimSpace(*logArtifact),
+	}
+	if err := recovery.WriteLangGraphProbeFidelityAttempt(*outPath, attempt); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery fidelity-attempt failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("attempt_index: %d\n", attempt.AttemptIndex)
+	fmt.Printf("status: %s\n", attempt.Status)
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func recoveryFidelityBatchReport(args []string) {
+	fs := flag.NewFlagSet("recovery fidelity-batch-report", flag.ExitOnError)
+	root := fs.String("root", "", "fidelity batch root containing attempt-*/attempt.json")
+	targetAcceptedTrials := fs.Int("target-accepted-trials", 0, "number of accepted full/pruned pairs required")
+	maxAttempts := fs.Int("max-attempts", 0, "maximum provider attempts permitted for the batch")
+	outPath := fs.String("out", "fidelity-report.json", "probe fidelity batch report JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*root) == "" || *targetAcceptedTrials <= 0 || *maxAttempts < *targetAcceptedTrials || strings.TrimSpace(*outPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz recovery fidelity-batch-report requires --root, positive --target-accepted-trials, --max-attempts at least that target, and --out")
+		os.Exit(2)
+	}
+	inputs, err := recovery.ReadLangGraphProbeFidelityBatchAttempts(*root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery fidelity-batch-report failed: %v\n", err)
+		os.Exit(1)
+	}
+	report, err := recovery.BuildLangGraphProbeFidelityBatchReport(*targetAcceptedTrials, *maxAttempts, inputs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery fidelity-batch-report failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := recovery.WriteLangGraphProbeFidelityBatchReport(*outPath, report); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery fidelity-batch-report failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("attempts: %d\n", report.AttemptCount)
+	fmt.Printf("accepted_trials: %d\n", report.AcceptedTrialCount)
+	fmt.Printf("rejected_source_baselines: %d\n", report.RejectedSourceBaselineCount)
+	fmt.Printf("execution_failures: %d\n", report.ExecutionFailureCount)
+	fmt.Printf("complete: %t\n", report.Complete)
+	fmt.Printf("artifact: %s\n", *outPath)
 }
 
 func recoveryExecute(args []string) {
@@ -257,7 +369,7 @@ func recoveryExecute(args []string) {
 
 func runSynthesis(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "syncfuzz synthesis requires a subcommand; supported: schedule, generate, execute-langgraph, evaluate, promote, bind-maf-frontier, bind-langgraph-frontier, prepare-langgraph-fork, release-langgraph-runtime")
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis requires a subcommand; supported: schedule, generate, execute-langgraph, evaluate, evaluation-status, statefuzz-attempt-status, statefuzz-batch-report, promote, bind-maf-frontier, bind-langgraph-frontier, prepare-langgraph-fork, release-langgraph-runtime")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -269,6 +381,12 @@ func runSynthesis(args []string) {
 		synthesisExecuteLangGraph(args[1:])
 	case "evaluate":
 		synthesisEvaluate(args[1:])
+	case "evaluation-status":
+		synthesisEvaluationStatus(args[1:])
+	case "statefuzz-attempt-status":
+		synthesisStateFuzzAttemptStatus(args[1:])
+	case "statefuzz-batch-report":
+		synthesisStateFuzzBatchReport(args[1:])
 	case "promote":
 		synthesisPromote(args[1:])
 	case "bind-maf-frontier":
@@ -363,6 +481,7 @@ func synthesisGenerate(args []string) {
 	generatorID := fs.String("generator-id", "", "stable generator implementation ID")
 	generatorCommand := fs.String("generator-command", "", "command that reads $SYNCFUZZ_SYNTHESIS_REQUEST and emits one JSON response")
 	attempt := fs.Int("attempt", 0, "non-negative generation/repair attempt")
+	feedbackPath := fs.String("feedback", "", "optional execution-derived CandidateEvaluation JSON from a prior attempt")
 	timeout := fs.Duration("timeout", 2*time.Minute, "generator command timeout")
 	outPath := fs.String("out", "synthesis-candidate.json", "SynthesisCandidate JSON output path")
 	if err := fs.Parse(args); err != nil {
@@ -377,7 +496,20 @@ func synthesisGenerate(args []string) {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis generate failed: %v\n", err)
 		os.Exit(1)
 	}
-	request, err := synthesis.NewGeneratorRequest(stateObjective, *targetID, *adapterID, *scaffold, *attempt, nil)
+	feedback := []synthesis.AtomFeedback(nil)
+	if strings.TrimSpace(*feedbackPath) != "" {
+		evaluation, err := synthesis.ReadEvaluation(*feedbackPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis generate failed: %v\n", err)
+			os.Exit(1)
+		}
+		feedback, err = evaluation.FeedbackForObjective(stateObjective)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis generate failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	request, err := synthesis.NewGeneratorRequest(stateObjective, *targetID, *adapterID, *scaffold, *attempt, feedback)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis generate failed: %v\n", err)
 		os.Exit(1)
@@ -395,6 +527,157 @@ func synthesisGenerate(args []string) {
 	}
 	fmt.Printf("candidate_id: %s\n", candidate.CandidateID)
 	fmt.Printf("objective_id: %s\n", candidate.ObjectiveID)
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+// synthesisEvaluationStatus validates a completed evaluation against its
+// objective and distinguishes a rejected candidate from an invalid artifact.
+// A rejected candidate is a valid experimental outcome, so callers can use
+// exit status 3 to stop a retention-only path without losing feedback.
+func synthesisEvaluationStatus(args []string) {
+	fs := flag.NewFlagSet("synthesis evaluation-status", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	evaluationPath := fs.String("evaluation", "", "CandidateEvaluation JSON path")
+	requireEligible := fs.Bool("require-eligible", false, "exit 3 when the valid evaluation is not eligible for retention")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*evaluationPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis evaluation-status requires --objective and --evaluation")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis evaluation-status failed: %v\n", err)
+		os.Exit(1)
+	}
+	evaluation, err := synthesis.ReadEvaluation(*evaluationPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis evaluation-status failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := evaluation.ValidateFor(stateObjective); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis evaluation-status failed: %v\n", err)
+		os.Exit(1)
+	}
+	status := "rejected"
+	if evaluation.EligibleForRetention {
+		status = "eligible"
+	}
+	fmt.Printf("candidate_id: %s\n", evaluation.CandidateID)
+	fmt.Printf("profile_run_id: %s\n", evaluation.ProfileRunID)
+	fmt.Printf("retention_status: %s\n", status)
+	if *requireEligible && !evaluation.EligibleForRetention {
+		os.Exit(3)
+	}
+}
+
+func synthesisStateFuzzAttemptStatus(args []string) {
+	fs := flag.NewFlagSet("synthesis statefuzz-attempt-status", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	candidatePath := fs.String("candidate", "", "SynthesisCandidate JSON path")
+	evaluationPath := fs.String("evaluation", "", "CandidateEvaluation JSON path")
+	attemptIndex := fs.Int("attempt", -1, "non-negative StateFuzz attempt index")
+	artifactRoot := fs.String("artifact-root", "", "artifact directory for this attempt")
+	status := fs.String("status", "", "accepted, rejected-evaluation, rejected-source-baseline, or execution-failed")
+	reason := fs.String("reason", "", "structured outcome reason for a rejection or failure")
+	outPath := fs.String("out", "statefuzz-attempt.json", "StateFuzzAttempt JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	attemptStatus := synthesis.StateFuzzAttemptStatus(strings.TrimSpace(*status))
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || *attemptIndex < 0 || strings.TrimSpace(*artifactRoot) == "" || !attemptStatus.Valid() {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis statefuzz-attempt-status requires --objective, --candidate, --attempt, --artifact-root, and a valid --status")
+		os.Exit(2)
+	}
+	if attemptStatus != synthesis.StateFuzzAttemptExecutionFailed && strings.TrimSpace(*evaluationPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis statefuzz-attempt-status requires --evaluation unless --status is execution-failed")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-attempt-status failed: %v\n", err)
+		os.Exit(1)
+	}
+	candidate, err := synthesis.ReadCandidate(*candidatePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-attempt-status failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := candidate.ValidateFor(stateObjective); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-attempt-status failed: %v\n", err)
+		os.Exit(1)
+	}
+	attempt := synthesis.StateFuzzAttempt{
+		SchemaVersion: synthesis.StateFuzzAttemptSchema,
+		Attempt:       *attemptIndex,
+		ArtifactRoot:  *artifactRoot,
+		CandidateID:   candidate.CandidateID,
+		Status:        attemptStatus,
+		Reason:        *reason,
+	}
+	if strings.TrimSpace(*evaluationPath) != "" {
+		evaluation, err := synthesis.ReadEvaluation(*evaluationPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-attempt-status failed: %v\n", err)
+			os.Exit(1)
+		}
+		if err := evaluation.ValidateFor(stateObjective); err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-attempt-status failed: %v\n", err)
+			os.Exit(1)
+		}
+		if evaluation.CandidateID != candidate.CandidateID {
+			fmt.Fprintln(os.Stderr, "syncfuzz synthesis statefuzz-attempt-status failed: evaluation candidate ID does not match candidate")
+			os.Exit(1)
+		}
+		eligible := evaluation.EligibleForRetention
+		attempt.ProfileRunID = evaluation.ProfileRunID
+		attempt.EligibleForRetention = &eligible
+	}
+	if err := synthesis.WriteStateFuzzAttempt(*outPath, attempt); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-attempt-status failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("attempt: %d\n", attempt.Attempt)
+	fmt.Printf("status: %s\n", attempt.Status)
+	if attempt.Reason != "" {
+		fmt.Printf("reason: %s\n", attempt.Reason)
+	}
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func synthesisStateFuzzBatchReport(args []string) {
+	fs := flag.NewFlagSet("synthesis statefuzz-batch-report", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	root := fs.String("root", "", "StateFuzz batch root containing attempt-* directories")
+	outPath := fs.String("out", "statefuzz-batch-report.json", "StateFuzz batch report JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*root) == "" || strings.TrimSpace(*outPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis statefuzz-batch-report requires --objective, --root, and --out")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-batch-report failed: %v\n", err)
+		os.Exit(1)
+	}
+	report, err := synthesis.BuildStateFuzzBatchReport(stateObjective, *root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-batch-report failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := synthesis.WriteStateFuzzBatchReport(*outPath, report); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-batch-report failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("attempts: %d\n", report.AttemptCount)
+	fmt.Printf("accepted: %d\n", report.AcceptedCount)
+	fmt.Printf("rejected_evaluation: %d\n", report.RejectedEvaluationCount)
+	fmt.Printf("rejected_source_baseline: %d\n", report.RejectedSourceBaselineCount)
+	fmt.Printf("execution_failures: %d\n", report.ExecutionFailureCount)
+	fmt.Printf("invalid_artifact_roots: %d\n", report.InvalidArtifactRootCount)
 	fmt.Printf("artifact: %s\n", *outPath)
 }
 
@@ -621,8 +904,8 @@ func synthesisBindLangGraphFrontier(args []string) {
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*profileRunPath) == "" || strings.TrimSpace(*frontierID) == "" || strings.TrimSpace(*manifestPath) == "" || strings.TrimSpace(*outBinding) == "" {
-		fmt.Fprintln(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier requires --objective, --candidate, --profile-run, --frontier, --manifest, and --out-binding")
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*profileRunPath) == "" || strings.TrimSpace(*frontierID) == "" || strings.TrimSpace(*outBinding) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier requires --objective, --candidate, --profile-run, --frontier, and --out-binding")
 		os.Exit(2)
 	}
 	stateObjective, err := objective.ReadStateObjective(*objectivePath)
@@ -640,12 +923,20 @@ func synthesisBindLangGraphFrontier(args []string) {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
 		os.Exit(1)
 	}
-	manifest, err := synthesis.ReadLangGraphNativeCheckpointManifest(*manifestPath)
+	resolvedManifestPath := strings.TrimSpace(*manifestPath)
+	if resolvedManifestPath == "" {
+		resolvedManifestPath, err = synthesis.InferLangGraphNativeCheckpointManifestPath(profileRun)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	manifest, err := synthesis.ReadLangGraphNativeCheckpointManifest(resolvedManifestPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
 		os.Exit(1)
 	}
-	binding, err := synthesis.BindLangGraphNativeFrontier(stateObjective, candidate, profileRun, *frontierID, *manifestPath, manifest)
+	binding, err := synthesis.BindLangGraphNativeFrontier(stateObjective, candidate, profileRun, *frontierID, resolvedManifestPath, manifest)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
 		os.Exit(1)
@@ -689,6 +980,7 @@ func synthesisPrepareLangGraphFork(args []string) {
 	containerImage := fs.String("container-image", synthesis.DefaultLangGraphProfileImage, "isolated LangGraph recovery container image")
 	runtimeRoot := fs.String("runtime-root", "", "host directory for independent LangGraph recovery workspaces")
 	passiveUnixSocketPath := fs.String("passive-unix-socket-path", "", "workspace-relative Unix endpoint observed without connecting")
+	passiveProbeMode := fs.String("passive-probe-mode", string(recovery.LangGraphPassiveProbeFull), "passive Unix listener probe mode: full or pruned")
 	outPlan := fs.String("out-plan", "langgraph-fork-plan.json", "LangGraph recorded fork plan JSON output path")
 	outProfileRun := fs.String("out-profile-run", "bound-profile-run.json", "ProfileRun updated to use the LangGraph fork plan")
 	if err := fs.Parse(args); err != nil {
@@ -718,7 +1010,7 @@ func synthesisPrepareLangGraphFork(args []string) {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
 		os.Exit(1)
 	}
-	plan, err := synthesis.PrepareLangGraphForkPlan(stateObjective, candidate, profileRun, binding, synthesis.LangGraphForkPlanConfig{Model: *model, ContainerImage: *containerImage, RuntimeRoot: *runtimeRoot, PassiveUnixSocketPath: *passiveUnixSocketPath})
+	plan, err := synthesis.PrepareLangGraphForkPlan(stateObjective, candidate, profileRun, binding, synthesis.LangGraphForkPlanConfig{Model: *model, ContainerImage: *containerImage, RuntimeRoot: *runtimeRoot, PassiveUnixSocketPath: *passiveUnixSocketPath, PassiveProbeMode: recovery.LangGraphPassiveProbeMode(*passiveProbeMode)})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
 		os.Exit(1)

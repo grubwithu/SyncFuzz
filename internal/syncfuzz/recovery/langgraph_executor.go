@@ -19,14 +19,18 @@ type LangGraphForkExecutor struct{}
 func NewLangGraphForkExecutor() LangGraphForkExecutor { return LangGraphForkExecutor{} }
 
 type langGraphPassiveSocketMetadata struct {
-	IsUnixSocket    bool                           `json:"is_unix_socket"`
-	Device          uint64                         `json:"device"`
-	Inode           uint64                         `json:"inode"`
-	Mode            uint32                         `json:"mode"`
-	KernelSocketID  string                         `json:"kernel_socket_id"`
-	ListenerActive  bool                           `json:"listener_active"`
-	ListenerCount   int                            `json:"listener_count"`
-	ListenerHolders []langGraphPassiveSocketHolder `json:"listener_holders"`
+	IsUnixSocket     bool                           `json:"is_unix_socket"`
+	Device           uint64                         `json:"device"`
+	Inode            uint64                         `json:"inode"`
+	Mode             uint32                         `json:"mode"`
+	ProbeMode        LangGraphPassiveProbeMode      `json:"probe_mode"`
+	ProbeDurationNS  uint64                         `json:"probe_duration_ns"`
+	ScannedProcesses int                            `json:"scanned_processes"`
+	ScannedFDs       int                            `json:"scanned_fds"`
+	KernelSocketID   string                         `json:"kernel_socket_id"`
+	ListenerActive   bool                           `json:"listener_active"`
+	ListenerCount    int                            `json:"listener_count"`
+	ListenerHolders  []langGraphPassiveSocketHolder `json:"listener_holders"`
 }
 
 type langGraphPassiveSocketHolder struct {
@@ -129,9 +133,14 @@ func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecut
 	if artifact.RestoredCheckpointMessageCount != coordinate.MessageCount || !sameStrings(artifact.RestoredCheckpointNext, coordinate.Next) {
 		return RecoveryObservation{}, fmt.Errorf("LangGraph recovery observation did not restore the planned native state shape")
 	}
+	probeMode := forkPlan.PassiveProbeMode.Effective()
+	if artifact.PassiveUnixSocket.BeforeFork.ProbeMode != probeMode || artifact.PassiveUnixSocket.AfterFork.ProbeMode != probeMode {
+		return RecoveryObservation{}, fmt.Errorf("LangGraph recovery observation did not use the planned %s passive probe", probeMode)
+	}
 	osState := StatePresenceAbsent
+	listenerIdentityMatches := matchesUnixSocketIdentity(artifact.PassiveUnixSocket.AfterFork, forkPlan.UnixSocketProbe)
 	listenerMatches := matchesUnixSocketProbe(artifact.PassiveUnixSocket.AfterFork, forkPlan.UnixSocketProbe)
-	if socketPresent(artifact.PassiveUnixSocket.AfterFork) && listenerMatches {
+	if socketPresent(artifact.PassiveUnixSocket.AfterFork) && listenerIdentityMatches {
 		osState = StatePresencePresent
 	}
 	origin := StateOriginNone
@@ -141,11 +150,11 @@ func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecut
 		origin = StateOriginUnknown
 	}
 	multiplicity := EffectMultiplicityUnknown
-	if origin == StateOriginResidual && listenerMatches {
+	if origin == StateOriginResidual && probeMode == LangGraphPassiveProbeFull && listenerMatches {
 		multiplicity = EffectMultiplicitySingle
 	}
 	agentState := forkPlan.AgentStateByCheckpoint[request.Query.CheckpointID]
-	return RecoveryObservation{SchemaVersion: ExecutionSchemaVersion, QueryID: request.Query.QueryID, SeedID: request.Query.SeedID, Boundary: request.Query.Boundary, CheckpointID: request.Query.CheckpointID, RecordedPlanID: request.Query.RecordedPlanID, PassiveObservationID: request.Query.PassiveObservationID, MaterializationHeadID: request.Query.MaterializationHeadID, RetentionPolicy: request.Query.RetentionPolicy, RuntimeInstanceID: runtimeID, AgentState: agentState, OSState: osState, OSStateOrigin: origin, EffectMultiplicity: multiplicity, Evidence: []string{"LangGraph fresh container: " + runtimeID, "retained source runtime verified: " + forkPlan.SourceRuntime.ContainerID, "source snapshot verified: " + forkPlan.WorkspaceSnapshot.WorkspaceSHA256, "native checkpoint restored by exact ID: " + artifact.RestoredCheckpointID, "timestamp-validated logical state: " + string(agentState), "eBPF-linked listener effects: " + forkPlan.UnixSocketProbe.BindEffectID + "," + forkPlan.UnixSocketProbe.ListenEffectID, "passive observation artifact: " + observationPath}}, nil
+	return RecoveryObservation{SchemaVersion: ExecutionSchemaVersion, QueryID: request.Query.QueryID, SeedID: request.Query.SeedID, Boundary: request.Query.Boundary, CheckpointID: request.Query.CheckpointID, RecordedPlanID: request.Query.RecordedPlanID, PassiveObservationID: request.Query.PassiveObservationID, MaterializationHeadID: request.Query.MaterializationHeadID, RetentionPolicy: request.Query.RetentionPolicy, RuntimeInstanceID: runtimeID, AgentState: agentState, OSState: osState, OSStateOrigin: origin, EffectMultiplicity: multiplicity, PassiveProbe: &PassiveProbeMetrics{Mode: probeMode, DurationNS: artifact.PassiveUnixSocket.AfterFork.ProbeDurationNS, ScannedProcesses: artifact.PassiveUnixSocket.AfterFork.ScannedProcesses, ScannedFDs: artifact.PassiveUnixSocket.AfterFork.ScannedFDs}, Evidence: []string{"LangGraph fresh container: " + runtimeID, "retained source runtime verified: " + forkPlan.SourceRuntime.ContainerID, "source snapshot verified: " + forkPlan.WorkspaceSnapshot.WorkspaceSHA256, "native checkpoint restored by exact ID: " + artifact.RestoredCheckpointID, "timestamp-validated logical state: " + string(agentState), "passive probe mode: " + string(probeMode), "passive probe scan counts: processes=" + strconv.Itoa(artifact.PassiveUnixSocket.AfterFork.ScannedProcesses) + ",fds=" + strconv.Itoa(artifact.PassiveUnixSocket.AfterFork.ScannedFDs), "eBPF-linked listener effects: " + forkPlan.UnixSocketProbe.BindEffectID + "," + forkPlan.UnixSocketProbe.ListenEffectID, "passive observation artifact: " + observationPath}}, nil
 }
 
 // langGraphRecoveryDockerArgs is kept separate from execution so the V3
@@ -157,7 +166,7 @@ func langGraphRecoveryDockerArgs(plan LangGraphForkPlan, workspace, runtimeID st
 			args = append(args, "-e", key+"="+value)
 		}
 	}
-	return append(args, plan.ContainerImage, "python3", "/opt/syncfuzz-langgraph/run_target.py", "--workspace", "/workspace", "--prompt-file", "/workspace/target-prompt.txt", "--task-file", "/workspace/target-task.json", "--thread-id", plan.SourceThreadID, "--execution-policy", "host", "--checkpoint-backend", "disk", "--internal-phase", "resume", "--checkpoint-id", checkpointID, "--passive-fork-observe", "--passive-unix-socket-path", plan.PassiveUnixSocketPath, "--runtime-instance-id", runtimeID, "--recovery-observation-artifact", "/workspace/langgraph-recovery-observation.json")
+	return append(args, plan.ContainerImage, "python3", "/opt/syncfuzz-langgraph/run_target.py", "--workspace", "/workspace", "--prompt-file", "/workspace/target-prompt.txt", "--task-file", "/workspace/target-task.json", "--thread-id", plan.SourceThreadID, "--execution-policy", "host", "--checkpoint-backend", "disk", "--internal-phase", "resume", "--checkpoint-id", checkpointID, "--passive-fork-observe", "--passive-unix-socket-path", plan.PassiveUnixSocketPath, "--passive-unix-socket-probe-mode", string(plan.PassiveProbeMode.Effective()), "--passive-unix-socket-expected-id", plan.UnixSocketProbe.SocketID, "--passive-unix-socket-expected-holder-pid", strconv.FormatUint(uint64(plan.UnixSocketProbe.HolderPID), 10), "--passive-unix-socket-expected-holder-fd", strconv.Itoa(plan.UnixSocketProbe.HolderFD), "--runtime-instance-id", runtimeID, "--recovery-observation-artifact", "/workspace/langgraph-recovery-observation.json")
 }
 
 func langGraphProviderEnvironment() map[string]string {
@@ -216,6 +225,23 @@ func matchesUnixSocketProbe(observation langGraphPassiveSocketMetadata, probe La
 	for _, fd := range observation.ListenerHolders[0].FDs {
 		if fd == probe.HolderFD {
 			return true
+		}
+	}
+	return false
+}
+
+func matchesUnixSocketIdentity(observation langGraphPassiveSocketMetadata, probe LangGraphUnixSocketProbe) bool {
+	if !observation.ListenerActive || observation.ListenerCount != 1 || observation.KernelSocketID != probe.SocketID {
+		return false
+	}
+	for _, holder := range observation.ListenerHolders {
+		if holder.PID != int(probe.HolderPID) {
+			continue
+		}
+		for _, fd := range holder.FDs {
+			if fd == probe.HolderFD {
+				return true
+			}
 		}
 	}
 	return false

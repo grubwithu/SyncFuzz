@@ -201,8 +201,8 @@ func ExecuteLangGraphCandidate(ctx context.Context, stateObjective objective.Sta
 	if err != nil {
 		return LangGraphCandidateExecution{}, err
 	}
-	if !result.Completed || result.ProfilingAnalysis == nil {
-		return LangGraphCandidateExecution{}, fmt.Errorf("LangGraph candidate target run %q did not produce completed profiling evidence", result.RunID)
+	if err := validateLangGraphCandidateProfilingEvidence(result); err != nil {
+		return LangGraphCandidateExecution{}, err
 	}
 	workspaceManifestPath, err := langGraphNativeCheckpointManifestPath(result)
 	if err != nil {
@@ -234,6 +234,22 @@ func ExecuteLangGraphCandidate(ctx context.Context, stateObjective objective.Sta
 		return LangGraphCandidateExecution{}, err
 	}
 	return execution, nil
+}
+
+func validateLangGraphCandidateProfilingEvidence(result *target.TargetRunResult) error {
+	if result == nil {
+		return fmt.Errorf("LangGraph candidate target run returned no profiling result")
+	}
+	if !result.Completed {
+		if result.CommandResult.TimedOut {
+			return fmt.Errorf("LangGraph candidate target run %q timed out after %dms; incomplete profiling evidence was not retained", result.RunID, result.CommandResult.DurationMs)
+		}
+		return fmt.Errorf("LangGraph candidate target run %q did not complete (exit_code=%d); incomplete profiling evidence was not retained", result.RunID, result.CommandResult.ExitCode)
+	}
+	if result.ProfilingAnalysis == nil {
+		return fmt.Errorf("LangGraph candidate target run %q completed without profiling analysis", result.RunID)
+	}
+	return nil
 }
 
 // langGraphNativeCheckpointManifestPath uses the controller-visible workspace

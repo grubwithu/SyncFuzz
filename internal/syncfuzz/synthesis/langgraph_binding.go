@@ -2,6 +2,7 @@ package synthesis
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/objective"
@@ -15,6 +16,19 @@ const (
 )
 
 type LangGraphNativeCheckpointCoordinate = recovery.LangGraphNativeCheckpointCoordinate
+
+// InferLangGraphNativeCheckpointManifestPath resolves the target-owned native
+// manifest colocated with the ProfileRun's immutable recorded target plan.
+// Callers may still supply an explicit manifest path for artifact import, but
+// the standard profile-to-recovery workflow must not require a hand-copied
+// target run ID.
+func InferLangGraphNativeCheckpointManifestPath(run objective.ProfileRun) (string, error) {
+	planArtifact := strings.TrimSpace(run.RecordedPlanArtifact)
+	if planArtifact == "" {
+		return "", fmt.Errorf("LangGraph profile run lacks a recorded target plan artifact")
+	}
+	return filepath.Join(filepath.Dir(planArtifact), LangGraphNativeCheckpointManifestArtifact), nil
+}
 
 // LangGraphNativeFrontierBinding proves one profile frontier brackets a
 // specific pair of durable LangGraph checkpoint writes. Controller checkpoints

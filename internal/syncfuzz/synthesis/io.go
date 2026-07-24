@@ -45,6 +45,42 @@ func WriteEvaluation(path string, evaluation CandidateEvaluation) error {
 	return writeJSON(path, evaluation)
 }
 
+func ReadEvaluation(path string) (CandidateEvaluation, error) {
+	var evaluation CandidateEvaluation
+	if err := readJSON(path, &evaluation); err != nil {
+		return CandidateEvaluation{}, err
+	}
+	if evaluation.SchemaVersion != SchemaVersion {
+		return CandidateEvaluation{}, fmt.Errorf("unsupported synthesis evaluation schema %q", evaluation.SchemaVersion)
+	}
+	return evaluation, nil
+}
+
+func WriteStateFuzzAttempt(path string, attempt StateFuzzAttempt) error {
+	if err := attempt.Validate(); err != nil {
+		return err
+	}
+	return writeJSON(path, attempt)
+}
+
+func ReadStateFuzzAttempt(path string) (StateFuzzAttempt, error) {
+	var attempt StateFuzzAttempt
+	if err := readJSON(path, &attempt); err != nil {
+		return StateFuzzAttempt{}, err
+	}
+	if err := attempt.Validate(); err != nil {
+		return StateFuzzAttempt{}, err
+	}
+	return attempt, nil
+}
+
+func WriteStateFuzzBatchReport(path string, report StateFuzzBatchReport) error {
+	if err := report.Validate(); err != nil {
+		return err
+	}
+	return writeJSON(path, report)
+}
+
 func WriteMAFNativeFrontierBinding(path string, binding MAFNativeFrontierBinding) error {
 	if binding.SchemaVersion != MAFNativeFrontierBindingSchema {
 		return fmt.Errorf("unsupported MAF native frontier binding schema %q", binding.SchemaVersion)

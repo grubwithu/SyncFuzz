@@ -15,6 +15,27 @@ const (
 	LangGraphUnixSocketProbeSchema  = "syncfuzz.langgraph-unix-socket-probe.v1"
 )
 
+// LangGraphPassiveProbeMode controls how a recovery container establishes
+// listener-holder multiplicity. Only the full mode can prove that no other
+// process holds the profiled socket; pruned mode is intentionally weaker.
+type LangGraphPassiveProbeMode string
+
+const (
+	LangGraphPassiveProbeFull   LangGraphPassiveProbeMode = "full"
+	LangGraphPassiveProbePruned LangGraphPassiveProbeMode = "pruned"
+)
+
+func (m LangGraphPassiveProbeMode) Effective() LangGraphPassiveProbeMode {
+	if m == "" {
+		return LangGraphPassiveProbeFull
+	}
+	return m
+}
+
+func (m LangGraphPassiveProbeMode) Valid() bool {
+	return m == LangGraphPassiveProbeFull || m == LangGraphPassiveProbePruned
+}
+
 // LangGraphNativeCheckpointCoordinate records source-checkpoint provenance.
 // A snapshot fork restores SourceCheckpointID directly from a cloned durable
 // store; the remaining shape guards against a malformed recorded plan.
@@ -116,6 +137,7 @@ type LangGraphForkPlan struct {
 	ContainerImage                  string                                         `json:"container_image"`
 	RuntimeRoot                     string                                         `json:"runtime_root"`
 	PassiveUnixSocketPath           string                                         `json:"passive_unix_socket_path"`
+	PassiveProbeMode                LangGraphPassiveProbeMode                      `json:"passive_probe_mode,omitempty"`
 	PassiveObservationID            string                                         `json:"passive_observation_id"`
 	MaterializationHeadID           string                                         `json:"materialization_head_id"`
 	MaterializationHeadCheckpointID string                                         `json:"materialization_head_checkpoint_id"`
@@ -133,6 +155,9 @@ func (p LangGraphForkPlan) ValidateFor(plan RecordedPlan) error {
 	}
 	if p.AdapterID != LangGraphForkAdapterID || strings.TrimSpace(p.CandidateID) == "" || strings.TrimSpace(p.Task) == "" || strings.TrimSpace(p.Model) == "" || strings.TrimSpace(p.ContainerImage) == "" || strings.TrimSpace(p.RuntimeRoot) == "" || strings.TrimSpace(p.PassiveUnixSocketPath) == "" || p.PassiveObservationID != plan.PassiveObservationID || strings.TrimSpace(p.SourceThreadID) == "" {
 		return fmt.Errorf("LangGraph fork plan requires candidate, task, model, image, runtime root, source thread, and passive Unix socket path")
+	}
+	if !p.PassiveProbeMode.Effective().Valid() {
+		return fmt.Errorf("LangGraph fork plan has unsupported passive probe mode %q", p.PassiveProbeMode)
 	}
 	if err := p.SourceRuntime.Validate(); err != nil {
 		return err

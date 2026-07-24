@@ -103,9 +103,35 @@ Update, 2026-07-24: the LangGraph listener path now requires
 source container lease plus eBPF-linked kernel socket ID and holder FD.
 Recovery joins that source PID/network namespace and reads `/proc/net/unix`
 and `/proc/<pid>/fd`; it does not classify a bare socket filesystem node as a
-live listener. The metadata-only V2 calibration is consequently retained only
+live listener. Fork-plan preparation rejects a materialization head with more
+than one surviving eBPF-linked listener endpoint rather than selecting the
+latest bind. The metadata-only V2 calibration is consequently retained only
 as an `inconclusive` baseline. `synthesis release-langgraph-runtime` removes
-the lease after recovery.
+the lease after recovery. The LangGraph V3 full/pruned observer pair records
+structured post-query probe metrics in every recovery observation. Its batch
+wrapper repeats independent same-source pairs and writes `fidelity-report.json`;
+`LANGGRAPH_V3_FIDELITY_REPEAT` names accepted pairs while
+`LANGGRAPH_V3_FIDELITY_MAX_ATTEMPTS` bounds provider invocations. Each attempt
+is retained as `accepted`, `rejected-source-baseline`, or `execution-failed` in
+the report denominator; only accepted pairs are aggregated. The report rejects
+any pair whose recorded plan, retained source identity, workspace/checkpoint
+snapshot, listener identity, or native coordinates differ. Pruned samples can
+report exact holder identity but remain multiplicity `unknown`, so they cannot
+independently emit a `residual` verdict.
+
+`synthesis generate --feedback <evaluation.json>` imports only bounded
+atom-level `CandidateEvaluation` feedback from a prior profiled candidate. It
+rejects malformed or cross-objective evaluation artifacts. The
+`synthesis-langgraph-statefuzz-attempt` Make target wires one external-generator
+attempt through generate, privileged profile, evaluation, native binding,
+StateSeed promotion, and before/after/head recovery; a manual baseline remains
+outside this path and cannot count as generated coverage.
+
+`synthesis statefuzz-batch-report` scans the generated `attempt-*` roots after
+the run. It retains every root in the experimental denominator, including
+retention rejections, rejected source baselines, execution failures, and roots
+whose candidate/profile/seed/recovery lineage is invalid. Only an audited,
+linked recovery execution contributes a recovery outcome count.
 
 ## Implemented Seed: Orphan Process
 

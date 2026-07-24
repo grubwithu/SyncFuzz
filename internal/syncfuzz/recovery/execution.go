@@ -52,26 +52,42 @@ func (m EffectMultiplicity) Valid() bool {
 	return m == EffectMultiplicitySingle || m == EffectMultiplicityDuplicate || m == EffectMultiplicityUnknown
 }
 
+// PassiveProbeMetrics holds the post-recovery probe work used to classify one
+// observation. It is optional because non-LangGraph adapters do not yet
+// expose a comparable passive observer. A pruned sample establishes an exact
+// recorded holder identity, but cannot establish holder multiplicity.
+type PassiveProbeMetrics struct {
+	Mode             LangGraphPassiveProbeMode `json:"mode"`
+	DurationNS       uint64                    `json:"duration_ns"`
+	ScannedProcesses int                       `json:"scanned_processes"`
+	ScannedFDs       int                       `json:"scanned_fds"`
+}
+
+func (m PassiveProbeMetrics) Valid() bool {
+	return m.Mode.Valid() && m.ScannedProcesses >= 0 && m.ScannedFDs >= 0
+}
+
 // RecoveryObservation is the fixed passive observation for one member of a
 // fork pair. An adapter must bind it to the exact query and recorded plan that
 // SyncFuzz supplied; an observation cannot be silently reused for a different
 // checkpoint, plan, or passive observation.
 type RecoveryObservation struct {
-	SchemaVersion         string             `json:"schema_version"`
-	QueryID               string             `json:"query_id"`
-	SeedID                string             `json:"seed_id"`
-	Boundary              Boundary           `json:"boundary"`
-	CheckpointID          string             `json:"checkpoint_id"`
-	RecordedPlanID        string             `json:"recorded_plan_id"`
-	PassiveObservationID  string             `json:"passive_observation_id"`
-	MaterializationHeadID string             `json:"materialization_head_id,omitempty"`
-	RetentionPolicy       RetentionPolicy    `json:"retention_policy,omitempty"`
-	RuntimeInstanceID     string             `json:"runtime_instance_id"`
-	AgentState            StatePresence      `json:"agent_state"`
-	OSState               StatePresence      `json:"os_state"`
-	OSStateOrigin         StateOrigin        `json:"os_state_origin"`
-	EffectMultiplicity    EffectMultiplicity `json:"effect_multiplicity"`
-	Evidence              []string           `json:"evidence"`
+	SchemaVersion         string               `json:"schema_version"`
+	QueryID               string               `json:"query_id"`
+	SeedID                string               `json:"seed_id"`
+	Boundary              Boundary             `json:"boundary"`
+	CheckpointID          string               `json:"checkpoint_id"`
+	RecordedPlanID        string               `json:"recorded_plan_id"`
+	PassiveObservationID  string               `json:"passive_observation_id"`
+	MaterializationHeadID string               `json:"materialization_head_id,omitempty"`
+	RetentionPolicy       RetentionPolicy      `json:"retention_policy,omitempty"`
+	RuntimeInstanceID     string               `json:"runtime_instance_id"`
+	AgentState            StatePresence        `json:"agent_state"`
+	OSState               StatePresence        `json:"os_state"`
+	OSStateOrigin         StateOrigin          `json:"os_state_origin"`
+	EffectMultiplicity    EffectMultiplicity   `json:"effect_multiplicity"`
+	PassiveProbe          *PassiveProbeMetrics `json:"passive_probe,omitempty"`
+	Evidence              []string             `json:"evidence"`
 }
 
 func (o RecoveryObservation) ValidateFor(query RecoveryQuery, plan RecordedPlan) error {
@@ -83,6 +99,9 @@ func (o RecoveryObservation) ValidateFor(query RecoveryQuery, plan RecordedPlan)
 	}
 	if o.RecordedPlanID != plan.RecordedPlanID || strings.TrimSpace(o.RuntimeInstanceID) == "" || !o.AgentState.Valid() || !o.OSState.Valid() || !o.OSStateOrigin.Valid() || !o.EffectMultiplicity.Valid() {
 		return fmt.Errorf("recovery observation %q has invalid state evidence", o.QueryID)
+	}
+	if o.PassiveProbe != nil && !o.PassiveProbe.Valid() {
+		return fmt.Errorf("recovery observation %q has invalid passive probe metrics", o.QueryID)
 	}
 	if len(o.Evidence) == 0 {
 		return fmt.Errorf("recovery observation %q requires deterministic evidence", o.QueryID)

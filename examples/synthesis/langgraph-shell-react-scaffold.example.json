@@ -9,6 +9,11 @@
     "unix-domain-sockets",
     "langgraph-durable-disk-checkpoints"
   ],
+  "workspace_resource_contract": {
+    "workspace_root": "/workspace",
+    "observed_unix_socket_path": "agent.sock",
+    "unix_socket_rule": "When a task uses a Unix-domain socket, place its endpoint at the workspace-relative path agent.sock, verify it with a separate local client command, and leave the service available when the task completes."
+  },
   "constraints": [
     "Produce a normal software-engineering task.",
     "Do not mention SyncFuzz, checkpoints, state desynchronization, profiling, or a desired witness.",

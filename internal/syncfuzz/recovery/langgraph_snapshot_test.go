@@ -103,6 +103,7 @@ func TestLangGraphRecoveryDockerArgsUseExactCheckpointIDAndSourceNamespaces(t *t
 			SourceWorkspace:       "/profile/workspace",
 			PassiveUnixSocketPath: "sockets/agent.sock",
 		},
+		UnixSocketProbe: LangGraphUnixSocketProbe{SocketID: "socket:123", HolderPID: 7, HolderFD: 3},
 	}
 	args := langGraphRecoveryDockerArgs(plan, "/recovery/workspace", "runtime-1", 10001, 10001, "native-checkpoint-1", map[string]string{"OPENAI_BASE_URL": "https://provider.example/v1"})
 	if !hasArgumentPair(args, "--checkpoint-id", "native-checkpoint-1") {
@@ -119,6 +120,26 @@ func TestLangGraphRecoveryDockerArgsUseExactCheckpointIDAndSourceNamespaces(t *t
 	}
 	if !hasArgumentPair(args, "-v", "/recovery/workspace:/workspace") {
 		t.Fatalf("recovery invocation must use a distinct cloned workspace: %#v", args)
+	}
+	if !hasArgumentPair(args, "--passive-unix-socket-probe-mode", "full") || !hasArgumentPair(args, "--passive-unix-socket-expected-id", "socket:123") {
+		t.Fatalf("full recovery invocation must carry the recorded passive probe identity: %#v", args)
+	}
+}
+
+func TestLangGraphRecoveryDockerArgsPassesPrunedProbeIdentity(t *testing.T) {
+	plan := LangGraphForkPlan{
+		Model:                 "openai:test",
+		ContainerImage:        "syncfuzz-langgraph:test",
+		PassiveUnixSocketPath: "agent.sock",
+		PassiveProbeMode:      LangGraphPassiveProbePruned,
+		SourceThreadID:        "profile-thread",
+		SourceRuntime:         LangGraphSourceRuntime{ContainerName: "syncfuzz-profile-source"},
+		WorkspaceSnapshot:     LangGraphWorkspaceSnapshot{SourceWorkspace: "/profile/workspace", PassiveUnixSocketPath: "agent.sock"},
+		UnixSocketProbe:       LangGraphUnixSocketProbe{SocketID: "socket:123", HolderPID: 7, HolderFD: 3},
+	}
+	args := langGraphRecoveryDockerArgs(plan, "/recovery/workspace", "runtime-1", 10001, 10001, "native-checkpoint-1", nil)
+	if !hasArgumentPair(args, "--passive-unix-socket-probe-mode", "pruned") || !hasArgumentPair(args, "--passive-unix-socket-expected-id", "socket:123") || !hasArgumentPair(args, "--passive-unix-socket-expected-holder-pid", "7") || !hasArgumentPair(args, "--passive-unix-socket-expected-holder-fd", "3") {
+		t.Fatalf("pruned recovery invocation must constrain the observer to the recorded listener identity: %#v", args)
 	}
 }
 
@@ -247,5 +268,22 @@ func TestMatchesUnixSocketProbeRequiresOneExactHolder(t *testing.T) {
 	observation.ListenerCount = 2
 	if matchesUnixSocketProbe(observation, probe) {
 		t.Fatalf("unexpected match for duplicate listeners: %#v", observation)
+	}
+	observation.ListenerCount = 1
+	observation.ListenerHolders = append(observation.ListenerHolders, langGraphPassiveSocketHolder{PID: 11, FDs: []int{5}})
+	if matchesUnixSocketProbe(observation, probe) {
+		t.Fatalf("unexpected full match with multiple listener holders: %#v", observation)
+	}
+	if !matchesUnixSocketIdentity(observation, probe) {
+		t.Fatalf("pruned identity evidence must still recognize the recorded holder: %#v", observation)
+	}
+}
+
+func TestLangGraphPassiveProbeModeDefaultsToFull(t *testing.T) {
+	if got := (LangGraphPassiveProbeMode("")).Effective(); got != LangGraphPassiveProbeFull {
+		t.Fatalf("empty passive probe mode = %q, want full", got)
+	}
+	if !LangGraphPassiveProbeFull.Valid() || !LangGraphPassiveProbePruned.Valid() || LangGraphPassiveProbeMode("unsafe").Valid() {
+		t.Fatal("unexpected passive probe mode validation")
 	}
 }

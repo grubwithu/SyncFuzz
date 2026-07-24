@@ -3,6 +3,7 @@ package synthesis
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -58,6 +59,19 @@ func TestEvaluateProfileRequiresSchedulerCandidateAndLinkedEffects(t *testing.T)
 	if !evaluation.EligibleForRetention || len(evaluation.MissingEffects) != 0 || len(evaluation.ValidatedFrontiers) != 1 {
 		t.Fatalf("expected a retained candidate evaluation, got %#v", evaluation)
 	}
+	feedback, err := evaluation.FeedbackForObjective(stateObjective)
+	if err != nil || len(feedback) != 1 || !feedback[0].Observed {
+		t.Fatalf("expected canonical evaluation feedback, got %#v err=%v", feedback, err)
+	}
+	request, err = NewGeneratorRequest(stateObjective, "maf-workflow-checkpoint", "maf-workflow", "scaffolds/maf", 1, feedback)
+	if err != nil || len(request.Feedback) != 1 || !request.Feedback[0].Observed {
+		t.Fatalf("expected feedback-bearing generator request, got %#v err=%v", request, err)
+	}
+	invalidEvaluation := evaluation
+	invalidEvaluation.Feedback[0].Observed = false
+	if _, err := invalidEvaluation.FeedbackForObjective(stateObjective); err == nil {
+		t.Fatal("expected inconsistent evaluation feedback to be rejected")
+	}
 	run.SynthesisCandidateID = "synthesis-candidate:wrong"
 	if _, err := EvaluateProfile(stateObjective, candidate, run); err == nil {
 		t.Fatal("expected candidate/profile identity mismatch")
@@ -80,6 +94,168 @@ func TestCandidateIDCannotBeProvidedByGenerator(t *testing.T) {
 	}
 	if first.CandidateID != second.CandidateID {
 		t.Fatalf("expected scheduler-assigned deterministic candidate ID, got %q and %q", first.CandidateID, second.CandidateID)
+	}
+}
+
+func TestStateFuzzAttemptValidatesOutcomeEvidence(t *testing.T) {
+	eligible := true
+	attempt := StateFuzzAttempt{
+		SchemaVersion:        StateFuzzAttemptSchema,
+		Attempt:              3,
+		ArtifactRoot:         "runs/statefuzz/attempt-003",
+		CandidateID:          "synthesis-candidate:test",
+		ProfileRunID:         "target-profile:test",
+		EligibleForRetention: &eligible,
+		Status:               StateFuzzAttemptAccepted,
+	}
+	if err := attempt.Validate(); err != nil {
+		t.Fatalf("accepted StateFuzz attempt should validate: %v", err)
+	}
+	attempt.Status = StateFuzzAttemptRejectedSourceBaseline
+	attempt.Reason = "multiple-listener-holders"
+	if err := attempt.Validate(); err != nil {
+		t.Fatalf("source-baseline rejection should validate: %v", err)
+	}
+	attempt.Status = StateFuzzAttemptRejectedEvaluation
+	if err := attempt.Validate(); err == nil {
+		t.Fatal("expected eligible evaluation rejection to fail validation")
+	}
+	attempt = StateFuzzAttempt{
+		SchemaVersion: StateFuzzAttemptSchema,
+		Attempt:       4,
+		ArtifactRoot:  "runs/statefuzz/attempt-004",
+		CandidateID:   "synthesis-candidate:test",
+		Status:        StateFuzzAttemptExecutionFailed,
+		Reason:        "candidate-profile-timeout",
+	}
+	if err := attempt.Validate(); err != nil {
+		t.Fatalf("early execution failure should validate without profile evidence: %v", err)
+	}
+}
+
+func TestBuildStateFuzzBatchReportKeepsLegacyRejectionsAndMixedRoots(t *testing.T) {
+	stateObjective := testObjective("ipc.listen", profiling.StateFamilyIPC, "listen")
+	root := t.TempDir()
+
+	writeAttempt := func(index int, retain bool) (SynthesisCandidate, objective.ProfileRun, objective.StateSeed) {
+		t.Helper()
+		request, err := NewGeneratorRequest(stateObjective, "target", "adapter", "scaffold.json", index, nil)
+		if err != nil {
+			t.Fatalf("NewGeneratorRequest: %v", err)
+		}
+		candidate, err := NewCandidate(request, "test-generator", GeneratorResponse{SchemaVersion: SchemaVersion, Task: "Start the local service and leave it available."})
+		if err != nil {
+			t.Fatalf("NewCandidate: %v", err)
+		}
+		attemptRoot := filepath.Join(root, fmt.Sprintf("attempt-%03d", index))
+		if err := os.MkdirAll(attemptRoot, 0o755); err != nil {
+			t.Fatalf("mkdir attempt root: %v", err)
+		}
+		if err := WriteCandidate(filepath.Join(attemptRoot, "candidate.json"), candidate); err != nil {
+			t.Fatalf("WriteCandidate: %v", err)
+		}
+		run := profileForCandidate(stateObjective, candidate)
+		if !retain {
+			run.CheckpointMap.Intervals[0].EvidenceLinks = nil
+		}
+		if err := objective.WriteProfileRun(filepath.Join(attemptRoot, "profile-run.json"), run); err != nil {
+			t.Fatalf("WriteProfileRun: %v", err)
+		}
+		evaluation, err := EvaluateProfile(stateObjective, candidate, run)
+		if err != nil {
+			t.Fatalf("EvaluateProfile: %v", err)
+		}
+		if err := WriteEvaluation(filepath.Join(attemptRoot, "evaluation.json"), evaluation); err != nil {
+			t.Fatalf("WriteEvaluation: %v", err)
+		}
+		if !retain {
+			return candidate, run, objective.StateSeed{}
+		}
+		seed, err := objective.PromoteStateSeed(stateObjective, run, "C0..C1")
+		if err != nil {
+			t.Fatalf("PromoteStateSeed: %v", err)
+		}
+		return candidate, run, *seed
+	}
+	writeRecovery := func(index int, seed objective.StateSeed) {
+		t.Helper()
+		head, err := recovery.MaterializationHeadFor(seed)
+		if err != nil {
+			t.Fatalf("MaterializationHeadFor: %v", err)
+		}
+		execution := recovery.ForkRecoverySetExecution{
+			SchemaVersion:       recovery.ExecutionSchemaVersion,
+			RecoverySetID:       "recovery-set:" + seed.SeedID,
+			SeedID:              seed.SeedID,
+			FrontierID:          seed.FrontierID,
+			RecordedPlanID:      seed.RecordedPlanID,
+			MaterializationHead: head,
+			RetentionPolicy:     recovery.RetentionPolicyRetainRelevantOSState,
+			Classification: recovery.RecoverySetClassification{
+				BeforeOutcome: "residual",
+				AfterOutcome:  "consistent",
+				HeadOutcome:   "consistent",
+				Outcome:       "residual",
+			},
+		}
+		attemptRoot := filepath.Join(root, fmt.Sprintf("attempt-%03d", index))
+		if err := objective.WriteStateSeed(filepath.Join(attemptRoot, "state-seed.json"), seed); err != nil {
+			t.Fatalf("WriteStateSeed: %v", err)
+		}
+		if err := writeJSON(filepath.Join(attemptRoot, "recovery-set-execution.json"), execution); err != nil {
+			t.Fatalf("write recovery execution: %v", err)
+		}
+	}
+
+	// attempt-000 is a legacy retention rejection with no StateSeed.
+	writeAttempt(0, false)
+	_, _, acceptedSeed := writeAttempt(1, true)
+	writeRecovery(1, acceptedSeed)
+	// attempt-002 has top-level candidate/profile evidence from a later run but
+	// retains a prior seed and recovery execution, so it must be invalidated.
+	_, _, mixedSeed := writeAttempt(2, true)
+	_, _, staleSeed := writeAttempt(3, true)
+	writeRecovery(2, staleSeed)
+	if mixedSeed.SynthesisCandidateID == staleSeed.SynthesisCandidateID {
+		t.Fatal("expected independently generated candidates for mixed-root audit")
+	}
+
+	// attempt-004 models an early failure before an evaluation artifact exists.
+	failureRequest, err := NewGeneratorRequest(stateObjective, "target", "adapter", "scaffold.json", 4, nil)
+	if err != nil {
+		t.Fatalf("NewGeneratorRequest failure attempt: %v", err)
+	}
+	failureCandidate, err := NewCandidate(failureRequest, "test-generator", GeneratorResponse{SchemaVersion: SchemaVersion, Task: "Start the local service and leave it available."})
+	if err != nil {
+		t.Fatalf("NewCandidate failure attempt: %v", err)
+	}
+	failureRoot := filepath.Join(root, "attempt-004")
+	if err := os.MkdirAll(failureRoot, 0o755); err != nil {
+		t.Fatalf("mkdir failure root: %v", err)
+	}
+	if err := WriteCandidate(filepath.Join(failureRoot, "candidate.json"), failureCandidate); err != nil {
+		t.Fatalf("WriteCandidate failure attempt: %v", err)
+	}
+	if err := WriteStateFuzzAttempt(filepath.Join(failureRoot, "statefuzz-attempt.json"), StateFuzzAttempt{
+		SchemaVersion: StateFuzzAttemptSchema,
+		Attempt:       4,
+		ArtifactRoot:  failureRoot,
+		CandidateID:   failureCandidate.CandidateID,
+		Status:        StateFuzzAttemptExecutionFailed,
+		Reason:        "candidate-profile-timeout",
+	}); err != nil {
+		t.Fatalf("WriteStateFuzzAttempt failure attempt: %v", err)
+	}
+
+	report, err := BuildStateFuzzBatchReport(stateObjective, root)
+	if err != nil {
+		t.Fatalf("BuildStateFuzzBatchReport: %v", err)
+	}
+	if report.AttemptCount != 5 || report.AcceptedCount != 1 || report.RejectedEvaluationCount != 1 || report.ExecutionFailureCount != 1 || report.InvalidArtifactRootCount != 2 || report.RecoveryOutcomeCounts["residual"] != 1 {
+		t.Fatalf("unexpected StateFuzz batch report: %#v", report)
+	}
+	if report.Attempts[2].Status != StateFuzzBatchInvalidArtifactRoot || report.Attempts[2].Reason != "candidate-profile-seed-lineage-mismatch" {
+		t.Fatalf("expected mixed root to remain invalid, got %#v", report.Attempts[2])
 	}
 }
 
@@ -169,6 +345,19 @@ func TestLangGraphSynthesisTargetRunRequiresExplicitNetworkAndUsesCandidatePromp
 	}
 }
 
+func TestValidateLangGraphCandidateProfilingEvidenceReportsTimeout(t *testing.T) {
+	err := validateLangGraphCandidateProfilingEvidence(&target.TargetRunResult{
+		RunID: "timed-out-run",
+		CommandResult: target.TargetCommandResult{
+			TimedOut:   true,
+			DurationMs: 120000,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "timed out after 120000ms") || !strings.Contains(err.Error(), "not retained") {
+		t.Fatalf("expected a specific incomplete-profile timeout error, got %v", err)
+	}
+}
+
 func TestReadLangGraphNativeCheckpointManifestRequiresDurableExactIDs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "langgraph-native-checkpoints.json")
 	if err := os.WriteFile(path, []byte(`{
@@ -209,6 +398,22 @@ func TestLangGraphNativeCheckpointManifestPathUsesHostWorkspace(t *testing.T) {
 	}
 	if _, err := langGraphNativeCheckpointManifestPath(&target.TargetRunResult{Workspace: "/workspace"}); err == nil {
 		t.Fatal("expected missing host workspace to be rejected")
+	}
+}
+
+func TestInferLangGraphNativeCheckpointManifestPathUsesRecordedPlanDirectory(t *testing.T) {
+	artifactDir := t.TempDir()
+	path, err := InferLangGraphNativeCheckpointManifestPath(objective.ProfileRun{
+		RecordedPlanArtifact: filepath.Join(artifactDir, "target-task.json"),
+	})
+	if err != nil {
+		t.Fatalf("InferLangGraphNativeCheckpointManifestPath returned error: %v", err)
+	}
+	if want := filepath.Join(artifactDir, LangGraphNativeCheckpointManifestArtifact); path != want {
+		t.Fatalf("manifest path = %q, want %q", path, want)
+	}
+	if _, err := InferLangGraphNativeCheckpointManifestPath(objective.ProfileRun{}); err == nil {
+		t.Fatal("expected profile run without a recorded target plan to be rejected")
 	}
 }
 
@@ -381,6 +586,66 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 	manifest.NativeCheckpoints[1].PersistedMonotonicNS = 0
 	if _, err := BindLangGraphNativeFrontier(stateObjective, candidate, run, "C0..C1", "runs/run-1/langgraph-native-checkpoints.json", manifest); err == nil {
 		t.Fatal("expected native binding without a timestamped before checkpoint to be rejected")
+	}
+}
+
+func TestLangGraphUnixSocketProbeRejectsMultipleLiveLinkedEndpoints(t *testing.T) {
+	endpoint := func(socketID string, pid uint32) []profiling.PersistentResource {
+		return []profiling.PersistentResource{
+			{Observed: true, Resource: profiling.ResourceRef{
+				ResourceID: "unix-socket:" + socketID,
+				Family:     profiling.StateFamilyIPC,
+				Kind:       "unix-listener",
+				SocketID:   socketID,
+			}},
+			{Observed: true, Resource: profiling.ResourceRef{
+				ResourceID: "container-fd:" + socketID,
+				Family:     profiling.StateFamilyHandle,
+				Kind:       "socket",
+				SocketID:   socketID,
+				HolderPID:  pid,
+				FD:         3,
+			}},
+		}
+	}
+	resources := append(endpoint("socket:one", 60), endpoint("socket:two", 107)...)
+	newEffect := func(id, operation, socketID string) profiling.NormalizedEffect {
+		return profiling.NormalizedEffect{
+			EffectID:  id,
+			Family:    profiling.StateFamilyIPC,
+			Operation: operation,
+			Resource: profiling.ResourceRef{
+				SocketID: socketID,
+			},
+		}
+	}
+	run := objective.ProfileRun{
+		CheckpointSummaries: []profiling.CheckpointStateSummary{{
+			CheckpointID: "C2",
+			Resources:    resources,
+		}},
+		CheckpointMap: profiling.CheckpointEffectMap{Intervals: []profiling.CheckpointInterval{{
+			FrontierID: "C0..C1",
+			Effects: []profiling.NormalizedEffect{
+				newEffect("bind-one", "bind", "socket:one"),
+				newEffect("listen-one", "listen", "socket:one"),
+				newEffect("bind-two", "bind", "socket:two"),
+				newEffect("listen-two", "listen", "socket:two"),
+			},
+			EvidenceLinks: []profiling.EvidenceLink{
+				{EffectID: "bind-one", ResourceID: "unix-socket:socket:one", Relation: profiling.EvidenceLinkExactSocketID},
+				{EffectID: "listen-one", ResourceID: "unix-socket:socket:one", Relation: profiling.EvidenceLinkExactSocketID},
+				{EffectID: "bind-two", ResourceID: "unix-socket:socket:two", Relation: profiling.EvidenceLinkExactSocketID},
+				{EffectID: "listen-two", ResourceID: "unix-socket:socket:two", Relation: profiling.EvidenceLinkExactSocketID},
+			},
+		}}},
+	}
+	_, err := langGraphUnixSocketProbe(run, LangGraphNativeFrontierBinding{FrontierID: "C0..C1"}, "C2")
+	if err == nil {
+		t.Fatal("expected multiple live linked Unix endpoints to be rejected")
+	}
+	if !strings.Contains(err.Error(), "multiple linked Unix listener endpoints") || !strings.Contains(err.Error(), "socket:one,socket:two") {
+		t.Fatalf("unexpected multiple-listener error: %v", err)
 	}
 }
 

@@ -212,6 +212,29 @@ def parse_args() -> argparse.Namespace:
         help="Optional workspace-relative Unix socket to probe immediately before and after a fork. The probe never creates, replaces, or unlinks the endpoint.",
     )
     parser.add_argument(
+        "--passive-unix-socket-probe-mode",
+        choices=("full", "pruned"),
+        default="full",
+        help="full enumerates every visible holder; pruned verifies only the recorded holder and cannot prove multiplicity.",
+    )
+    parser.add_argument(
+        "--passive-unix-socket-expected-id",
+        default="",
+        help="Profile-recorded kernel socket ID used by the passive recovery probe.",
+    )
+    parser.add_argument(
+        "--passive-unix-socket-expected-holder-pid",
+        type=int,
+        default=-1,
+        help="Profile-recorded listener holder PID used by the passive recovery probe.",
+    )
+    parser.add_argument(
+        "--passive-unix-socket-expected-holder-fd",
+        type=int,
+        default=-1,
+        help="Profile-recorded listener holder FD used by the passive recovery probe.",
+    )
+    parser.add_argument(
         "--recovery-observation-artifact",
         default=os.environ.get(
             "SYNCFUZZ_LANGGRAPH_RECOVERY_OBSERVATION_ARTIFACT",
@@ -2206,7 +2229,9 @@ def resolve_passive_unix_socket_path(workspace: Path, value: str) -> Path:
     return parent / candidate.name
 
 
-def passive_unix_socket_observation(workspace: Path, value: str) -> dict[str, Any]:
+def passive_unix_socket_observation(
+    workspace: Path, value: str, args: argparse.Namespace
+) -> dict[str, Any]:
     """Capture non-mutating endpoint identity evidence for one fork boundary.
 
     This deliberately uses only ``lstat``: opening a client connection can
@@ -2250,17 +2275,49 @@ def passive_unix_socket_observation(workspace: Path, value: str) -> dict[str, An
     # recovery container joins the retained source PID/network namespaces, so
     # this proves the node is still backed by the profiled listener rather than
     # merely being a stale filesystem socket entry.
-    observation.update(passive_unix_listener_observation(endpoint))
+    observation.update(
+        passive_unix_listener_observation(
+            endpoint,
+            probe_mode=args.passive_unix_socket_probe_mode,
+            expected_socket_id=args.passive_unix_socket_expected_id,
+            expected_holder_pid=args.passive_unix_socket_expected_holder_pid,
+            expected_holder_fd=args.passive_unix_socket_expected_holder_fd,
+        )
+    )
     return observation
 
 
-def passive_unix_listener_observation(endpoint: Path) -> dict[str, Any]:
+def passive_unix_listener_observation(
+    endpoint: Path,
+    *,
+    probe_mode: str,
+    expected_socket_id: str,
+    expected_holder_pid: int,
+    expected_holder_fd: int,
+) -> dict[str, Any]:
+    started_ns = time.monotonic_ns()
     endpoint_path = str(endpoint)
+    observation: dict[str, Any] = {
+        "probe_mode": probe_mode,
+        "probe_duration_ns": 0,
+        "scanned_processes": 0,
+        "scanned_fds": 0,
+        "listener_active": False,
+        "listener_count": 0,
+        "kernel_socket_id": "",
+        "listener_holders": [],
+    }
+
+    def finish() -> dict[str, Any]:
+        observation["probe_duration_ns"] = max(0, time.monotonic_ns() - started_ns)
+        return observation
+
     listeners: list[str] = []
     try:
         lines = Path("/proc/net/unix").read_text(encoding="utf-8").splitlines()
     except OSError as exc:
-        return {"listener_probe_error": f"read /proc/net/unix: {exc}"}
+        observation["listener_probe_error"] = f"read /proc/net/unix: {exc}"
+        return finish()
     for line in lines[1:]:
         fields = line.split(maxsplit=7)
         if len(fields) < 8:
@@ -2269,16 +2326,39 @@ def passive_unix_listener_observation(endpoint: Path) -> dict[str, Any]:
         if socket_type == "0001" and state == "01" and path == endpoint_path:
             listeners.append(inode)
     listeners.sort()
-    observation: dict[str, Any] = {
-        "listener_active": len(listeners) == 1,
-        "listener_count": len(listeners),
-        "kernel_socket_id": f"socket:{listeners[0]}" if len(listeners) == 1 else "",
-        "listener_holders": [],
-    }
+    observation.update(
+        {
+            "listener_active": len(listeners) == 1,
+            "listener_count": len(listeners),
+            "kernel_socket_id": f"socket:{listeners[0]}" if len(listeners) == 1 else "",
+        }
+    )
     if len(listeners) != 1:
-        return observation
+        return finish()
 
     expected_target = f"socket:[{listeners[0]}]"
+    if probe_mode == "pruned":
+        if (
+            expected_socket_id != observation["kernel_socket_id"]
+            or expected_holder_pid < 0
+            or expected_holder_fd < 0
+        ):
+            observation["holder_probe_error"] = "pruned probe lacks matching recorded listener identity"
+            return finish()
+        observation["scanned_processes"] = 1
+        observation["scanned_fds"] = 1
+        holder_path = Path("/proc") / str(expected_holder_pid) / "fd" / str(expected_holder_fd)
+        try:
+            if os.readlink(holder_path) == expected_target:
+                observation["listener_holders"] = [
+                    {"pid": expected_holder_pid, "fds": [expected_holder_fd]}
+                ]
+            else:
+                observation["holder_probe_error"] = "recorded holder FD no longer references listener socket"
+        except OSError as exc:
+            observation["holder_probe_error"] = f"read recorded holder FD: {exc}"
+        return finish()
+
     holders: list[dict[str, Any]] = []
     try:
         proc_entries = sorted(Path("/proc").iterdir(), key=lambda entry: entry.name)
@@ -2288,12 +2368,15 @@ def passive_unix_listener_observation(endpoint: Path) -> dict[str, Any]:
     for proc_entry in proc_entries:
         if not proc_entry.name.isdigit():
             continue
+
+        observation["scanned_processes"] += 1
         fds: list[int] = []
         try:
             fd_entries = list((proc_entry / "fd").iterdir())
         except OSError:
             continue
         for fd_entry in fd_entries:
+            observation["scanned_fds"] += 1
             try:
                 if os.readlink(fd_entry) == expected_target and fd_entry.name.isdigit():
                     fds.append(int(fd_entry.name))
@@ -2302,7 +2385,7 @@ def passive_unix_listener_observation(endpoint: Path) -> dict[str, Any]:
         if fds:
             holders.append({"pid": int(proc_entry.name), "fds": sorted(fds)})
     observation["listener_holders"] = holders
-    return observation
+    return finish()
 
 
 def summarize_passive_recovery_observation(
@@ -2656,7 +2739,7 @@ def main() -> int:
         passive_before_fork = None
         if args.passive_unix_socket_path:
             passive_before_fork = passive_unix_socket_observation(
-                workspace, args.passive_unix_socket_path
+                workspace, args.passive_unix_socket_path, args
             )
         lifecycle.begin_operation(
             "fork",
@@ -2676,7 +2759,7 @@ def main() -> int:
         finally:
             if passive_before_fork is not None:
                 passive_after_fork = passive_unix_socket_observation(
-                    workspace, args.passive_unix_socket_path
+                    workspace, args.passive_unix_socket_path, args
                 )
                 passive_recovery_observation = summarize_passive_recovery_observation(
                     args=args,
@@ -2713,10 +2796,10 @@ def main() -> int:
             checkpoint_id=extract_checkpoint_id(selected_state),
         )
         passive_before_fork = passive_unix_socket_observation(
-            workspace, args.passive_unix_socket_path
+            workspace, args.passive_unix_socket_path, args
         )
         passive_after_fork = passive_unix_socket_observation(
-            workspace, args.passive_unix_socket_path
+            workspace, args.passive_unix_socket_path, args
         )
         passive_recovery_observation = summarize_passive_recovery_observation(
             args=args,

@@ -3,6 +3,7 @@ package synthesis
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/objective"
@@ -15,6 +16,7 @@ type LangGraphForkPlanConfig struct {
 	ContainerImage        string
 	RuntimeRoot           string
 	PassiveUnixSocketPath string
+	PassiveProbeMode      recovery.LangGraphPassiveProbeMode
 }
 
 // PrepareLangGraphForkPlan turns a timestamp-validated native binding into an
@@ -35,6 +37,10 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 	}
 	if strings.TrimSpace(config.Model) == "" || strings.TrimSpace(config.ContainerImage) == "" || strings.TrimSpace(config.RuntimeRoot) == "" || strings.TrimSpace(config.PassiveUnixSocketPath) == "" {
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph fork plan requires model, container image, runtime root, and passive Unix socket path")
+	}
+	probeMode := config.PassiveProbeMode.Effective()
+	if !probeMode.Valid() {
+		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph fork plan has unsupported passive probe mode %q", config.PassiveProbeMode)
 	}
 	headCheckpointID, headMonotonicNS, err := langGraphMaterializationHead(run, binding)
 	if err != nil {
@@ -79,6 +85,7 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		ContainerImage:                  strings.TrimSpace(config.ContainerImage),
 		RuntimeRoot:                     runtimeRoot,
 		PassiveUnixSocketPath:           strings.TrimSpace(config.PassiveUnixSocketPath),
+		PassiveProbeMode:                probeMode,
 		PassiveObservationID:            "unix-socket-listener-holder-v1:" + strings.TrimSpace(config.PassiveUnixSocketPath),
 		MaterializationHeadID:           "materialization-head:" + run.ProfileRunID + ":" + headCheckpointID,
 		MaterializationHeadCheckpointID: headCheckpointID,
@@ -127,45 +134,6 @@ func langGraphUnixSocketProbe(run objective.ProfileRun, binding LangGraphNativeF
 	if !ok {
 		return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph profile has no bound frontier %q", binding.FrontierID)
 	}
-	linkedResourceByEffect := make(map[string]string, len(frontier.EvidenceLinks))
-	for _, link := range frontier.EvidenceLinks {
-		if link.Relation == profiling.EvidenceLinkExactSocketID {
-			linkedResourceByEffect[link.EffectID] = link.ResourceID
-		}
-	}
-	var bindEffect, listenEffect profiling.NormalizedEffect
-	for _, effect := range frontier.Effects {
-		resourceID, linked := linkedResourceByEffect[effect.EffectID]
-		if !linked || !strings.HasPrefix(resourceID, "unix-socket:") || effect.Family != profiling.StateFamilyIPC {
-			continue
-		}
-		switch effect.Operation {
-		case "bind":
-			if bindEffect.EffectID != "" {
-				return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph frontier has multiple linked Unix bind effects")
-			}
-			bindEffect = effect
-		case "listen":
-			if listenEffect.EffectID != "" {
-				return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph frontier has multiple linked Unix listen effects")
-			}
-			listenEffect = effect
-		}
-	}
-	if bindEffect.EffectID == "" || listenEffect.EffectID == "" || bindEffect.Resource.SocketID == "" || bindEffect.Resource.SocketID != listenEffect.Resource.SocketID {
-		return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph frontier does not prove one linked Unix bind/listen endpoint")
-	}
-	socketID := bindEffect.Resource.SocketID
-	for _, interval := range run.CheckpointMap.Intervals {
-		for _, effect := range interval.Effects {
-			if effect.Family != profiling.StateFamilyIPC || effect.Resource.SocketID != socketID || (effect.Operation != "bind" && effect.Operation != "listen") {
-				continue
-			}
-			if (effect.Operation == "bind" && effect.EffectID != bindEffect.EffectID) || (effect.Operation == "listen" && effect.EffectID != listenEffect.EffectID) {
-				return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph profile records repeated %s for retained socket %q", effect.Operation, socketID)
-			}
-		}
-	}
 	var head *profiling.CheckpointStateSummary
 	for index := range run.CheckpointSummaries {
 		if run.CheckpointSummaries[index].CheckpointID == headCheckpointID {
@@ -176,18 +144,96 @@ func langGraphUnixSocketProbe(run objective.ProfileRun, binding LangGraphNativeF
 	if head == nil {
 		return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph materialization head %q has no state summary", headCheckpointID)
 	}
-	endpointID := "unix-socket:" + socketID
-	endpointFound := false
-	holders := make([]profiling.ResourceRef, 0, 1)
+
+	// A frontier can contain abandoned listener attempts. Only a socket that is
+	// still present at the materialization head may become a recovery probe.
+	liveEndpoints := make(map[string]struct{})
+	holdersBySocket := make(map[string][]profiling.ResourceRef)
+	seenHolders := make(map[string]map[string]struct{})
 	for _, resource := range head.Resources {
-		if resource.Resource.ResourceID == endpointID && resource.Resource.Family == profiling.StateFamilyIPC && resource.Resource.Kind == "unix-listener" && resource.Resource.SocketID == socketID {
-			endpointFound = true
+		value := resource.Resource
+		if value.Family == profiling.StateFamilyIPC && value.Kind == "unix-listener" && strings.HasPrefix(value.ResourceID, "unix-socket:") && value.SocketID != "" && value.ResourceID == "unix-socket:"+value.SocketID {
+			liveEndpoints[value.SocketID] = struct{}{}
 		}
-		if resource.Resource.Family == profiling.StateFamilyHandle && resource.Resource.SocketID == socketID && resource.Resource.HolderPID != 0 && resource.Resource.FD >= 0 {
-			holders = append(holders, resource.Resource)
+		if value.Family == profiling.StateFamilyHandle && value.SocketID != "" && value.HolderPID != 0 && value.FD >= 0 {
+			key := fmt.Sprintf("%d:%d", value.HolderPID, value.FD)
+			if seenHolders[value.SocketID] == nil {
+				seenHolders[value.SocketID] = make(map[string]struct{})
+			}
+			if _, seen := seenHolders[value.SocketID][key]; !seen {
+				seenHolders[value.SocketID][key] = struct{}{}
+				holdersBySocket[value.SocketID] = append(holdersBySocket[value.SocketID], value)
+			}
 		}
 	}
-	if !endpointFound || len(holders) != 1 {
+
+	linkedResourceByEffect := make(map[string]string, len(frontier.EvidenceLinks))
+	for _, link := range frontier.EvidenceLinks {
+		if link.Relation == profiling.EvidenceLinkExactSocketID {
+			linkedResourceByEffect[link.EffectID] = link.ResourceID
+		}
+	}
+	type endpointEffects struct {
+		bind   profiling.NormalizedEffect
+		listen profiling.NormalizedEffect
+	}
+	effectsBySocket := make(map[string]endpointEffects)
+	for _, effect := range frontier.Effects {
+		resourceID, linked := linkedResourceByEffect[effect.EffectID]
+		if !linked || !strings.HasPrefix(resourceID, "unix-socket:") || effect.Family != profiling.StateFamilyIPC {
+			continue
+		}
+		socketID := strings.TrimPrefix(resourceID, "unix-socket:")
+		if socketID == "" || effect.Resource.SocketID != socketID {
+			continue
+		}
+		if _, live := liveEndpoints[socketID]; !live {
+			continue
+		}
+		endpoint := effectsBySocket[socketID]
+		switch effect.Operation {
+		case "bind":
+			if endpoint.bind.EffectID != "" {
+				return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph frontier records repeated linked Unix bind effects for live endpoint %q", socketID)
+			}
+			endpoint.bind = effect
+		case "listen":
+			if endpoint.listen.EffectID != "" {
+				return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph frontier records repeated linked Unix listen effects for live endpoint %q", socketID)
+			}
+			endpoint.listen = effect
+		default:
+			continue
+		}
+		effectsBySocket[socketID] = endpoint
+	}
+	candidates := make([]string, 0, len(effectsBySocket))
+	for socketID, endpoint := range effectsBySocket {
+		if endpoint.bind.EffectID != "" && endpoint.listen.EffectID != "" {
+			candidates = append(candidates, socketID)
+		}
+	}
+	sort.Strings(candidates)
+	if len(candidates) == 0 {
+		return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph frontier does not prove a linked Unix bind/listen endpoint that remains live at the materialization head")
+	}
+	if len(candidates) != 1 {
+		return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph materialization head retains multiple linked Unix listener endpoints: %s", strings.Join(candidates, ","))
+	}
+	socketID := candidates[0]
+	selected := effectsBySocket[socketID]
+	for _, interval := range run.CheckpointMap.Intervals {
+		for _, effect := range interval.Effects {
+			if effect.Family != profiling.StateFamilyIPC || effect.Resource.SocketID != socketID || (effect.Operation != "bind" && effect.Operation != "listen") {
+				continue
+			}
+			if (effect.Operation == "bind" && effect.EffectID != selected.bind.EffectID) || (effect.Operation == "listen" && effect.EffectID != selected.listen.EffectID) {
+				return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph profile records repeated %s for retained socket %q", effect.Operation, socketID)
+			}
+		}
+	}
+	holders := holdersBySocket[socketID]
+	if len(holders) != 1 {
 		return recovery.LangGraphUnixSocketProbe{}, fmt.Errorf("LangGraph materialization head does not prove exactly one live listener holder for %q", socketID)
 	}
 	probe := recovery.LangGraphUnixSocketProbe{
@@ -195,8 +241,8 @@ func langGraphUnixSocketProbe(run objective.ProfileRun, binding LangGraphNativeF
 		SocketID:       socketID,
 		HolderPID:      holders[0].HolderPID,
 		HolderFD:       holders[0].FD,
-		BindEffectID:   bindEffect.EffectID,
-		ListenEffectID: listenEffect.EffectID,
+		BindEffectID:   selected.bind.EffectID,
+		ListenEffectID: selected.listen.EffectID,
 	}
 	return probe, probe.Validate()
 }

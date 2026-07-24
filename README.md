@@ -157,6 +157,59 @@ The V3 privileged live calibration completed on 2026-07-24 with profile run
 reconfirmed as the eBPF-linked `socket:180463219`, held by source PID 58 on FD
 3. This is a deterministic recovery result for a manual baseline candidate,
 not a vulnerability claim, generator-quality result, or coverage increment.
+Use `make synthesis-langgraph-v3-calibration` to reproduce the complete
+profile/evaluate/bind/prepare/promote/recovery-set/release chain without
+hand-copying the target run ID; it releases the retained runtime if a later
+step fails after `profile-run.json` has been written.
+`make synthesis-langgraph-v3-fidelity` profiles once and runs full and pruned
+observers against that same retained source runtime; its `full/` and `pruned/`
+subdirectories keep weaker-probe results separate from the full recovery set.
+`make synthesis-langgraph-v3-fidelity-batch` repeats that paired experiment
+under independent source leases and writes `fidelity-report.json`. Its
+`LANGGRAPH_V3_FIDELITY_REPEAT` value is the number of accepted pairs required;
+`LANGGRAPH_V3_FIDELITY_MAX_ATTEMPTS` bounds provider attempts. Each
+`attempt-*/attempt.json` records `accepted`, `rejected-source-baseline`, or
+`execution-failed`, with failed logs retained beside it. The report preserves
+all attempts as the denominator while aggregating only accepted pairs that
+share a recorded plan, source runtime identity, workspace/checkpoint snapshot,
+listener identity, and exact native coordinates. An exhausted batch writes its
+incomplete report before returning non-zero.
+
+The next StateFuzz step is `make synthesis-langgraph-statefuzz-attempt`. The
+caller explicitly selects a generator implementation with
+`LANGGRAPH_STATEFUZZ_GENERATOR_COMMAND`; it receives the JSON path in
+`SYNCFUZZ_SYNTHESIS_REQUEST` and emits exactly one `{"task":"..."}` response.
+`examples/synthesis/openai_compatible_generator.py` is an opt-in
+OpenAI-compatible adapter. It reads the target-owned scaffold identified in
+the bounded request so generated tasks observe its stable workspace-resource
+contract; a manually supplied task is never treated as generated coverage. The target profiles the generated
+candidate, writes `evaluation.json`, and only promotes a validated candidate to
+a StateSeed. To repair a rejected candidate, pass that evaluation artifact to
+the next attempt through `LANGGRAPH_STATEFUZZ_FEEDBACK=<root>/evaluation.json`;
+only bounded atom-level observation feedback is reintroduced.
+Each generated trial also writes `statefuzz-attempt.json`. It distinguishes an
+accepted recovery run from `rejected-evaluation`, `rejected-source-baseline`,
+and an actual execution failure, so an invalid listener-holder baseline remains
+part of the experimental denominator without being misreported as a crash.
+Each `LANGGRAPH_SYNTHESIS_ROOT` is single-use; the target refuses an existing
+root so candidate, profile, and recovery artifacts cannot be mixed across
+provider invocations.
+
+After a batch, run:
+
+```bash
+make synthesis-langgraph-statefuzz-report \
+  LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> \
+  LANGGRAPH_STATEFUZZ_BATCH_ROOT=runs/<batch>
+```
+
+It writes
+`statefuzz-batch-report.json` after auditing the candidate, evaluation,
+ProfileRun, StateSeed, and recovery-execution lineage in every `attempt-*`
+directory. Legacy roots without `statefuzz-attempt.json` are derived from
+their evidence; a root whose top-level candidate was overwritten while it
+retains an earlier seed is reported as `invalid-artifact-root`, never as an
+accepted recovery result.
 
 The V2.3 recovery executor additionally registers the first real durable
 adapter, `maf-workflow`. Its adapter-owned plan maps V2 coordinates to exact

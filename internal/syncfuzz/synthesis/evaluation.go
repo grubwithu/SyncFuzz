@@ -3,6 +3,7 @@ package synthesis
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/objective"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/profiling"
@@ -19,6 +20,83 @@ type CandidateEvaluation struct {
 	MissingEffects       []objective.EffectAtom `json:"missing_effects"`
 	Feedback             []AtomFeedback         `json:"feedback"`
 	EligibleForRetention bool                   `json:"eligible_for_retention"`
+}
+
+// ValidateFor ensures feedback imported for a repair attempt is derived from
+// the same bounded objective grammar. It deliberately does not trust a prior
+// task's prose or claim that an effect was achieved.
+func (e CandidateEvaluation) ValidateFor(stateObjective objective.StateObjective) error {
+	if e.SchemaVersion != SchemaVersion || strings.TrimSpace(e.CandidateID) == "" || strings.TrimSpace(e.ProfileRunID) == "" {
+		return fmt.Errorf("synthesis candidate evaluation is incomplete")
+	}
+	if err := stateObjective.Validate(); err != nil {
+		return err
+	}
+	feedbackByAtom := make(map[string]AtomFeedback, len(e.Feedback))
+	for _, feedback := range e.Feedback {
+		if err := feedback.Validate(); err != nil {
+			return err
+		}
+		key := effectKey(objective.EffectAtom{Family: feedback.Family, Operation: feedback.Operation})
+		if _, exists := feedbackByAtom[key]; exists {
+			return fmt.Errorf("synthesis candidate evaluation repeats feedback atom %s", key)
+		}
+		feedbackByAtom[key] = feedback
+	}
+	observed := make(map[string]struct{}, len(e.ObservedEffects))
+	for _, atom := range e.ObservedEffects {
+		if !objectiveHasAtom(stateObjective, atom) {
+			return fmt.Errorf("synthesis candidate evaluation observed atom %s outside objective", effectKey(atom))
+		}
+		key := effectKey(atom)
+		if _, exists := observed[key]; exists {
+			return fmt.Errorf("synthesis candidate evaluation repeats observed atom %s", key)
+		}
+		observed[key] = struct{}{}
+	}
+	missing := make(map[string]struct{}, len(e.MissingEffects))
+	for _, atom := range e.MissingEffects {
+		if !objectiveHasAtom(stateObjective, atom) {
+			return fmt.Errorf("synthesis candidate evaluation missing atom %s outside objective", effectKey(atom))
+		}
+		key := effectKey(atom)
+		if _, exists := missing[key]; exists {
+			return fmt.Errorf("synthesis candidate evaluation repeats missing atom %s", key)
+		}
+		missing[key] = struct{}{}
+	}
+	for _, atom := range stateObjective.CanonicalEffects() {
+		key := effectKey(atom)
+		feedback, exists := feedbackByAtom[key]
+		if !exists {
+			return fmt.Errorf("synthesis candidate evaluation lacks feedback for objective atom %s", key)
+		}
+		_, observedAtom := observed[key]
+		_, missingAtom := missing[key]
+		if feedback.Observed != observedAtom || missingAtom == observedAtom {
+			return fmt.Errorf("synthesis candidate evaluation has inconsistent feedback for objective atom %s", key)
+		}
+	}
+	if len(feedbackByAtom) != len(stateObjective.Effects) || len(observed)+len(missing) != len(stateObjective.Effects) {
+		return fmt.Errorf("synthesis candidate evaluation does not account for exactly the objective atoms")
+	}
+	if e.EligibleForRetention != (len(e.MissingEffects) == 0 && len(e.ValidatedFrontiers) > 0) {
+		return fmt.Errorf("synthesis candidate evaluation has inconsistent retention eligibility")
+	}
+	return nil
+}
+
+// FeedbackForObjective returns canonical, execution-derived repair feedback
+// suitable for the next GeneratorRequest.
+func (e CandidateEvaluation) FeedbackForObjective(stateObjective objective.StateObjective) ([]AtomFeedback, error) {
+	if err := e.ValidateFor(stateObjective); err != nil {
+		return nil, err
+	}
+	feedback := append([]AtomFeedback{}, e.Feedback...)
+	sort.Slice(feedback, func(left, right int) bool {
+		return effectKey(objective.EffectAtom{Family: feedback[left].Family, Operation: feedback[left].Operation}) < effectKey(objective.EffectAtom{Family: feedback[right].Family, Operation: feedback[right].Operation})
+	})
+	return feedback, nil
 }
 
 // EvaluateProfile checks whether each objective atom is linked to a
@@ -105,4 +183,13 @@ func feedbackReason(observed bool) string {
 		return "linked persistent frontier observed"
 	}
 	return "no linked persistent frontier observed"
+}
+
+func objectiveHasAtom(stateObjective objective.StateObjective, atom objective.EffectAtom) bool {
+	for _, expected := range stateObjective.Effects {
+		if expected.Family == atom.Family && expected.Operation == atom.Operation {
+			return true
+		}
+	}
+	return false
 }

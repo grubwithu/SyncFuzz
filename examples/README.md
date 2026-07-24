@@ -88,6 +88,53 @@ generator context for that route. It describes only the target-owned project
 surface and prohibitions; it does not prescribe a testcase, an expected
 effect, or a recovery query.
 
+For an opt-in OpenAI-compatible task generator, first make sure `.env` defines
+`OPENAI_API_KEY` and `LANGCHAIN_MODEL=openai:<model>`. The adapter uses
+`OPENAI_BASE_URL` when it is set, so the same command works with an
+OpenAI-compatible endpoint. The following is the first StateFuzz attempt; it
+generates a candidate, profiles it, evaluates its evidence, and runs the V3
+recovery controls.
+
+```bash
+make synthesis-langgraph-statefuzz-attempt \
+  LANGGRAPH_SYNTHESIS_OBJECTIVE=examples/objectives/unix-listener-survival.example.json \
+  LANGGRAPH_SYNTHESIS_ROOT=runs/langgraph-statefuzz/attempt-000 \
+  LANGGRAPH_STATEFUZZ_GENERATOR_ID=openai-compatible-generator-v2 \
+  LANGGRAPH_STATEFUZZ_GENERATOR_COMMAND='python3 examples/synthesis/openai_compatible_generator.py' \
+  LANGGRAPH_STATEFUZZ_ATTEMPT=0 \
+  LANGGRAPH_V3_PROFILE_TIMEOUT=5m
+```
+
+If the first candidate has insufficient evidence, the target prints
+`candidate_status: rejected; recovery skipped` and leaves the
+execution-derived feedback artifact for a new attempt. Do not reuse or edit
+its task text. Each attempt root is single-use; choose a fresh directory and
+attempt index for every provider invocation.
+
+```bash
+make synthesis-langgraph-statefuzz-attempt \
+  LANGGRAPH_SYNTHESIS_OBJECTIVE=examples/objectives/unix-listener-survival.example.json \
+  LANGGRAPH_SYNTHESIS_ROOT=runs/langgraph-statefuzz/attempt-001 \
+  LANGGRAPH_STATEFUZZ_GENERATOR_ID=openai-compatible-generator-v2 \
+  LANGGRAPH_STATEFUZZ_GENERATOR_COMMAND='python3 examples/synthesis/openai_compatible_generator.py' \
+  LANGGRAPH_STATEFUZZ_ATTEMPT=1 \
+  LANGGRAPH_STATEFUZZ_FEEDBACK=runs/langgraph-statefuzz/attempt-000/evaluation.json \
+  LANGGRAPH_V3_PROFILE_TIMEOUT=5m
+```
+
+After one or more generated attempts, audit their evidence and retain every
+attempt root in the result denominator:
+
+```bash
+make synthesis-langgraph-statefuzz-report \
+  LANGGRAPH_SYNTHESIS_OBJECTIVE=examples/objectives/unix-listener-survival.example.json \
+  LANGGRAPH_STATEFUZZ_BATCH_ROOT=runs/langgraph-statefuzz
+```
+
+The report distinguishes eligible recoveries from retention rejections, source
+baseline rejections, execution failures, and mixed artifact roots. It performs
+no provider call or Docker run.
+
 ```bash
 make langgraph-profile-image
 make synthesis-langgraph-profile \

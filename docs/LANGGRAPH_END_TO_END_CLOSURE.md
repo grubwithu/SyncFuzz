@@ -621,7 +621,19 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 
 ## 17. 可复现实验顺序
 
-完整重跑遵循以下顺序；每一步都消费前一步 artifact，而不是手填 ID：
+完整重跑可以使用 `synthesis-langgraph-v3-calibration`；它从 ProfileRun 的 recorded
+target plan 推导 native manifest，完成后释放 source runtime。其参数只需要 objective、
+candidate 和输出根目录：
+
+```bash
+make synthesis-langgraph-v3-calibration \
+  LANGGRAPH_SYNTHESIS_OBJECTIVE=examples/objectives/unix-listener-survival.example.json \
+  LANGGRAPH_SYNTHESIS_CANDIDATE=runs/langgraph-v2.4/manual-baseline/candidate.json \
+  LANGGRAPH_SYNTHESIS_ROOT=runs/langgraph-v3/<run-name>
+```
+
+该目标仍需要本地镜像、eBPF 权限和显式 provider network access。若排查某一步，完整
+手动顺序如下；每一步都消费前一步 artifact，而不是手填 ID：
 
 ```text
 1. synthesis schedule / generate（或明确标记的手工 baseline candidate）
@@ -635,6 +647,150 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 9. syncfuzz recovery execute --set               -> V3 recovery-set execution
 10. make synthesis-langgraph-release-runtime
 ```
+
+## 18. Full-vs-pruned Probe Fidelity
+
+The current V3 listener-holder observer is the **full** probe: after confirming
+one matching listener in `/proc/net/unix`, it enumerates visible PID/FD entries
+to establish that the profiled holder PID/FD is the only holder. That global
+enumeration is required before `effect_multiplicity=single` and therefore a
+`residual` verdict can be emitted.
+
+The **pruned** comparison checks only the profile-recorded PID/FD and must
+report multiplicity as `unknown`: it can prove the recorded holder is still
+present, not that another process has not duplicated the same socket FD.
+Before either observer runs, fork-plan preparation also requires exactly one
+eBPF-linked Unix listener endpoint to remain live at the materialization head.
+Earlier bind attempts that no longer exist at that head are ignored, but two
+surviving linked endpoints are a contaminated source baseline and are rejected;
+SyncFuzz does not select the later bind to hide the duplicate listener.
+`make synthesis-langgraph-v3-fidelity` performs that pairing: it profiles once,
+then runs full and pruned observers against the same retained source runtime
+and exact before/after/head coordinates. Its `full/` and `pruned/` result
+directories report classifications, identity fields, and structured post-query
+probe metrics (`duration_ns`, scanned processes, and scanned FDs). The pruned
+result is expected to be conservatively `inconclusive`. A pruned observer must
+never inherit the full probe's `single` or `residual` conclusion merely because
+the recorded holder is still live.
+
+For repeated trials, use the batch target:
+
+```bash
+make synthesis-langgraph-v3-fidelity-batch \
+  LANGGRAPH_SYNTHESIS_OBJECTIVE=examples/objectives/unix-listener-survival.example.json \
+  LANGGRAPH_SYNTHESIS_CANDIDATE=runs/langgraph-v2.4/manual-baseline/candidate.json \
+  LANGGRAPH_SYNTHESIS_ROOT=runs/langgraph-fidelity-batch-001 \
+  LANGGRAPH_V3_FIDELITY_REPEAT=3 \
+  LANGGRAPH_V3_FIDELITY_MAX_ATTEMPTS=6 \
+  LANGGRAPH_V3_PROFILE_TIMEOUT=5m
+```
+
+`LANGGRAPH_V3_FIDELITY_REPEAT` now means the required count of **accepted**
+full/pruned pairs, not raw provider invocations. The batch creates
+`attempt-001/`, `attempt-002/`, and so on until it reaches that count or hits
+`LANGGRAPH_V3_FIDELITY_MAX_ATTEMPTS`. Every attempt retains `attempt.log` and
+a structured `attempt.json`. A multi-listener or otherwise invalid source
+baseline is recorded as `rejected-source-baseline`; other child failures are
+recorded as `execution-failed`. Neither is added to fidelity aggregates.
+
+Finally, `recovery fidelity-batch-report` emits `<root>/fidelity-report.json`.
+It records all attempt counts and reasons as the experimental denominator, then
+adds the accepted-pair fidelity aggregate: exact layer/OS-origin agreement,
+full multiplicity proofs, pruned `unknown` multiplicity, final-outcome matches,
+and post-query probe cost. If the attempt budget is exhausted, the incomplete
+report is still written and the Make target exits non-zero. It is probe-fidelity
+evidence, not a vulnerability verdict or a coverage result.
+
+`LANGGRAPH_V3_PROFILE_TIMEOUT` applies only to the provider-facing candidate
+profile. Keep `TARGET_TIMEOUT` as the independent recovery-query ceiling. A
+timed-out candidate is intentionally rejected as incomplete evidence and its
+container is cleaned up instead of being retained without a usable lease.
+
+## 19. StateFuzz Candidate Attempt
+
+The listener calibration above used a documented manual baseline and does not
+count as StateFuzz discovery. The first generated-candidate path is a single,
+execution-validated attempt:
+
+```bash
+make synthesis-langgraph-statefuzz-attempt \
+  LANGGRAPH_SYNTHESIS_OBJECTIVE=examples/objectives/unix-listener-survival.example.json \
+  LANGGRAPH_SYNTHESIS_ROOT=runs/langgraph-statefuzz/attempt-000 \
+  LANGGRAPH_STATEFUZZ_GENERATOR_ID=<stable-generator-id> \
+  LANGGRAPH_STATEFUZZ_GENERATOR_COMMAND='<generator command>' \
+  LANGGRAPH_STATEFUZZ_ATTEMPT=0 \
+  LANGGRAPH_V3_PROFILE_TIMEOUT=5m
+```
+
+The external command receives the request JSON pathname through
+`SYNCFUZZ_SYNTHESIS_REQUEST` and writes exactly one generator response such as
+`{"task":"..."}` to stdout. It may use the caller-selected provider, but the
+command line and credentials are never serialized. The request contains only
+the declared objective, target/scaffold identity, attempt index, and bounded
+atom feedback.
+
+For an OpenAI-compatible Chat Completions endpoint, the repository provides an
+explicitly selected adapter at
+`examples/synthesis/openai_compatible_generator.py`. It requires
+`OPENAI_API_KEY` and either `LANGCHAIN_MODEL=openai:<model>` or an explicit
+`OPENAI_GENERATOR_MODEL`; `OPENAI_BASE_URL` remains optional and uses the same
+endpoint convention as the LangGraph target. Use it by setting
+`LANGGRAPH_STATEFUZZ_GENERATOR_COMMAND='python3 examples/synthesis/openai_compatible_generator.py'`
+and record a stable adapter version in `LANGGRAPH_STATEFUZZ_GENERATOR_ID`. The
+adapter reads the target-owned scaffold named by the bounded request; for this
+target it declares `agent.sock` as the workspace-local observable Unix endpoint.
+
+The attempt writes `candidate.json`, `profile-run.json`, and `evaluation.json`.
+If evidence is insufficient, it prints `candidate_status: rejected; recovery
+skipped`, releases the retained runtime, and exits successfully without a
+StateSeed. Start a new root with a new attempt index and pass the evaluation
+back as feedback:
+
+```bash
+make synthesis-langgraph-statefuzz-attempt \
+  LANGGRAPH_SYNTHESIS_OBJECTIVE=examples/objectives/unix-listener-survival.example.json \
+  LANGGRAPH_SYNTHESIS_ROOT=runs/langgraph-statefuzz/attempt-001 \
+  LANGGRAPH_STATEFUZZ_GENERATOR_ID=<stable-generator-id> \
+  LANGGRAPH_STATEFUZZ_GENERATOR_COMMAND='<generator command>' \
+  LANGGRAPH_STATEFUZZ_ATTEMPT=1 \
+  LANGGRAPH_STATEFUZZ_FEEDBACK=runs/langgraph-statefuzz/attempt-000/evaluation.json \
+  LANGGRAPH_V3_PROFILE_TIMEOUT=5m
+```
+
+`--feedback` rejects a malformed evaluation, an atom outside the objective, or
+any inconsistency between observed/missing atom sets and retention eligibility.
+It never forwards prior task prose, target output, or a manually chosen
+frontier to the generator. A valid candidate continues through the same V3
+binding, StateSeed promotion, and before/after/head recovery controls as the
+calibration path.
+
+Every generated root writes `statefuzz-attempt.json`. `rejected-evaluation`
+means no valid effect frontier was retained. `rejected-source-baseline` means
+the candidate profile was eligible but the V3 materialization head could not
+prove exactly one holder for the linked listener; the retained runtime is
+released and no recovery verdict is emitted. This is a valid experimental
+denominator outcome, not a weaker form of `residual`.
+
+The output root is single-use. `synthesis-langgraph-statefuzz-attempt` refuses
+to overwrite it, which prevents a later generated candidate from replacing the
+top-level candidate/profile while earlier StateSeed or recovery artifacts remain
+in the same directory.
+
+After collecting a batch, audit all roots without invoking another provider:
+
+```bash
+make synthesis-langgraph-statefuzz-report \
+  LANGGRAPH_SYNTHESIS_OBJECTIVE=examples/objectives/unix-listener-survival.example.json \
+  LANGGRAPH_STATEFUZZ_BATCH_ROOT=runs/langgraph-statefuzz
+```
+
+The report keeps every `attempt-*` directory in its denominator and separates
+`accepted`, `rejected-evaluation`, `rejected-source-baseline`,
+`execution-failed`, and `invalid-artifact-root`. It validates the full
+candidate -> evaluation -> ProfileRun -> StateSeed -> recovery-set lineage for
+accepted data. Older roots without a status record are derived from their
+evidence, while a root mixed by an old overwrite is explicitly invalid rather
+than silently counted as either a residual or a rejection.
 
 第 8 步的核心命令形态是：
 

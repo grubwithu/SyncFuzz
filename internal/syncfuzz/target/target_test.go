@@ -176,6 +176,24 @@ func TestRunTargetDefaultOracleRequiresSuccessfulCommand(t *testing.T) {
 	}
 }
 
+func TestRunTargetDoesNotRetainIncompleteRuntime(t *testing.T) {
+	result, err := RunTarget(context.Background(), TargetRunOptions{
+		OutDir:            filepath.Join(t.TempDir(), "runs"),
+		TargetID:          "timed-out-command",
+		TaskID:            "orphan-process",
+		Command:           "sleep 1",
+		Timeout:           10 * time.Millisecond,
+		ObserveDelay:      1 * time.Millisecond,
+		RetainEnvironment: true,
+	})
+	if err != nil {
+		t.Fatalf("RunTarget returned an error for an incomplete local run: %v", err)
+	}
+	if result.Completed || !result.CommandResult.TimedOut || result.RetainedRuntime != nil {
+		t.Fatalf("incomplete target run must not retain a recovery lease: %#v", result)
+	}
+}
+
 func TestRunTargetPersistentShellTaskRequiresAttackerControlledResolution(t *testing.T) {
 	tmp := t.TempDir()
 	result, err := RunTarget(context.Background(), TargetRunOptions{
