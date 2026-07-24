@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -89,11 +90,14 @@ func (m LangGraphNativeCheckpointManifest) Validate() error {
 // passed to the target process but intentionally is never serialized into any
 // SyncFuzz artifact.
 type LangGraphExecutionConfig struct {
-	OutDir              string
-	ContainerImage      string
-	Timeout             time.Duration
-	ObserveDelay        time.Duration
-	AllowNetwork        bool
+	OutDir         string
+	ContainerImage string
+	Timeout        time.Duration
+	ObserveDelay   time.Duration
+	AllowNetwork   bool
+	// RetainRuntime keeps the profiled source container alive so recovery can
+	// observe the original listener process and socket namespace.
+	RetainRuntime       bool
 	ProviderEnvironment map[string]string
 }
 
@@ -154,6 +158,9 @@ func NewLangGraphSynthesisTargetRunOptions(stateObjective objective.StateObjecti
 	if !config.AllowNetwork {
 		return target.TargetRunOptions{}, fmt.Errorf("LangGraph synthesis execution requires explicit network permission for its model provider")
 	}
+	if !config.RetainRuntime {
+		return target.TargetRunOptions{}, fmt.Errorf("LangGraph synthesis execution requires retaining the profiled runtime for live OS-state recovery")
+	}
 	return target.TargetRunOptions{
 		AdapterID:               target.LangGraphTargetAdapterID,
 		TargetID:                LangGraphSynthesisTargetID,
@@ -170,6 +177,7 @@ func NewLangGraphSynthesisTargetRunOptions(stateObjective objective.StateObjecti
 		EnableProcessProfiling:  true,
 		EnableResourceProfiling: true,
 		AllowNetwork:            config.AllowNetwork,
+		RetainEnvironment:       config.RetainRuntime,
 		CommandEnvironment:      copyNonEmptyEnvironment(config.ProviderEnvironment),
 	}, nil
 }
@@ -255,4 +263,30 @@ func WriteLangGraphCandidateExecution(path string, execution LangGraphCandidateE
 		return fmt.Errorf("unsupported LangGraph candidate execution schema %q", execution.SchemaVersion)
 	}
 	return writeJSON(path, execution)
+}
+
+// ReleaseLangGraphRuntime removes the explicitly retained source container
+// after all recovery controls have completed. It verifies the immutable
+// container ID first, so a replacement with the same name is never removed.
+func ReleaseLangGraphRuntime(ctx context.Context, run objective.ProfileRun) error {
+	if run.RetainedRuntime == nil {
+		return fmt.Errorf("profile run %q has no retained LangGraph runtime", run.ProfileRunID)
+	}
+	if err := run.RetainedRuntime.Validate(); err != nil {
+		return err
+	}
+	lease := run.RetainedRuntime
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Id}} {{.Config.Image}}", lease.ContainerID).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("inspect retained LangGraph runtime %q: %w: %s", lease.ContainerID, err, strings.TrimSpace(string(output)))
+	}
+	fields := strings.Fields(string(output))
+	if len(fields) != 2 || fields[0] != lease.ContainerID || fields[1] != lease.ContainerImage {
+		return fmt.Errorf("retained LangGraph runtime %q no longer matches its recorded lease", lease.ContainerID)
+	}
+	output, err = exec.CommandContext(ctx, "docker", "rm", "-f", lease.ContainerID).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("remove retained LangGraph runtime %q: %w: %s", lease.ContainerID, err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }

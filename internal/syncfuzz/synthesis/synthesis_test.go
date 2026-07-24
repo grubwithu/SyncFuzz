@@ -2,6 +2,8 @@ package synthesis
 
 import (
 	"context"
+	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,12 +155,13 @@ func TestLangGraphSynthesisTargetRunRequiresExplicitNetworkAndUsesCandidatePromp
 	opts, err := NewLangGraphSynthesisTargetRunOptions(stateObjective, candidate, LangGraphExecutionConfig{
 		OutDir:              t.TempDir(),
 		AllowNetwork:        true,
+		RetainRuntime:       true,
 		ProviderEnvironment: map[string]string{"LANGCHAIN_MODEL": "openai:test", "OPENAI_API_KEY": "not-written"},
 	})
 	if err != nil {
 		t.Fatalf("NewLangGraphSynthesisTargetRunOptions returned error: %v", err)
 	}
-	if opts.AdapterID != LangGraphSynthesisAdapterID || opts.TargetID != LangGraphSynthesisTargetID || opts.TaskID != LangGraphCandidateTaskID || opts.SynthesisCandidateID != candidate.CandidateID || opts.Prompt != candidate.Task || opts.EnvKind != "container" || !opts.EnableProcessProfiling || !opts.EnableResourceProfiling || !opts.AllowNetwork {
+	if opts.AdapterID != LangGraphSynthesisAdapterID || opts.TargetID != LangGraphSynthesisTargetID || opts.TaskID != LangGraphCandidateTaskID || opts.SynthesisCandidateID != candidate.CandidateID || opts.Prompt != candidate.Task || opts.EnvKind != "container" || !opts.EnableProcessProfiling || !opts.EnableResourceProfiling || !opts.AllowNetwork || !opts.RetainEnvironment {
 		t.Fatalf("unexpected LangGraph candidate options: %#v", opts)
 	}
 	if opts.CommandEnvironment["OPENAI_API_KEY"] != "not-written" || !strings.Contains(opts.Command, "/opt/syncfuzz-langgraph/run_target.py") {
@@ -231,16 +234,31 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 	}
 	run := profileForCandidate(stateObjective, candidate)
 	run.NativeCheckpointRunID = "langgraph-native-runtime:run-1"
+	run.RetainedRuntime = &objective.RetainedRuntime{
+		SchemaVersion:  objective.RetainedRuntimeSchema,
+		Environment:    "container",
+		ContainerName:  "syncfuzz-profile-source",
+		ContainerID:    "container-id",
+		ContainerImage: "syncfuzz-langgraph:dev",
+	}
 	frontier := &run.CheckpointMap.Intervals[0]
 	frontier.StartMonotonicNS = 100
 	frontier.EndMonotonicNS = 200
 	frontier.Effects[0].MonotonicNS = 140
+	frontier.Effects[0].Resource = profiling.ResourceRef{Family: profiling.StateFamilyIPC, SocketID: "socket:123", HolderPID: 7, FD: 3}
+	frontier.EvidenceLinks[0] = profiling.EvidenceLink{LinkID: "bind-resource", EffectID: "effect-1", ResourceID: "unix-socket:socket:123", Relation: profiling.EvidenceLinkExactSocketID}
 	frontier.Effects = append(frontier.Effects, profiling.NormalizedEffect{
-		EffectID: "effect-2", MonotonicNS: 150, Family: profiling.StateFamilyIPC, Operation: "listen", PersistencePotential: true,
+		EffectID: "effect-2", MonotonicNS: 150, Family: profiling.StateFamilyIPC, Operation: "listen", Resource: profiling.ResourceRef{Family: profiling.StateFamilyIPC, SocketID: "socket:123", HolderPID: 7, FD: 3}, PersistencePotential: true,
 	})
 	frontier.EvidenceLinks = append(frontier.EvidenceLinks, profiling.EvidenceLink{
-		LinkID: "listen-resource", EffectID: "effect-2", ResourceID: "resource-1", Relation: profiling.EvidenceLinkExactPath,
+		LinkID: "listen-resource", EffectID: "effect-2", ResourceID: "unix-socket:socket:123", Relation: profiling.EvidenceLinkExactSocketID,
 	})
+	listenerResources := []profiling.PersistentResource{
+		{Observed: true, Resource: profiling.ResourceRef{ResourceID: "unix-socket:socket:123", Family: profiling.StateFamilyIPC, Kind: "unix-listener", SocketID: "socket:123"}},
+		{Observed: true, Resource: profiling.ResourceRef{ResourceID: "container-fd:7:3:socket:123", Family: profiling.StateFamilyHandle, Kind: "socket", SocketID: "socket:123", HolderPID: 7, FD: 3}},
+	}
+	run.CheckpointSummaries[1].Resources = append([]profiling.PersistentResource{}, listenerResources...)
+	run.CheckpointSummaries[2].Resources = append([]profiling.PersistentResource{}, listenerResources...)
 	manifest := LangGraphNativeCheckpointManifest{
 		SchemaVersion:            LangGraphNativeCheckpointManifestSchema,
 		InitialRuntimeInstanceID: "langgraph-native-runtime:run-1",
@@ -254,9 +272,18 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 			{CheckpointID: "before-native", HistoryIndex: 2, MessageCount: 2, PersistedMonotonicNS: 130},
 			{CheckpointID: "inside-effect", HistoryIndex: 1, MessageCount: 3, PersistedMonotonicNS: 145},
 			{CheckpointID: "after-native", HistoryIndex: 0, MessageCount: 4, PersistedMonotonicNS: 170},
+			{CheckpointID: "head-native", HistoryIndex: 0, MessageCount: 5, PersistedMonotonicNS: 180},
 		},
 	}
-	binding, err := BindLangGraphNativeFrontier(stateObjective, candidate, run, "C0..C1", "runs/run-1/langgraph-native-checkpoints.json", manifest)
+	manifestPath := filepath.Join(t.TempDir(), "langgraph-native-checkpoints.json")
+	manifestRaw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("encode LangGraph native manifest: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, manifestRaw, 0o644); err != nil {
+		t.Fatalf("write LangGraph native manifest: %v", err)
+	}
+	binding, err := BindLangGraphNativeFrontier(stateObjective, candidate, run, "C0..C1", manifestPath, manifest)
 	if err != nil {
 		t.Fatalf("BindLangGraphNativeFrontier returned error: %v", err)
 	}
@@ -266,6 +293,25 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 	if binding.BeforeNativeCoordinate.SourceCheckpointID != "before-native" || binding.BeforeNativeCoordinate.HistoryIndex != 2 || binding.BeforeNativeCoordinate.MessageCount != 2 || binding.AfterNativeCoordinate.SourceCheckpointID != "after-native" || binding.AfterNativeCoordinate.HistoryIndex != 0 || binding.AfterNativeCoordinate.MessageCount != 4 {
 		t.Fatalf("binding did not preserve fresh-runtime native coordinates: %#v", binding)
 	}
+	sourceArtifactDir := t.TempDir()
+	sourceWorkspace := filepath.Join(sourceArtifactDir, "workspace")
+	if err := os.MkdirAll(filepath.Join(sourceWorkspace, "langgraph-checkpoints"), 0o755); err != nil {
+		t.Fatalf("create source checkpoint store: %v", err)
+	}
+	for _, artifact := range []string{"target-prompt.txt", "target-task.json", "langgraph-checkpoints/storage.pkl", "langgraph-checkpoints/writes.pkl", "langgraph-checkpoints/blobs.pkl"} {
+		if err := os.WriteFile(filepath.Join(sourceWorkspace, artifact), []byte(artifact+"\n"), 0o644); err != nil {
+			t.Fatalf("write source workspace artifact %s: %v", artifact, err)
+		}
+	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(sourceWorkspace, "agent.sock"), Net: "unix"})
+	if err != nil {
+		t.Skipf("Unix sockets are unavailable in this test sandbox: %v", err)
+	}
+	defer listener.Close()
+	if err := os.WriteFile(filepath.Join(sourceArtifactDir, "target-task.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write source target task: %v", err)
+	}
+	run.RecordedPlanArtifact = filepath.Join(sourceArtifactDir, "target-task.json")
 	forkPlan, err := PrepareLangGraphForkPlan(stateObjective, candidate, run, binding, LangGraphForkPlanConfig{
 		Model:                 "openai:gpt-4.1-mini",
 		ContainerImage:        "syncfuzz-langgraph:dev",
@@ -281,9 +327,51 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 		AdapterID:            recovery.LangGraphForkAdapterID,
 		TargetID:             run.TargetID,
 		ExecutionArtifact:    "runs/langgraph-fork-plan.json",
-		PassiveObservationID: "unix-socket-metadata:agent.sock",
+		PassiveObservationID: "unix-socket-listener-holder-v1:agent.sock",
 	}); err != nil {
 		t.Fatalf("LangGraph fork plan validation failed: %v", err)
+	}
+	if forkPlan.MaterializationHeadID != "materialization-head:profile-1:C2" || forkPlan.MaterializationHeadCheckpointID != "C2" || forkPlan.CheckpointCoordinates["C2"].SourceCheckpointID != "head-native" || forkPlan.AgentStateByCheckpoint["C2"] != recovery.StatePresencePresent {
+		t.Fatalf("LangGraph fork plan did not preserve a distinct materialization head: %#v", forkPlan)
+	}
+	if forkPlan.SourceThreadID != "run-1" || forkPlan.WorkspaceSnapshot.SourceWorkspace != sourceWorkspace || forkPlan.WorkspaceSnapshot.PassiveUnixSocketInode == 0 {
+		t.Fatalf("LangGraph fork plan did not preserve a source workspace snapshot: %#v", forkPlan.WorkspaceSnapshot)
+	}
+	headCoordinate, ok := forkPlan.CheckpointCoordinates["C2"]
+	if !ok || headCoordinate.Next == nil {
+		t.Fatalf("terminal LangGraph coordinate must retain an empty next array: %#v", headCoordinate)
+	}
+	encodedHeadCoordinate, err := json.Marshal(headCoordinate)
+	if err != nil {
+		t.Fatalf("encode terminal LangGraph coordinate: %v", err)
+	}
+	var rawHeadCoordinate map[string]any
+	if err := json.Unmarshal(encodedHeadCoordinate, &rawHeadCoordinate); err != nil {
+		t.Fatalf("decode terminal LangGraph coordinate: %v", err)
+	}
+	if next, ok := rawHeadCoordinate["next"].([]any); !ok || len(next) != 0 {
+		t.Fatalf("terminal LangGraph coordinate serialized next incorrectly: %#v", rawHeadCoordinate)
+	}
+	legacyPlan := forkPlan
+	legacyPlan.MaterializationHeadID = ""
+	legacyPlan.MaterializationHeadCheckpointID = ""
+	legacyPlan.CheckpointCoordinates = map[string]recovery.LangGraphNativeCheckpointCoordinate{
+		"C0": forkPlan.CheckpointCoordinates["C0"],
+		"C1": forkPlan.CheckpointCoordinates["C1"],
+	}
+	legacyPlan.AgentStateByCheckpoint = map[string]recovery.StatePresence{
+		"C0": forkPlan.AgentStateByCheckpoint["C0"],
+		"C1": forkPlan.AgentStateByCheckpoint["C1"],
+	}
+	if err := legacyPlan.ValidateFor(recovery.RecordedPlan{
+		SchemaVersion:        recovery.SchemaVersion,
+		RecordedPlanID:       run.RecordedPlanID,
+		AdapterID:            recovery.LangGraphForkAdapterID,
+		TargetID:             run.TargetID,
+		ExecutionArtifact:    "runs/legacy-langgraph-fork-plan.json",
+		PassiveObservationID: "unix-socket-listener-holder-v1:agent.sock",
+	}); err != nil {
+		t.Fatalf("legacy before/after LangGraph plan no longer validates: %v", err)
 	}
 	manifest.ClockDomain = ""
 	if _, err := BindLangGraphNativeFrontier(stateObjective, candidate, run, "C0..C1", "runs/run-1/langgraph-native-checkpoints.json", manifest); err == nil {
@@ -320,6 +408,20 @@ func profileForCandidate(stateObjective objective.StateObjective, candidate Synt
 		AdapterID:            candidate.AdapterID,
 		RecordedPlanID:       "recorded-plan:profile-1",
 		RecordedPlanArtifact: "recorded-plan.json",
+		CheckpointCatalog: profiling.CheckpointCatalog{
+			SchemaVersion: profiling.SchemaVersion,
+			RunID:         "run-1",
+			Checkpoints: []profiling.Checkpoint{
+				{CheckpointID: "C0", MonotonicNS: 100},
+				{CheckpointID: "C1", MonotonicNS: 200},
+				{CheckpointID: "C2", MonotonicNS: 300},
+			},
+		},
+		CheckpointSummaries: []profiling.CheckpointStateSummary{
+			{CheckpointID: "C0", MonotonicNS: 100},
+			{CheckpointID: "C1", MonotonicNS: 200, Resources: []profiling.PersistentResource{{Observed: true, Resource: profiling.ResourceRef{ResourceID: "resource-1", Family: atom.Family}}}},
+			{CheckpointID: "C2", MonotonicNS: 300, Resources: []profiling.PersistentResource{{Observed: true, Resource: profiling.ResourceRef{ResourceID: "resource-1", Family: atom.Family}}}},
+		},
 		CheckpointMap: profiling.CheckpointEffectMap{
 			SchemaVersion: profiling.SchemaVersion,
 			RunID:         "run-1",
@@ -327,6 +429,8 @@ func profileForCandidate(stateObjective objective.StateObjective, candidate Synt
 				FrontierID:         "C0..C1",
 				BeforeCheckpointID: "C0",
 				AfterCheckpointID:  "C1",
+				StartMonotonicNS:   100,
+				EndMonotonicNS:     200,
 				Effects: []profiling.NormalizedEffect{{
 					EffectID: effectID, Family: atom.Family, Operation: atom.Operation, PersistencePotential: true,
 				}},

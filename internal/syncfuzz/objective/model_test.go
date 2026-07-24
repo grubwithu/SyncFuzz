@@ -20,7 +20,7 @@ func TestPromoteStateSeedRequiresLinkedObjectiveAtoms(t *testing.T) {
 	if err := seed.ValidateFor(objective); err != nil {
 		t.Fatalf("promoted seed did not validate: %v", err)
 	}
-	if seed.FrontierID != "C0..C1" || len(seed.ResourceIDs) != 1 || seed.ResourceIDs[0] != "unix-socket:socket:123" {
+	if seed.FrontierID != "C0..C1" || len(seed.ResourceIDs) != 1 || seed.ResourceIDs[0] != "unix-socket:socket:123" || seed.MaterializationHeadCheckpointID != "C2" || seed.MaterializationHeadMonotonicNS != 300 || len(seed.MaterializationHeadResourceIDs) != 1 || seed.MaterializationHeadResourceIDs[0] != "unix-socket:socket:123" {
 		t.Fatalf("unexpected promoted seed: %#v", seed)
 	}
 
@@ -28,6 +28,15 @@ func TestPromoteStateSeedRequiresLinkedObjectiveAtoms(t *testing.T) {
 	_, err = PromoteStateSeed(objective, run, "C0..C1")
 	if err == nil || !strings.Contains(err.Error(), "does not validate objective atom") {
 		t.Fatalf("expected missing atom rejection, got %v", err)
+	}
+}
+
+func TestPromoteStateSeedRequiresResourcesAtMaterializationHead(t *testing.T) {
+	run := unixListenerProfileRun()
+	run.CheckpointSummaries[2].Resources = nil
+	_, err := PromoteStateSeed(unixListenerObjective(), run, "C0..C1")
+	if err == nil || !strings.Contains(err.Error(), "does not retain linked resource") {
+		t.Fatalf("expected materialization-head resource rejection, got %v", err)
 	}
 }
 
@@ -89,6 +98,22 @@ func TestImportTargetProfileRunUsesOnlyProfilingArtifacts(t *testing.T) {
 	if err := profiling.WriteCheckpointEffectMap(filepath.Join(dir, checkpointMapArtifact), effectMap); err != nil {
 		t.Fatalf("write checkpoint map: %v", err)
 	}
+	profile := unixListenerProfileRun()
+	profile.CheckpointCatalog.RunID = "target-run-1"
+	catalogRaw, err := json.Marshal(profile.CheckpointCatalog)
+	if err != nil {
+		t.Fatalf("encode checkpoint catalog: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, checkpointCatalogArtifact), catalogRaw, 0o644); err != nil {
+		t.Fatalf("write checkpoint catalog: %v", err)
+	}
+	summariesRaw, err := json.Marshal(profile.CheckpointSummaries)
+	if err != nil {
+		t.Fatalf("encode checkpoint summaries: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, checkpointSummariesArtifact), summariesRaw, 0o644); err != nil {
+		t.Fatalf("write checkpoint summaries: %v", err)
+	}
 	run, err := ImportTargetProfileRun(dir, unixListenerObjective().ObjectiveID, ProfileRunKindCalibrationFixture, "")
 	if err != nil {
 		t.Fatalf("ImportTargetProfileRun returned error: %v", err)
@@ -127,6 +152,20 @@ func unixListenerProfileRun() ProfileRun {
 		AdapterID:            "langgraph-shell-react",
 		RecordedPlanID:       "recorded-plan:profile-1",
 		RecordedPlanArtifact: "recorded-plan.json",
+		CheckpointCatalog: profiling.CheckpointCatalog{
+			SchemaVersion: profiling.SchemaVersion,
+			RunID:         "run-1",
+			Checkpoints: []profiling.Checkpoint{
+				{CheckpointID: "C0", MonotonicNS: 100},
+				{CheckpointID: "C1", MonotonicNS: 200},
+				{CheckpointID: "C2", MonotonicNS: 300},
+			},
+		},
+		CheckpointSummaries: []profiling.CheckpointStateSummary{
+			{CheckpointID: "C0", MonotonicNS: 100},
+			{CheckpointID: "C1", MonotonicNS: 200, Resources: []profiling.PersistentResource{{Observed: true, Resource: profiling.ResourceRef{ResourceID: "unix-socket:socket:123", Family: profiling.StateFamilyIPC, SocketID: "socket:123"}}}},
+			{CheckpointID: "C2", MonotonicNS: 300, Resources: []profiling.PersistentResource{{Observed: true, Resource: profiling.ResourceRef{ResourceID: "unix-socket:socket:123", Family: profiling.StateFamilyIPC, SocketID: "socket:123"}}}},
+		},
 		CheckpointMap: profiling.CheckpointEffectMap{
 			SchemaVersion: profiling.SchemaVersion,
 			RunID:         "run-1",
@@ -134,6 +173,8 @@ func unixListenerProfileRun() ProfileRun {
 				FrontierID:         "C0..C1",
 				BeforeCheckpointID: "C0",
 				AfterCheckpointID:  "C1",
+				StartMonotonicNS:   100,
+				EndMonotonicNS:     200,
 				Effects: []profiling.NormalizedEffect{
 					{EffectID: "bind/2", Family: profiling.StateFamilyIPC, Operation: "bind", PersistencePotential: true},
 					{EffectID: "listen/2", Family: profiling.StateFamilyIPC, Operation: "listen", PersistencePotential: true},

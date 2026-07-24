@@ -95,15 +95,19 @@ holder process, with `bind`/`listen` linked through `exact-socket-id`.
 deleted-FD, and Unix-socket runs into a JSON report with fixture-scoped link
 precision/recall; it deliberately does not claim global detector quality.
 
-The V2.1b artifact contract is available through `profile promote-seed` and
-`profile recovery-pair`. A real profiling artifact can be promoted only when
+The V2.1b artifact contract is available through `profile promote-seed`,
+`profile recovery-pair`, and `profile recovery-set`. A real profiling artifact can be promoted only when
 it is marked `synthesis-candidate`, the selected frontier validates every atom
-in a supplied `StateObjective`, and persistent linked evidence exists. A
+in a supplied `StateObjective`, persistent linked evidence exists, and every
+linked resource remains probe-confirmed at a later materialization-head
+checkpoint. A
 `calibration-fixture` can never become a StateSeed or add coverage. The
 current compatibility artifact is a fork before/after pair: it fixes the
 recorded plan and passive observation, varying only the historical checkpoint.
-The target recovery-set contract additionally freezes the materialization head
-and OS-retention policy and adds a head no-rollback control.
+`profile recovery-set` emits the complete before/after/head contract: it
+freezes the materialization head, `retain-relevant-os-state` policy, recorded
+plan, passive observation, and three distinct checkpoint coordinates. A head
+control that is not `consistent` forces the set verdict to `inconclusive`.
 
 V2.4a adds `synthesis schedule`, `synthesis generate`, `synthesis evaluate`,
 and `synthesis promote`. Scheduling uses only objective atoms and the V2
@@ -115,26 +119,29 @@ generator: [the MAF scaffold example](examples/synthesis/maf-workflow-scaffold.e
 defines the context a separately configured generator may read.
 The corresponding [LangGraph scaffold](examples/synthesis/langgraph-shell-react-scaffold.example.json)
 is used by the isolated real-candidate execution path.
-`synthesis execute-langgraph` is the first real candidate-execution path: it
-runs one scheduler-issued LangGraph task in the dedicated isolated image with
-both eBPF collectors, writes a candidate-bound `ProfileRun`, and preserves the
-exact disk-backed LangGraph checkpoint namespace in
+`synthesis execute-langgraph --retain-runtime` is the first real
+candidate-execution path: it runs one scheduler-issued LangGraph task in the
+dedicated isolated image with both eBPF collectors, writes a candidate-bound
+`ProfileRun`, retains a container lease for the original OS state, and
+preserves the exact disk-backed LangGraph checkpoint namespace in
 `langgraph-native-checkpoints.json`. Each exact native ID now carries the
 monotonic time at which the durable saver persisted it, in the same clock
 domain as the eBPF/controller trace. `synthesis bind-langgraph-frontier` uses
 that evidence to bind a validated controller frontier only when a native
 checkpoint strictly brackets the linked objective-effect window; it refuses
 an older manifest with history order alone. `synthesis prepare-langgraph-fork`
-freezes that binding into a recorded plan, and `recovery execute` now runs the
-current before/after historical-cut subset in independent fresh containers.
-Each query performs an initial head materialization followed by a fresh resume
-process in its own workspace, resolves a unique native coordinate rather than
-reusing an old checkpoint ID, and returns a fixed passive observation to the
-deterministic classifier. The explicit head/retention contract and head control
-are the next recovery-model extension.
-The current Unix-socket baseline is deliberately `inconclusive`: metadata
-alone does not prove effect multiplicity. It demonstrates the end-to-end
-recovery path, not a confirmed vulnerability. See
+freezes that binding plus a distinct post-frontier native materialization-head
+coordinate into a recorded plan, and `recovery execute --set` runs the
+complete before/after/head recovery set in independent fresh containers.
+Each query verifies and clones the profiled disk checkpoint store, then starts
+a fresh resume process on the source thread and restores the exact recorded
+native checkpoint ID. It joins the retained source container's PID and network
+namespaces, bind-mounts the socket node read-only, and reads `/proc/net/unix`
+plus holder FDs to match the eBPF-linked socket ID. Thus the recovery process
+neither reruns the task nor creates an equivalent endpoint. Release the
+retained container after the set with `synthesis release-langgraph-runtime`.
+The earlier V2 metadata-only calibration remains `inconclusive`; it is not
+valid evidence for this stronger V3 listener-holder contract. See
 [the LangGraph end-to-end closure note](docs/LANGGRAPH_END_TO_END_CLOSURE.md)
 for the complete evidence chain and limits. The command requires explicit
 network permission for the model provider and does not serialize provider
@@ -142,6 +149,14 @@ credentials. `synthesis bind-maf-frontier` then requires the profile's
 native-runtime ID to match the MAF checkpoint manifest before it can write the
 durable recovery plan; it verifies the persisted before/after queue
 coordinates rather than guessing from checkpoint-file order.
+
+The V3 privileged live calibration completed on 2026-07-24 with profile run
+`1784896157047894121`. Its independently restored `before` query reported
+`agent=absent, os=present, effect_multiplicity=single` and therefore
+`residual`; `after` and `head` were both `consistent`. The source listener was
+reconfirmed as the eBPF-linked `socket:180463219`, held by source PID 58 on FD
+3. This is a deterministic recovery result for a manual baseline candidate,
+not a vulnerability claim, generator-quality result, or coverage increment.
 
 The V2.3 recovery executor additionally registers the first real durable
 adapter, `maf-workflow`. Its adapter-owned plan maps V2 coordinates to exact

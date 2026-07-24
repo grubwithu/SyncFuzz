@@ -23,6 +23,23 @@ func ReadRecoveryPair(path string) (RecoveryPair, error) {
 	return pair, nil
 }
 
+func WriteHistoricalRecoverySet(path string, set HistoricalRecoverySet) error {
+	return writeRecoveryJSON(path, set)
+}
+
+func ReadHistoricalRecoverySet(path string) (HistoricalRecoverySet, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return HistoricalRecoverySet{}, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer file.Close()
+	var set HistoricalRecoverySet
+	if err := json.NewDecoder(file).Decode(&set); err != nil {
+		return HistoricalRecoverySet{}, fmt.Errorf("decode %s: %w", path, err)
+	}
+	return set, nil
+}
+
 func writeRecoveryJSON(path string, value any) error {
 	file, err := os.Create(path)
 	if err != nil {

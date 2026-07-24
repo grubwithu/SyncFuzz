@@ -127,12 +127,16 @@ func BindLangGraphNativeFrontier(stateObjective objective.StateObjective, candid
 }
 
 func nativeCheckpointCoordinate(checkpoint LangGraphNativeCheckpoint) LangGraphNativeCheckpointCoordinate {
+	// A nil slice encodes as JSON null, while the target contract requires an
+	// array even when a terminal checkpoint has no next nodes.
+	next := make([]string, len(checkpoint.Next))
+	copy(next, checkpoint.Next)
 	return LangGraphNativeCheckpointCoordinate{
 		SchemaVersion:      LangGraphNativeCoordinateSchema,
 		SourceCheckpointID: checkpoint.CheckpointID,
 		HistoryIndex:       checkpoint.HistoryIndex,
 		MessageCount:       checkpoint.MessageCount,
-		Next:               append([]string(nil), checkpoint.Next...),
+		Next:               next,
 	}
 }
 

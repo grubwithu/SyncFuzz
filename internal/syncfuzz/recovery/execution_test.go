@@ -63,6 +63,81 @@ func TestExecuteForkPairUsesOnlyCheckpointAsVariable(t *testing.T) {
 	}
 }
 
+func TestExecuteForkRecoverySetRequiresConsistentHeadControl(t *testing.T) {
+	seed := testSeed()
+	head, err := MaterializationHeadFor(seed)
+	if err != nil {
+		t.Fatalf("MaterializationHeadFor returned error: %v", err)
+	}
+	plan := RecordedPlan{
+		SchemaVersion:         SchemaVersion,
+		RecordedPlanID:        seed.RecordedPlanID,
+		AdapterID:             seed.AdapterID,
+		TargetID:              seed.TargetID,
+		ExecutionArtifact:     seed.RecordedPlanArtifact,
+		PassiveObservationID:  "observation:socket",
+		MaterializationHeadID: head.HeadID,
+		RetentionPolicy:       RetentionPolicyRetainRelevantOSState,
+	}
+	set, err := NewForkRecoverySet(seed, plan)
+	if err != nil {
+		t.Fatalf("NewForkRecoverySet returned error: %v", err)
+	}
+	requests := make([]ForkExecutionRequest, 0, 3)
+	executor := ForkExecutorFunc(func(_ context.Context, request ForkExecutionRequest) (RecoveryObservation, error) {
+		requests = append(requests, request)
+		observation := RecoveryObservation{
+			SchemaVersion:         ExecutionSchemaVersion,
+			QueryID:               request.Query.QueryID,
+			SeedID:                request.Query.SeedID,
+			Boundary:              request.Query.Boundary,
+			CheckpointID:          request.Query.CheckpointID,
+			RecordedPlanID:        request.Plan.RecordedPlanID,
+			PassiveObservationID:  request.Query.PassiveObservationID,
+			MaterializationHeadID: request.Query.MaterializationHeadID,
+			RetentionPolicy:       request.Query.RetentionPolicy,
+			RuntimeInstanceID:     "runtime:" + request.Query.CheckpointID,
+			EffectMultiplicity:    EffectMultiplicitySingle,
+			Evidence:              []string{"deterministic-observation"},
+		}
+		switch request.Query.CheckpointID {
+		case seed.BeforeCheckpointID:
+			observation.AgentState = StatePresenceAbsent
+			observation.OSState = StatePresencePresent
+			observation.OSStateOrigin = StateOriginResidual
+		case seed.AfterCheckpointID, seed.MaterializationHeadCheckpointID:
+			observation.AgentState = StatePresencePresent
+			observation.OSState = StatePresencePresent
+			observation.OSStateOrigin = StateOriginResidual
+		}
+		return observation, nil
+	})
+	execution, err := ExecuteForkRecoverySet(context.Background(), seed, *set, plan, executor)
+	if err != nil {
+		t.Fatalf("ExecuteForkRecoverySet returned error: %v", err)
+	}
+	if len(requests) != 3 || requests[2].Query.CheckpointID != seed.MaterializationHeadCheckpointID || execution.Classification.BeforeOutcome != "residual" || execution.Classification.AfterOutcome != "consistent" || execution.Classification.HeadOutcome != "consistent" || execution.Classification.Outcome != "residual" {
+		t.Fatalf("unexpected recovery set execution: %#v requests=%#v", execution, requests)
+	}
+
+	inconclusiveExecution, err := ExecuteForkRecoverySet(context.Background(), seed, *set, plan, ForkExecutorFunc(func(_ context.Context, request ForkExecutionRequest) (RecoveryObservation, error) {
+		observation := RecoveryObservation{SchemaVersion: ExecutionSchemaVersion, QueryID: request.Query.QueryID, SeedID: request.Query.SeedID, Boundary: request.Query.Boundary, CheckpointID: request.Query.CheckpointID, RecordedPlanID: request.Plan.RecordedPlanID, PassiveObservationID: request.Query.PassiveObservationID, MaterializationHeadID: request.Query.MaterializationHeadID, RetentionPolicy: request.Query.RetentionPolicy, RuntimeInstanceID: "unique:" + request.Query.CheckpointID, AgentState: StatePresencePresent, OSState: StatePresencePresent, OSStateOrigin: StateOriginResidual, EffectMultiplicity: EffectMultiplicitySingle, Evidence: []string{"deterministic-observation"}}
+		if request.Query.CheckpointID == seed.BeforeCheckpointID {
+			observation.AgentState = StatePresenceAbsent
+		}
+		if request.Query.CheckpointID == seed.MaterializationHeadCheckpointID {
+			observation.OSStateOrigin = StateOriginReconstructed
+		}
+		return observation, nil
+	}))
+	if err != nil {
+		t.Fatalf("ExecuteForkRecoverySet with non-consistent head returned error: %v", err)
+	}
+	if inconclusiveExecution.Classification.Outcome != "inconclusive" || inconclusiveExecution.Classification.HeadOutcome != "reconstruction" {
+		t.Fatalf("non-consistent head control must force an inconclusive result: %#v", inconclusiveExecution.Classification)
+	}
+}
+
 func TestExecuteForkPairRejectsObservationForDifferentQuery(t *testing.T) {
 	seed := testSeed()
 	plan := RecordedPlan{

@@ -10,9 +10,11 @@ import (
 )
 
 const (
-	targetResultArtifact  = "target-result.json"
-	targetTaskArtifact    = "target-task.json"
-	checkpointMapArtifact = "checkpoint-effect-map.json"
+	targetResultArtifact        = "target-result.json"
+	targetTaskArtifact          = "target-task.json"
+	checkpointMapArtifact       = "checkpoint-effect-map.json"
+	checkpointCatalogArtifact   = "checkpoint-catalog.json"
+	checkpointSummariesArtifact = "checkpoint-state-summaries.json"
 )
 
 // ImportTargetProfileRun converts a completed real target profiling artifact
@@ -39,10 +41,11 @@ func ImportTargetProfileRun(runDir string, objectiveID string, kind ProfileRunKi
 	}
 	resultPath := filepath.Join(runDir, targetResultArtifact)
 	var result struct {
-		RunID             string `json:"run_id"`
-		AdapterID         string `json:"adapter_id"`
-		TargetID          string `json:"target_id"`
-		Completed         bool   `json:"completed"`
+		RunID             string           `json:"run_id"`
+		AdapterID         string           `json:"adapter_id"`
+		TargetID          string           `json:"target_id"`
+		Completed         bool             `json:"completed"`
+		RetainedRuntime   *RetainedRuntime `json:"retained_runtime,omitempty"`
 		ProfilingAnalysis *struct {
 			HotFrontiers int `json:"hot_frontiers"`
 		} `json:"profiling_analysis"`
@@ -59,12 +62,31 @@ func ImportTargetProfileRun(runDir string, objectiveID string, kind ProfileRunKi
 	if strings.TrimSpace(result.RunID) == "" || strings.TrimSpace(result.AdapterID) == "" || strings.TrimSpace(result.TargetID) == "" {
 		return ProfileRun{}, fmt.Errorf("target result %s lacks run, adapter, or target identity", resultPath)
 	}
+	if result.RetainedRuntime != nil {
+		if err := result.RetainedRuntime.Validate(); err != nil {
+			return ProfileRun{}, fmt.Errorf("target result %s retained runtime: %w", resultPath, err)
+		}
+	}
 	checkpointMap, err := profiling.ReadCheckpointEffectMap(filepath.Join(runDir, checkpointMapArtifact))
 	if err != nil {
 		return ProfileRun{}, fmt.Errorf("read target checkpoint map: %w", err)
 	}
 	if checkpointMap.RunID != result.RunID {
 		return ProfileRun{}, fmt.Errorf("target checkpoint map run %q does not match target result %q", checkpointMap.RunID, result.RunID)
+	}
+	var checkpointCatalog profiling.CheckpointCatalog
+	if err := readJSON(filepath.Join(runDir, checkpointCatalogArtifact), &checkpointCatalog); err != nil {
+		return ProfileRun{}, fmt.Errorf("read target checkpoint catalog: %w", err)
+	}
+	var checkpointSummaries []profiling.CheckpointStateSummary
+	if err := readJSON(filepath.Join(runDir, checkpointSummariesArtifact), &checkpointSummaries); err != nil {
+		return ProfileRun{}, fmt.Errorf("read target checkpoint state summaries: %w", err)
+	}
+	if checkpointCatalog.RunID != result.RunID {
+		return ProfileRun{}, fmt.Errorf("target checkpoint catalog run %q does not match target result %q", checkpointCatalog.RunID, result.RunID)
+	}
+	if err := profiling.ValidateCheckpointStateSummaries(checkpointCatalog, checkpointSummaries); err != nil {
+		return ProfileRun{}, fmt.Errorf("target checkpoint state summaries: %w", err)
 	}
 	planArtifact := filepath.Join(runDir, targetTaskArtifact)
 	if _, err := os.Stat(planArtifact); err != nil {
@@ -97,6 +119,9 @@ func ImportTargetProfileRun(runDir string, objectiveID string, kind ProfileRunKi
 		AdapterID:            result.AdapterID,
 		RecordedPlanID:       "recorded-plan:target-run:" + result.RunID,
 		RecordedPlanArtifact: planArtifact,
+		RetainedRuntime:      result.RetainedRuntime,
+		CheckpointCatalog:    checkpointCatalog,
+		CheckpointSummaries:  checkpointSummaries,
 		CheckpointMap:        checkpointMap,
 	}, nil
 }

@@ -106,6 +106,9 @@ func (MAFWorkflowForkExecutor) ExecuteFork(ctx context.Context, request ForkExec
 	if request.Plan.AdapterID != MAFWorkflowForkAdapterID {
 		return RecoveryObservation{}, fmt.Errorf("MAF workflow executor cannot execute adapter %q", request.Plan.AdapterID)
 	}
+	if request.Query.MaterializationHeadID != "" || request.Query.RetentionPolicy != "" {
+		return RecoveryObservation{}, fmt.Errorf("MAF workflow executor has no distinct materialization-head binding and supports RecoveryPair only")
+	}
 	forkPlan, err := ReadMAFWorkflowForkPlan(request.Plan.ExecutionArtifact)
 	if err != nil {
 		return RecoveryObservation{}, err
@@ -171,19 +174,21 @@ func (MAFWorkflowForkExecutor) ExecuteFork(ctx context.Context, request ForkExec
 	evidence := append([]string{}, artifact.Evidence...)
 	evidence = append(evidence, "adapter observation artifact: "+observationPath, "native checkpoint binding: "+nativeCheckpointID)
 	return RecoveryObservation{
-		SchemaVersion:        ExecutionSchemaVersion,
-		QueryID:              request.Query.QueryID,
-		SeedID:               request.Query.SeedID,
-		Boundary:             request.Query.Boundary,
-		CheckpointID:         request.Query.CheckpointID,
-		RecordedPlanID:       request.Query.RecordedPlanID,
-		PassiveObservationID: request.Query.PassiveObservationID,
-		RuntimeInstanceID:    artifact.RuntimeInstanceID,
-		AgentState:           agentState,
-		OSState:              osState,
-		OSStateOrigin:        origin,
-		EffectMultiplicity:   multiplicity,
-		Evidence:             evidence,
+		SchemaVersion:         ExecutionSchemaVersion,
+		QueryID:               request.Query.QueryID,
+		SeedID:                request.Query.SeedID,
+		Boundary:              request.Query.Boundary,
+		CheckpointID:          request.Query.CheckpointID,
+		RecordedPlanID:        request.Query.RecordedPlanID,
+		PassiveObservationID:  request.Query.PassiveObservationID,
+		MaterializationHeadID: request.Query.MaterializationHeadID,
+		RetentionPolicy:       request.Query.RetentionPolicy,
+		RuntimeInstanceID:     artifact.RuntimeInstanceID,
+		AgentState:            agentState,
+		OSState:               osState,
+		OSStateOrigin:         origin,
+		EffectMultiplicity:    multiplicity,
+		Evidence:              evidence,
 	}, nil
 }
 

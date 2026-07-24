@@ -2246,6 +2246,62 @@ def passive_unix_socket_observation(workspace: Path, value: str) -> dict[str, An
             "mode": stat.S_IMODE(metadata.st_mode),
         }
     )
+    # /proc/net/unix and /proc/<pid>/fd are read-only kernel views. The
+    # recovery container joins the retained source PID/network namespaces, so
+    # this proves the node is still backed by the profiled listener rather than
+    # merely being a stale filesystem socket entry.
+    observation.update(passive_unix_listener_observation(endpoint))
+    return observation
+
+
+def passive_unix_listener_observation(endpoint: Path) -> dict[str, Any]:
+    endpoint_path = str(endpoint)
+    listeners: list[str] = []
+    try:
+        lines = Path("/proc/net/unix").read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return {"listener_probe_error": f"read /proc/net/unix: {exc}"}
+    for line in lines[1:]:
+        fields = line.split(maxsplit=7)
+        if len(fields) < 8:
+            continue
+        socket_type, state, inode, path = fields[4], fields[5], fields[6], fields[7]
+        if socket_type == "0001" and state == "01" and path == endpoint_path:
+            listeners.append(inode)
+    listeners.sort()
+    observation: dict[str, Any] = {
+        "listener_active": len(listeners) == 1,
+        "listener_count": len(listeners),
+        "kernel_socket_id": f"socket:{listeners[0]}" if len(listeners) == 1 else "",
+        "listener_holders": [],
+    }
+    if len(listeners) != 1:
+        return observation
+
+    expected_target = f"socket:[{listeners[0]}]"
+    holders: list[dict[str, Any]] = []
+    try:
+        proc_entries = sorted(Path("/proc").iterdir(), key=lambda entry: entry.name)
+    except OSError as exc:
+        observation["holder_probe_error"] = f"read /proc: {exc}"
+        return observation
+    for proc_entry in proc_entries:
+        if not proc_entry.name.isdigit():
+            continue
+        fds: list[int] = []
+        try:
+            fd_entries = list((proc_entry / "fd").iterdir())
+        except OSError:
+            continue
+        for fd_entry in fd_entries:
+            try:
+                if os.readlink(fd_entry) == expected_target and fd_entry.name.isdigit():
+                    fds.append(int(fd_entry.name))
+            except OSError:
+                continue
+        if fds:
+            holders.append({"pid": int(proc_entry.name), "fds": sorted(fds)})
+    observation["listener_holders"] = holders
     return observation
 
 

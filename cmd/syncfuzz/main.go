@@ -96,15 +96,17 @@ Usage:
   syncfuzz profile calibration-audit --path-run runs/<id> --fd-run runs/<id> --socket-run runs/<id> [--out calibration-audit.json]
   syncfuzz profile promote-seed --objective objective.json [--profile-run profile-run.json | --target-run runs/<id> --profile-kind synthesis-candidate --synthesis-candidate candidate.json] --frontier before..after --out state-seed.json
   syncfuzz profile recovery-pair --objective objective.json --seed state-seed.json --passive-observation observation-id --out recovery-pair.json
-  syncfuzz recovery execute --seed state-seed.json --pair recovery-pair.json [--out fork-pair-execution.json] [--timeout 2m]
+  syncfuzz profile recovery-set --objective objective.json --seed state-seed.json --passive-observation observation-id [--retention-policy retain-relevant-os-state] --out historical-recovery-set.json
+  syncfuzz recovery execute --seed state-seed.json [--pair recovery-pair.json | --set historical-recovery-set.json] [--out recovery-execution.json] [--timeout 2m]
   syncfuzz synthesis schedule --objectives objective-a.json,objective-b.json [--coverage-ledger coverage.json] [--limit 0] --out schedule.json
   syncfuzz synthesis generate --objective objective.json --target <target-id> --adapter <adapter-id> --scaffold <scaffold-artifact> --generator-id <id> --generator-command '<command>' [--attempt 0] --out candidate.json
-  syncfuzz synthesis execute-langgraph --objective objective.json --candidate candidate.json --allow-network [--container-image syncfuzz-langgraph:dev] [--out runs/langgraph-candidate-execution.json] [--out-profile-run profile-run.json]
+  syncfuzz synthesis execute-langgraph --objective objective.json --candidate candidate.json --allow-network --retain-runtime [--container-image syncfuzz-langgraph:dev] [--out runs/langgraph-candidate-execution.json] [--out-profile-run profile-run.json]
   syncfuzz synthesis evaluate --objective objective.json --candidate candidate.json --profile-run profile-run.json --out evaluation.json
   syncfuzz synthesis promote --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --out state-seed.json
   syncfuzz synthesis bind-maf-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest maf-workflow-fork-manifest.json --python python3 --runner targets/maf_workflow_checkpoint/run_target.py --prepared-workspace prepared --runtime-root forks --out-plan maf-fork-plan.json --out-profile-run bound-profile-run.json --out-binding native-frontier-binding.json
   syncfuzz synthesis bind-langgraph-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest langgraph-native-checkpoints.json --out-binding langgraph-native-frontier-binding.json
   syncfuzz synthesis prepare-langgraph-fork --objective objective.json --candidate candidate.json --profile-run profile-run.json --binding langgraph-native-frontier-binding.json --model provider:model --container-image syncfuzz-langgraph:dev --runtime-root recovery-runtimes --passive-unix-socket-path agent.sock --out-plan langgraph-fork-plan.json --out-profile-run bound-profile-run.json
+  syncfuzz synthesis release-langgraph-runtime --profile-run profile-run.json
   syncfuzz profile container-scope --container <running-container>
   syncfuzz profile process-monitor --cgroup-id <cgroup-v2-id> [--duration 10s] [--out raw-os-events.jsonl]
   syncfuzz target list
@@ -132,7 +134,7 @@ Usage:
 
 func profile(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "syncfuzz profile requires a subcommand; supported: analyze, calibration-audit, promote-seed, recovery-pair, container-scope, process-monitor")
+		fmt.Fprintln(os.Stderr, "syncfuzz profile requires a subcommand; supported: analyze, calibration-audit, promote-seed, recovery-pair, recovery-set, container-scope, process-monitor")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -144,6 +146,8 @@ func profile(args []string) {
 		profilePromoteSeed(args[1:])
 	case "recovery-pair":
 		profileRecoveryPair(args[1:])
+	case "recovery-set":
+		profileRecoverySet(args[1:])
 	case "container-scope":
 		profileContainerScope(args[1:])
 	case "process-monitor":
@@ -172,19 +176,55 @@ func recoveryExecute(args []string) {
 	fs := flag.NewFlagSet("recovery execute", flag.ExitOnError)
 	seedPath := fs.String("seed", "", "validated StateSeed JSON path")
 	pairPath := fs.String("pair", "", "fork RecoveryPair JSON path")
-	outPath := fs.String("out", "fork-pair-execution.json", "ForkPairExecution JSON output path")
+	setPath := fs.String("set", "", "HistoricalRecoverySet JSON path")
+	outPath := fs.String("out", "recovery-execution.json", "recovery execution JSON output path")
 	timeout := fs.Duration("timeout", 2*time.Minute, "maximum time for both fresh fork runtimes")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	if strings.TrimSpace(*seedPath) == "" || strings.TrimSpace(*pairPath) == "" || *timeout <= 0 {
-		fmt.Fprintln(os.Stderr, "syncfuzz recovery execute requires --seed, --pair, and a positive --timeout")
+	if strings.TrimSpace(*seedPath) == "" || (strings.TrimSpace(*pairPath) == "" && strings.TrimSpace(*setPath) == "") || (strings.TrimSpace(*pairPath) != "" && strings.TrimSpace(*setPath) != "") || *timeout <= 0 {
+		fmt.Fprintln(os.Stderr, "syncfuzz recovery execute requires --seed, exactly one of --pair or --set, and a positive --timeout")
 		os.Exit(2)
 	}
 	seed, err := objective.ReadStateSeed(*seedPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
 		os.Exit(1)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	if strings.TrimSpace(*setPath) != "" {
+		set, err := recovery.ReadHistoricalRecoverySet(*setPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
+			os.Exit(1)
+		}
+		plan := recovery.RecordedPlan{
+			SchemaVersion:         recovery.SchemaVersion,
+			RecordedPlanID:        seed.RecordedPlanID,
+			AdapterID:             seed.AdapterID,
+			TargetID:              seed.TargetID,
+			ExecutionArtifact:     seed.RecordedPlanArtifact,
+			PassiveObservationID:  set.PassiveObservationID,
+			MaterializationHeadID: set.MaterializationHead.HeadID,
+			RetentionPolicy:       set.RetentionPolicy,
+		}
+		execution, err := recovery.DefaultForkExecutorRegistry().ExecuteRecoverySet(ctx, seed, set, plan)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
+			os.Exit(1)
+		}
+		if err := recovery.WriteForkRecoverySetExecution(*outPath, *execution); err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("recovery_set_id: %s\n", execution.RecoverySetID)
+		fmt.Printf("before_runtime: %s\n", execution.Before.RuntimeInstanceID)
+		fmt.Printf("after_runtime: %s\n", execution.After.RuntimeInstanceID)
+		fmt.Printf("head_runtime: %s\n", execution.Head.RuntimeInstanceID)
+		fmt.Printf("outcome: %s\n", execution.Classification.Outcome)
+		fmt.Printf("artifact: %s\n", *outPath)
+		return
 	}
 	pair, err := recovery.ReadRecoveryPair(*pairPath)
 	if err != nil {
@@ -199,8 +239,6 @@ func recoveryExecute(args []string) {
 		ExecutionArtifact:    seed.RecordedPlanArtifact,
 		PassiveObservationID: pair.PassiveObservationID,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
 	execution, err := recovery.DefaultForkExecutorRegistry().Execute(ctx, seed, pair, plan)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
@@ -219,7 +257,7 @@ func recoveryExecute(args []string) {
 
 func runSynthesis(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "syncfuzz synthesis requires a subcommand; supported: schedule, generate, execute-langgraph, evaluate, promote, bind-maf-frontier, bind-langgraph-frontier, prepare-langgraph-fork")
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis requires a subcommand; supported: schedule, generate, execute-langgraph, evaluate, promote, bind-maf-frontier, bind-langgraph-frontier, prepare-langgraph-fork, release-langgraph-runtime")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -239,10 +277,34 @@ func runSynthesis(args []string) {
 		synthesisBindLangGraphFrontier(args[1:])
 	case "prepare-langgraph-fork":
 		synthesisPrepareLangGraphFork(args[1:])
+	case "release-langgraph-runtime":
+		synthesisReleaseLangGraphRuntime(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown syncfuzz synthesis subcommand %q\n", args[0])
 		os.Exit(2)
 	}
+}
+
+func synthesisReleaseLangGraphRuntime(args []string) {
+	fs := flag.NewFlagSet("synthesis release-langgraph-runtime", flag.ExitOnError)
+	profileRunPath := fs.String("profile-run", "", "ProfileRun JSON that owns the retained LangGraph runtime")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*profileRunPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis release-langgraph-runtime requires --profile-run")
+		os.Exit(2)
+	}
+	run, err := objective.ReadProfileRun(*profileRunPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis release-langgraph-runtime failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := synthesis.ReleaseLangGraphRuntime(context.Background(), run); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis release-langgraph-runtime failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("released_runtime: %s\n", run.RetainedRuntime.ContainerID)
 }
 
 func synthesisSchedule(args []string) {
@@ -350,11 +412,12 @@ func synthesisExecuteLangGraph(args []string) {
 	timeout := fs.Duration("timeout", 2*time.Minute, "end-to-end candidate execution timeout")
 	observeDelay := fs.Duration("observe-delay", 500*time.Millisecond, "post-command state-probe delay")
 	allowNetwork := fs.Bool("allow-network", false, "explicitly allow the isolated target container to call its configured model provider")
+	retainRuntime := fs.Bool("retain-runtime", false, "retain the profiled container for live OS-state recovery; release it after recovery")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*outPath) == "" || strings.TrimSpace(*profileOutPath) == "" || strings.TrimSpace(*containerImage) == "" || *timeout <= 0 || *observeDelay < 0 || !*allowNetwork {
-		fmt.Fprintln(os.Stderr, "syncfuzz synthesis execute-langgraph requires --objective, --candidate, --out, --out-profile-run, positive --timeout, non-negative --observe-delay, a container image, and explicit --allow-network")
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*outPath) == "" || strings.TrimSpace(*profileOutPath) == "" || strings.TrimSpace(*containerImage) == "" || *timeout <= 0 || *observeDelay < 0 || !*allowNetwork || !*retainRuntime {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis execute-langgraph requires --objective, --candidate, --out, --out-profile-run, positive --timeout, non-negative --observe-delay, a container image, explicit --allow-network, and --retain-runtime")
 		os.Exit(2)
 	}
 	stateObjective, err := objective.ReadStateObjective(*objectivePath)
@@ -385,6 +448,7 @@ func synthesisExecuteLangGraph(args []string) {
 		Timeout:             *timeout,
 		ObserveDelay:        *observeDelay,
 		AllowNetwork:        *allowNetwork,
+		RetainRuntime:       *retainRuntime,
 		ProviderEnvironment: providerEnvironment,
 	})
 	if err != nil {
@@ -824,6 +888,69 @@ func profileRecoveryPair(args []string) {
 	fmt.Printf("comparison_pair_id: %s\n", pair.ComparisonPairID)
 	fmt.Printf("before_checkpoint: %s\n", pair.Before.CheckpointID)
 	fmt.Printf("after_checkpoint: %s\n", pair.After.CheckpointID)
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func profileRecoverySet(args []string) {
+	fs := flag.NewFlagSet("profile recovery-set", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	seedPath := fs.String("seed", "", "validated StateSeed JSON path")
+	passiveObservation := fs.String("passive-observation", "", "fixed passive observation ID")
+	retentionPolicy := fs.String("retention-policy", string(recovery.RetentionPolicyRetainRelevantOSState), "OS retention policy")
+	outPath := fs.String("out", "historical-recovery-set.json", "HistoricalRecoverySet JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*seedPath) == "" || strings.TrimSpace(*passiveObservation) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz profile recovery-set requires --objective, --seed, and --passive-observation")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-set failed: %v\n", err)
+		os.Exit(1)
+	}
+	seed, err := objective.ReadStateSeed(*seedPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-set failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := seed.ValidateFor(stateObjective); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-set failed: %v\n", err)
+		os.Exit(1)
+	}
+	head, err := recovery.MaterializationHeadFor(seed)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-set failed: %v\n", err)
+		os.Exit(1)
+	}
+	policy := recovery.RetentionPolicy(strings.TrimSpace(*retentionPolicy))
+	if !policy.Valid() {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-set failed: unsupported retention policy %q\n", *retentionPolicy)
+		os.Exit(1)
+	}
+	set, err := recovery.NewForkRecoverySet(seed, recovery.RecordedPlan{
+		SchemaVersion:         recovery.SchemaVersion,
+		RecordedPlanID:        seed.RecordedPlanID,
+		AdapterID:             seed.AdapterID,
+		TargetID:              seed.TargetID,
+		ExecutionArtifact:     seed.RecordedPlanArtifact,
+		PassiveObservationID:  *passiveObservation,
+		MaterializationHeadID: head.HeadID,
+		RetentionPolicy:       policy,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-set failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := recovery.WriteHistoricalRecoverySet(*outPath, *set); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-set failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("recovery_set_id: %s\n", set.RecoverySetID)
+	fmt.Printf("before_checkpoint: %s\n", set.Before.CheckpointID)
+	fmt.Printf("after_checkpoint: %s\n", set.After.CheckpointID)
+	fmt.Printf("head_checkpoint: %s\n", set.Head.CheckpointID)
 	fmt.Printf("artifact: %s\n", *outPath)
 }
 

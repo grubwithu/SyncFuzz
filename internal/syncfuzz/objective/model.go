@@ -89,6 +89,26 @@ const (
 	ProfileRunKindCalibrationFixture ProfileRunKind = "calibration-fixture"
 )
 
+// RetainedRuntime is the portable provenance needed to continue observing a
+// profiled container's live OS state after the profiling command returned.
+// It carries a Docker identity rather than credentials or host paths.
+type RetainedRuntime struct {
+	SchemaVersion  string `json:"schema_version"`
+	Environment    string `json:"environment"`
+	ContainerName  string `json:"container_name"`
+	ContainerID    string `json:"container_id"`
+	ContainerImage string `json:"container_image"`
+}
+
+const RetainedRuntimeSchema = "syncfuzz.target-runtime-lease.v1"
+
+func (r RetainedRuntime) Validate() error {
+	if r.SchemaVersion != RetainedRuntimeSchema || r.Environment != "container" || strings.TrimSpace(r.ContainerName) == "" || strings.TrimSpace(r.ContainerID) == "" || strings.TrimSpace(r.ContainerImage) == "" {
+		return fmt.Errorf("retained runtime is incomplete")
+	}
+	return nil
+}
+
 func (k ProfileRunKind) Valid() bool {
 	return k == ProfileRunKindSynthesisCandidate || k == ProfileRunKindCalibrationFixture
 }
@@ -96,17 +116,20 @@ func (k ProfileRunKind) Valid() bool {
 // ProfileRun is the validated evidence input to StateSeed promotion. Its
 // recorded-plan ID is opaque at this stage; V2.3 supplies the executor.
 type ProfileRun struct {
-	SchemaVersion         string                        `json:"schema_version"`
-	ProfileRunID          string                        `json:"profile_run_id"`
-	Kind                  ProfileRunKind                `json:"kind"`
-	SynthesisCandidateID  string                        `json:"synthesis_candidate_id,omitempty"`
-	NativeCheckpointRunID string                        `json:"native_checkpoint_run_id,omitempty"`
-	ObjectiveID           string                        `json:"objective_id"`
-	TargetID              string                        `json:"target_id"`
-	AdapterID             string                        `json:"adapter_id"`
-	RecordedPlanID        string                        `json:"recorded_plan_id"`
-	RecordedPlanArtifact  string                        `json:"recorded_plan_artifact"`
-	CheckpointMap         profiling.CheckpointEffectMap `json:"checkpoint_effect_map"`
+	SchemaVersion         string                             `json:"schema_version"`
+	ProfileRunID          string                             `json:"profile_run_id"`
+	Kind                  ProfileRunKind                     `json:"kind"`
+	SynthesisCandidateID  string                             `json:"synthesis_candidate_id,omitempty"`
+	NativeCheckpointRunID string                             `json:"native_checkpoint_run_id,omitempty"`
+	ObjectiveID           string                             `json:"objective_id"`
+	TargetID              string                             `json:"target_id"`
+	AdapterID             string                             `json:"adapter_id"`
+	RecordedPlanID        string                             `json:"recorded_plan_id"`
+	RecordedPlanArtifact  string                             `json:"recorded_plan_artifact"`
+	RetainedRuntime       *RetainedRuntime                   `json:"retained_runtime,omitempty"`
+	CheckpointCatalog     profiling.CheckpointCatalog        `json:"checkpoint_catalog,omitempty"`
+	CheckpointSummaries   []profiling.CheckpointStateSummary `json:"checkpoint_summaries,omitempty"`
+	CheckpointMap         profiling.CheckpointEffectMap      `json:"checkpoint_effect_map"`
 }
 
 func (r ProfileRun) ValidateFor(objective StateObjective) error {
@@ -136,6 +159,22 @@ func (r ProfileRun) ValidateFor(objective StateObjective) error {
 	}
 	if strings.TrimSpace(r.RecordedPlanID) == "" || strings.TrimSpace(r.RecordedPlanArtifact) == "" {
 		return fmt.Errorf("profile run %q requires a recorded plan ID and artifact", r.ProfileRunID)
+	}
+	if r.RetainedRuntime != nil {
+		if err := r.RetainedRuntime.Validate(); err != nil {
+			return fmt.Errorf("profile run %q retained runtime: %w", r.ProfileRunID, err)
+		}
+	}
+	if (len(r.CheckpointCatalog.Checkpoints) == 0) != (len(r.CheckpointSummaries) == 0) {
+		return fmt.Errorf("profile run %q must retain both checkpoint catalog and state summaries when either is present", r.ProfileRunID)
+	}
+	if len(r.CheckpointCatalog.Checkpoints) > 0 {
+		if r.CheckpointCatalog.RunID != r.CheckpointMap.RunID {
+			return fmt.Errorf("profile run %q checkpoint catalog run %q does not match checkpoint map run %q", r.ProfileRunID, r.CheckpointCatalog.RunID, r.CheckpointMap.RunID)
+		}
+		if err := profiling.ValidateCheckpointStateSummaries(r.CheckpointCatalog, r.CheckpointSummaries); err != nil {
+			return fmt.Errorf("profile run %q checkpoint state summaries: %w", r.ProfileRunID, err)
+		}
 	}
 	if err := r.CheckpointMap.Validate(); err != nil {
 		return fmt.Errorf("profile run %q checkpoint map: %w", r.ProfileRunID, err)

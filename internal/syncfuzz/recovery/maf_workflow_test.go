@@ -1,6 +1,10 @@
 package recovery
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func TestMAFWorkflowForkPlanRequiresNativeCheckpointBindings(t *testing.T) {
 	recorded := RecordedPlan{
@@ -54,5 +58,18 @@ func TestParseMAFWorkflowObservationStateRejectsUnknownValues(t *testing.T) {
 	}
 	if _, err := parseEffectMultiplicity("maybe"); err == nil {
 		t.Fatal("expected invalid effect multiplicity to be rejected")
+	}
+}
+
+func TestMAFWorkflowForkExecutorRejectsRecoverySetUntilHeadBindingExists(t *testing.T) {
+	_, err := NewMAFWorkflowForkExecutor().ExecuteFork(context.Background(), ForkExecutionRequest{
+		Plan: RecordedPlan{AdapterID: MAFWorkflowForkAdapterID},
+		Query: RecoveryQuery{
+			MaterializationHeadID: "materialization-head:profile-1:C2",
+			RetentionPolicy:       RetentionPolicyRetainRelevantOSState,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "RecoveryPair only") {
+		t.Fatalf("expected MAF recovery-set rejection, got %v", err)
 	}
 }

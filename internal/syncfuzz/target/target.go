@@ -197,6 +197,10 @@ type TargetRunOptions struct {
 	EnableResourceProfiling bool
 	ExpectedFiles           []string
 	AllowNetwork            bool
+	// RetainEnvironment leaves a completed container runtime running so a
+	// later recovery query can observe the original OS state. It is only used
+	// by adapters that record and subsequently validate a runtime lease.
+	RetainEnvironment bool
 	// SynthesisCandidateID is set only by the V2 synthesis executor. It is
 	// recorded with the real target task so an arbitrary historical run cannot
 	// later be relabelled as scheduler-issued evidence.
@@ -226,6 +230,7 @@ type TargetTask struct {
 	Environment          string              `json:"environment"`
 	ContainerImage       string              `json:"container_image,omitempty"`
 	AllowNetwork         bool                `json:"allow_network"`
+	RetainEnvironment    bool                `json:"retain_environment,omitempty"`
 	Workspace            string              `json:"workspace"`
 	ExpectedFiles        []string            `json:"expected_files,omitempty"`
 	CreatedAt            string              `json:"created_at"`
@@ -271,6 +276,26 @@ type TargetProfilingAnalysisResult struct {
 	HotFrontiers      int `json:"hot_frontiers"`
 }
 
+// TargetRuntimeLease identifies a container deliberately retained after a
+// target run. ContainerID prevents a later container with the same name from
+// being mistaken for the profiled OS state.
+type TargetRuntimeLease struct {
+	SchemaVersion  string `json:"schema_version"`
+	Environment    string `json:"environment"`
+	ContainerName  string `json:"container_name"`
+	ContainerID    string `json:"container_id"`
+	ContainerImage string `json:"container_image"`
+}
+
+const TargetRuntimeLeaseSchema = "syncfuzz.target-runtime-lease.v1"
+
+func (l TargetRuntimeLease) Validate() error {
+	if l.SchemaVersion != TargetRuntimeLeaseSchema || l.Environment != "container" || strings.TrimSpace(l.ContainerName) == "" || strings.TrimSpace(l.ContainerID) == "" || strings.TrimSpace(l.ContainerImage) == "" {
+		return fmt.Errorf("target runtime lease is incomplete")
+	}
+	return nil
+}
+
 type TargetRunResult struct {
 	SchemaVersion            string                         `json:"schema_version"`
 	RunID                    string                         `json:"run_id"`
@@ -314,9 +339,10 @@ type TargetRunResult struct {
 	// It is intentionally omitted from persisted artifacts: host paths are not
 	// portable provenance, but adapter code may need them to import files the
 	// target wrote through its bind mount.
-	HostWorkspace string `json:"-"`
-	StartedAt     string `json:"started_at"`
-	FinishedAt    string `json:"finished_at"`
+	HostWorkspace   string              `json:"-"`
+	RetainedRuntime *TargetRuntimeLease `json:"retained_runtime,omitempty"`
+	StartedAt       string              `json:"started_at"`
+	FinishedAt      string              `json:"finished_at"`
 }
 
 func TargetAdapters() []TargetAdapterInfo {
@@ -423,7 +449,15 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err != nil {
 		return nil, err
 	}
-	defer run.Close()
+	retainEnvironment := false
+	defer func() {
+		if retainEnvironment {
+			// The lease is now persisted in TargetRunResult. Closing the trace
+			// must not also stop the runtime needed by a later recovery query.
+			run.Cleanup = nil
+		}
+		_ = run.Close()
+	}()
 	workspacePath := targetWorkspaceForEnvironment(run)
 
 	if err := run.Trace.Write(core.NewEvent(run, "P0", "target_run_started", map[string]any{
@@ -467,6 +501,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		Environment:          run.Environment,
 		ContainerImage:       run.ContainerImage,
 		AllowNetwork:         opts.AllowNetwork,
+		RetainEnvironment:    opts.RetainEnvironment,
 		Workspace:            workspacePath,
 		ExpectedFiles:        opts.ExpectedFiles,
 		CreatedAt:            started.Format(time.RFC3339Nano),
@@ -875,6 +910,18 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		return nil, err
 	}
 
+	var retainedRuntime *TargetRuntimeLease
+	if opts.RetainEnvironment {
+		if run.Environment != "container" || strings.TrimSpace(run.ContainerName) == "" {
+			return nil, fmt.Errorf("retaining a target runtime requires a container environment")
+		}
+		lease, err := inspectTargetRuntimeLease(ctx, run.ContainerName, run.ContainerImage)
+		if err != nil {
+			return nil, err
+		}
+		retainedRuntime = &lease
+	}
+
 	finished := time.Now().UTC()
 	result := &TargetRunResult{
 		SchemaVersion:            "syncfuzz.target-result.v1",
@@ -913,6 +960,7 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		ArtifactDir:              run.RunDir,
 		Workspace:                workspacePath,
 		HostWorkspace:            run.Workspace,
+		RetainedRuntime:          retainedRuntime,
 		StartedAt:                started.Format(time.RFC3339Nano),
 		FinishedAt:               finished.Format(time.RFC3339Nano),
 	}
@@ -939,7 +987,27 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if err := core.WriteJSON(filepath.Join(run.RunDir, TargetResultArtifact), result); err != nil {
 		return nil, err
 	}
+	retainEnvironment = retainedRuntime != nil
 	return result, nil
+}
+
+func inspectTargetRuntimeLease(ctx context.Context, containerName string, containerImage string) (TargetRuntimeLease, error) {
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Id}} {{.State.Running}} {{.Config.Image}}", containerName).CombinedOutput()
+	if err != nil {
+		return TargetRuntimeLease{}, fmt.Errorf("inspect retained target runtime %q: %w: %s", containerName, err, strings.TrimSpace(string(output)))
+	}
+	fields := strings.Fields(string(output))
+	if len(fields) != 3 || fields[0] == "" || fields[1] != "true" || fields[2] != containerImage {
+		return TargetRuntimeLease{}, fmt.Errorf("retained target runtime %q is not the expected running image", containerName)
+	}
+	lease := TargetRuntimeLease{
+		SchemaVersion:  TargetRuntimeLeaseSchema,
+		Environment:    "container",
+		ContainerName:  containerName,
+		ContainerID:    fields[0],
+		ContainerImage: containerImage,
+	}
+	return lease, lease.Validate()
 }
 
 func resolveTargetPrompt(opts TargetRunOptions) (string, string, string, error) {

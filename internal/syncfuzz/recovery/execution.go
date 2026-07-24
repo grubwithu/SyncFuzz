@@ -57,26 +57,28 @@ func (m EffectMultiplicity) Valid() bool {
 // SyncFuzz supplied; an observation cannot be silently reused for a different
 // checkpoint, plan, or passive observation.
 type RecoveryObservation struct {
-	SchemaVersion        string             `json:"schema_version"`
-	QueryID              string             `json:"query_id"`
-	SeedID               string             `json:"seed_id"`
-	Boundary             Boundary           `json:"boundary"`
-	CheckpointID         string             `json:"checkpoint_id"`
-	RecordedPlanID       string             `json:"recorded_plan_id"`
-	PassiveObservationID string             `json:"passive_observation_id"`
-	RuntimeInstanceID    string             `json:"runtime_instance_id"`
-	AgentState           StatePresence      `json:"agent_state"`
-	OSState              StatePresence      `json:"os_state"`
-	OSStateOrigin        StateOrigin        `json:"os_state_origin"`
-	EffectMultiplicity   EffectMultiplicity `json:"effect_multiplicity"`
-	Evidence             []string           `json:"evidence"`
+	SchemaVersion         string             `json:"schema_version"`
+	QueryID               string             `json:"query_id"`
+	SeedID                string             `json:"seed_id"`
+	Boundary              Boundary           `json:"boundary"`
+	CheckpointID          string             `json:"checkpoint_id"`
+	RecordedPlanID        string             `json:"recorded_plan_id"`
+	PassiveObservationID  string             `json:"passive_observation_id"`
+	MaterializationHeadID string             `json:"materialization_head_id,omitempty"`
+	RetentionPolicy       RetentionPolicy    `json:"retention_policy,omitempty"`
+	RuntimeInstanceID     string             `json:"runtime_instance_id"`
+	AgentState            StatePresence      `json:"agent_state"`
+	OSState               StatePresence      `json:"os_state"`
+	OSStateOrigin         StateOrigin        `json:"os_state_origin"`
+	EffectMultiplicity    EffectMultiplicity `json:"effect_multiplicity"`
+	Evidence              []string           `json:"evidence"`
 }
 
 func (o RecoveryObservation) ValidateFor(query RecoveryQuery, plan RecordedPlan) error {
 	if o.SchemaVersion != "" && o.SchemaVersion != ExecutionSchemaVersion {
 		return fmt.Errorf("unsupported recovery observation schema %q", o.SchemaVersion)
 	}
-	if o.QueryID != query.QueryID || o.SeedID != query.SeedID || o.Boundary != query.Boundary || o.CheckpointID != query.CheckpointID || o.RecordedPlanID != query.RecordedPlanID || o.PassiveObservationID != query.PassiveObservationID {
+	if o.QueryID != query.QueryID || o.SeedID != query.SeedID || o.Boundary != query.Boundary || o.CheckpointID != query.CheckpointID || o.RecordedPlanID != query.RecordedPlanID || o.PassiveObservationID != query.PassiveObservationID || o.MaterializationHeadID != query.MaterializationHeadID || o.RetentionPolicy != query.RetentionPolicy {
 		return fmt.Errorf("recovery observation does not bind to query %q", query.QueryID)
 	}
 	if o.RecordedPlanID != plan.RecordedPlanID || strings.TrimSpace(o.RuntimeInstanceID) == "" || !o.AgentState.Valid() || !o.OSState.Valid() || !o.OSStateOrigin.Valid() || !o.EffectMultiplicity.Valid() {
@@ -144,6 +146,20 @@ func (r *ForkExecutorRegistry) Execute(ctx context.Context, seed objective.State
 	return ExecuteForkPair(ctx, seed, pair, plan, executor)
 }
 
+// ExecuteRecoverySet runs the complete before/after/head control set through
+// one adapter. The adapter must materialize the same recorded head for each
+// query and use a fresh runtime instance for every observation.
+func (r *ForkExecutorRegistry) ExecuteRecoverySet(ctx context.Context, seed objective.StateSeed, set HistoricalRecoverySet, plan RecordedPlan) (*ForkRecoverySetExecution, error) {
+	if r == nil {
+		return nil, fmt.Errorf("fork executor registry is required")
+	}
+	executor, ok := r.executors[plan.AdapterID]
+	if !ok {
+		return nil, fmt.Errorf("target adapter %q does not expose a durable checkpoint fork executor", plan.AdapterID)
+	}
+	return ExecuteForkRecoverySet(ctx, seed, set, plan, executor)
+}
+
 // PairClassification keeps both point classifications and the deterministic
 // comparison outcome. A non-consistent after result takes precedence because
 // it is the branch recovered at the state-forming frontier; if it is clean, a
@@ -167,6 +183,34 @@ type ForkPairExecution struct {
 	Before           RecoveryObservation `json:"before"`
 	After            RecoveryObservation `json:"after"`
 	Classification   PairClassification  `json:"classification"`
+}
+
+// RecoverySetClassification retains the head no-rollback control alongside
+// the historical before/after comparison. A non-consistent head forces an
+// inconclusive result because the observation cannot then be attributed to a
+// historical logical rollback.
+type RecoverySetClassification struct {
+	BeforeOutcome string `json:"before_outcome"`
+	AfterOutcome  string `json:"after_outcome"`
+	HeadOutcome   string `json:"head_outcome"`
+	Outcome       string `json:"outcome"`
+}
+
+// ForkRecoverySetExecution is the complete V2.3 recovery artifact. It
+// replaces a pair as the result used for discovery claims while keeping pair
+// execution available for compatibility fixtures.
+type ForkRecoverySetExecution struct {
+	SchemaVersion       string                    `json:"schema_version"`
+	RecoverySetID       string                    `json:"recovery_set_id"`
+	SeedID              string                    `json:"seed_id"`
+	FrontierID          string                    `json:"frontier_id"`
+	RecordedPlanID      string                    `json:"recorded_plan_id"`
+	MaterializationHead MaterializationHead       `json:"materialization_head"`
+	RetentionPolicy     RetentionPolicy           `json:"retention_policy"`
+	Before              RecoveryObservation       `json:"before"`
+	After               RecoveryObservation       `json:"after"`
+	Head                RecoveryObservation       `json:"head"`
+	Classification      RecoverySetClassification `json:"classification"`
 }
 
 // ExecuteForkPair runs before and after as separate invocations of the same
@@ -213,6 +257,56 @@ func ExecuteForkPair(ctx context.Context, seed objective.StateSeed, pair Recover
 	}, nil
 }
 
+// ExecuteForkRecoverySet invokes all three controls with a fixed recorded
+// head and retention policy. It rejects runtime reuse across any controls so
+// an observation cannot inherit physical state from another query.
+func ExecuteForkRecoverySet(ctx context.Context, seed objective.StateSeed, set HistoricalRecoverySet, plan RecordedPlan, executor ForkExecutor) (*ForkRecoverySetExecution, error) {
+	if executor == nil {
+		return nil, fmt.Errorf("fork executor is required")
+	}
+	if err := seed.Validate(); err != nil {
+		return nil, err
+	}
+	if err := set.ValidateFor(seed); err != nil {
+		return nil, err
+	}
+	if err := plan.ValidateFor(seed); err != nil {
+		return nil, err
+	}
+	if err := validateRecoverySetAgainstPlan(set, plan); err != nil {
+		return nil, err
+	}
+	before, err := executeForkQuery(ctx, set.Before, plan, executor)
+	if err != nil {
+		return nil, fmt.Errorf("execute before query: %w", err)
+	}
+	after, err := executeForkQuery(ctx, set.After, plan, executor)
+	if err != nil {
+		return nil, fmt.Errorf("execute after query: %w", err)
+	}
+	head, err := executeForkQuery(ctx, set.Head, plan, executor)
+	if err != nil {
+		return nil, fmt.Errorf("execute head query: %w", err)
+	}
+	if before.RuntimeInstanceID == after.RuntimeInstanceID || before.RuntimeInstanceID == head.RuntimeInstanceID || after.RuntimeInstanceID == head.RuntimeInstanceID {
+		return nil, fmt.Errorf("historical recovery set reused a runtime instance across controls")
+	}
+	classification := ClassifyForkRecoverySet(before, after, head)
+	return &ForkRecoverySetExecution{
+		SchemaVersion:       ExecutionSchemaVersion,
+		RecoverySetID:       set.RecoverySetID,
+		SeedID:              set.SeedID,
+		FrontierID:          set.FrontierID,
+		RecordedPlanID:      set.RecordedPlanID,
+		MaterializationHead: set.MaterializationHead,
+		RetentionPolicy:     set.RetentionPolicy,
+		Before:              before,
+		After:               after,
+		Head:                head,
+		Classification:      classification,
+	}, nil
+}
+
 func validatePairAgainstPlan(pair RecoveryPair, plan RecordedPlan) error {
 	if pair.SchemaVersion != "" && pair.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported recovery pair schema %q", pair.SchemaVersion)
@@ -231,6 +325,21 @@ func validatePairAgainstPlan(pair RecoveryPair, plan RecordedPlan) error {
 	}
 	if pair.Before.SeedID != pair.SeedID || pair.After.SeedID != pair.SeedID || pair.Before.QueryID == pair.After.QueryID {
 		return fmt.Errorf("recovery pair does not preserve one seed with distinct queries")
+	}
+	return nil
+}
+
+func validateRecoverySetAgainstPlan(set HistoricalRecoverySet, plan RecordedPlan) error {
+	if plan.MaterializationHeadID != set.MaterializationHead.HeadID || plan.RetentionPolicy != set.RetentionPolicy || set.RetentionPolicy != RetentionPolicyRetainRelevantOSState {
+		return fmt.Errorf("historical recovery set does not preserve its recorded head/retention contract")
+	}
+	if set.RecordedPlanID != plan.RecordedPlanID || set.PassiveObservationID != plan.PassiveObservationID {
+		return fmt.Errorf("historical recovery set does not preserve the recorded plan and passive observation")
+	}
+	for _, query := range []RecoveryQuery{set.Before, set.After, set.Head} {
+		if query.RecordedPlanID != plan.RecordedPlanID || query.PassiveObservationID != plan.PassiveObservationID || query.MaterializationHeadID != plan.MaterializationHeadID || query.RetentionPolicy != plan.RetentionPolicy {
+			return fmt.Errorf("historical recovery set query changes a recorded recovery condition")
+		}
 	}
 	return nil
 }
@@ -256,6 +365,21 @@ func ClassifyForkPair(before RecoveryObservation, after RecoveryObservation) Pai
 		BeforeOutcome: beforeOutcome,
 		AfterOutcome:  afterOutcome,
 		Outcome:       selectComparisonOutcome(beforeOutcome, afterOutcome),
+	}
+}
+
+func ClassifyForkRecoverySet(before RecoveryObservation, after RecoveryObservation, head RecoveryObservation) RecoverySetClassification {
+	pair := ClassifyForkPair(before, after)
+	headOutcome := classifyObservation(head)
+	outcome := pair.Outcome
+	if headOutcome != "consistent" {
+		outcome = "inconclusive"
+	}
+	return RecoverySetClassification{
+		BeforeOutcome: pair.BeforeOutcome,
+		AfterOutcome:  pair.AfterOutcome,
+		HeadOutcome:   headOutcome,
+		Outcome:       outcome,
 	}
 }
 
@@ -299,6 +423,13 @@ func selectComparisonOutcome(before string, after string) string {
 func WriteForkPairExecution(path string, execution ForkPairExecution) error {
 	if execution.SchemaVersion != ExecutionSchemaVersion {
 		return fmt.Errorf("unsupported fork pair execution schema %q", execution.SchemaVersion)
+	}
+	return writeRecoveryJSON(path, execution)
+}
+
+func WriteForkRecoverySetExecution(path string, execution ForkRecoverySetExecution) error {
+	if execution.SchemaVersion != ExecutionSchemaVersion {
+		return fmt.Errorf("unsupported fork recovery-set execution schema %q", execution.SchemaVersion)
 	}
 	return writeRecoveryJSON(path, execution)
 }

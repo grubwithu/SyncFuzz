@@ -12,22 +12,25 @@ import (
 // objective atom is backed by a linked effect and a probe-confirmed persistent
 // state delta across one frontier.
 type StateSeed struct {
-	SchemaVersion         string         `json:"schema_version"`
-	SeedID                string         `json:"seed_id"`
-	ObjectiveID           string         `json:"objective_id"`
-	ProfileRunID          string         `json:"profile_run_id"`
-	ProfileRunKind        ProfileRunKind `json:"profile_run_kind"`
-	SynthesisCandidateID  string         `json:"synthesis_candidate_id"`
-	NativeCheckpointRunID string         `json:"native_checkpoint_run_id,omitempty"`
-	TargetID              string         `json:"target_id"`
-	AdapterID             string         `json:"adapter_id"`
-	RecordedPlanID        string         `json:"recorded_plan_id"`
-	RecordedPlanArtifact  string         `json:"recorded_plan_artifact"`
-	FrontierID            string         `json:"frontier_id"`
-	BeforeCheckpointID    string         `json:"before_checkpoint_id"`
-	AfterCheckpointID     string         `json:"after_checkpoint_id"`
-	ValidatedEffects      []EffectAtom   `json:"validated_effects"`
-	ResourceIDs           []string       `json:"resource_ids"`
+	SchemaVersion                   string         `json:"schema_version"`
+	SeedID                          string         `json:"seed_id"`
+	ObjectiveID                     string         `json:"objective_id"`
+	ProfileRunID                    string         `json:"profile_run_id"`
+	ProfileRunKind                  ProfileRunKind `json:"profile_run_kind"`
+	SynthesisCandidateID            string         `json:"synthesis_candidate_id"`
+	NativeCheckpointRunID           string         `json:"native_checkpoint_run_id,omitempty"`
+	TargetID                        string         `json:"target_id"`
+	AdapterID                       string         `json:"adapter_id"`
+	RecordedPlanID                  string         `json:"recorded_plan_id"`
+	RecordedPlanArtifact            string         `json:"recorded_plan_artifact"`
+	FrontierID                      string         `json:"frontier_id"`
+	BeforeCheckpointID              string         `json:"before_checkpoint_id"`
+	AfterCheckpointID               string         `json:"after_checkpoint_id"`
+	MaterializationHeadCheckpointID string         `json:"materialization_head_checkpoint_id,omitempty"`
+	MaterializationHeadMonotonicNS  uint64         `json:"materialization_head_monotonic_ns,omitempty"`
+	MaterializationHeadResourceIDs  []string       `json:"materialization_head_resource_ids,omitempty"`
+	ValidatedEffects                []EffectAtom   `json:"validated_effects"`
+	ResourceIDs                     []string       `json:"resource_ids"`
 }
 
 // PromoteStateSeed is deterministic. It refuses manual fixtures, unlinked
@@ -69,23 +72,30 @@ func PromoteStateSeed(objective StateObjective, run ProfileRun, frontierID strin
 		resources = append(resources, resourceID)
 	}
 	sort.Strings(resources)
+	head, err := selectMaterializationHead(run, frontier, resources)
+	if err != nil {
+		return nil, err
+	}
 	return &StateSeed{
-		SchemaVersion:         SchemaVersion,
-		SeedID:                "state-seed:" + run.ProfileRunID + ":" + frontier.FrontierID,
-		ObjectiveID:           objective.ObjectiveID,
-		ProfileRunID:          run.ProfileRunID,
-		ProfileRunKind:        run.Kind,
-		SynthesisCandidateID:  run.SynthesisCandidateID,
-		NativeCheckpointRunID: run.NativeCheckpointRunID,
-		TargetID:              run.TargetID,
-		AdapterID:             run.AdapterID,
-		RecordedPlanID:        run.RecordedPlanID,
-		RecordedPlanArtifact:  run.RecordedPlanArtifact,
-		FrontierID:            frontier.FrontierID,
-		BeforeCheckpointID:    frontier.BeforeCheckpointID,
-		AfterCheckpointID:     frontier.AfterCheckpointID,
-		ValidatedEffects:      validated,
-		ResourceIDs:           resources,
+		SchemaVersion:                   SchemaVersion,
+		SeedID:                          "state-seed:" + run.ProfileRunID + ":" + frontier.FrontierID,
+		ObjectiveID:                     objective.ObjectiveID,
+		ProfileRunID:                    run.ProfileRunID,
+		ProfileRunKind:                  run.Kind,
+		SynthesisCandidateID:            run.SynthesisCandidateID,
+		NativeCheckpointRunID:           run.NativeCheckpointRunID,
+		TargetID:                        run.TargetID,
+		AdapterID:                       run.AdapterID,
+		RecordedPlanID:                  run.RecordedPlanID,
+		RecordedPlanArtifact:            run.RecordedPlanArtifact,
+		FrontierID:                      frontier.FrontierID,
+		BeforeCheckpointID:              frontier.BeforeCheckpointID,
+		AfterCheckpointID:               frontier.AfterCheckpointID,
+		MaterializationHeadCheckpointID: head.CheckpointID,
+		MaterializationHeadMonotonicNS:  head.MonotonicNS,
+		MaterializationHeadResourceIDs:  append([]string(nil), resources...),
+		ValidatedEffects:                validated,
+		ResourceIDs:                     resources,
 	}, nil
 }
 
@@ -140,6 +150,14 @@ func (s StateSeed) Validate() error {
 	if strings.TrimSpace(s.FrontierID) == "" || strings.TrimSpace(s.BeforeCheckpointID) == "" || strings.TrimSpace(s.AfterCheckpointID) == "" || s.BeforeCheckpointID == s.AfterCheckpointID {
 		return fmt.Errorf("state seed %q lacks a valid checkpoint frontier", s.SeedID)
 	}
+	if s.MaterializationHeadCheckpointID != "" || s.MaterializationHeadMonotonicNS != 0 || len(s.MaterializationHeadResourceIDs) != 0 {
+		if strings.TrimSpace(s.MaterializationHeadCheckpointID) == "" || s.MaterializationHeadMonotonicNS == 0 || len(s.MaterializationHeadResourceIDs) == 0 {
+			return fmt.Errorf("state seed %q has incomplete materialization-head evidence", s.SeedID)
+		}
+		if s.MaterializationHeadCheckpointID == s.BeforeCheckpointID || s.MaterializationHeadCheckpointID == s.AfterCheckpointID {
+			return fmt.Errorf("state seed %q materialization head must be distinct from its frontier coordinates", s.SeedID)
+		}
+	}
 	if len(s.ValidatedEffects) == 0 {
 		return fmt.Errorf("state seed %q has no validated effect atoms", s.SeedID)
 	}
@@ -147,6 +165,42 @@ func (s StateSeed) Validate() error {
 		return fmt.Errorf("state seed %q has no validated resources", s.SeedID)
 	}
 	return nil
+}
+
+type materializationHead struct {
+	CheckpointID string
+	MonotonicNS  uint64
+}
+
+func selectMaterializationHead(run ProfileRun, frontier profiling.CheckpointInterval, resourceIDs []string) (materializationHead, error) {
+	if len(run.CheckpointCatalog.Checkpoints) == 0 || len(run.CheckpointSummaries) == 0 {
+		return materializationHead{}, fmt.Errorf("profile run %q cannot promote a StateSeed without checkpoint state summaries for materialization-head evidence", run.ProfileRunID)
+	}
+	if err := profiling.ValidateCheckpointStateSummaries(run.CheckpointCatalog, run.CheckpointSummaries); err != nil {
+		return materializationHead{}, fmt.Errorf("profile run %q materialization-head summaries: %w", run.ProfileRunID, err)
+	}
+	head := run.CheckpointCatalog.Checkpoints[len(run.CheckpointCatalog.Checkpoints)-1]
+	if head.CheckpointID == frontier.BeforeCheckpointID || head.CheckpointID == frontier.AfterCheckpointID || head.MonotonicNS <= frontier.EndMonotonicNS {
+		return materializationHead{}, fmt.Errorf("profile run %q has no checkpoint strictly after frontier %q for materialization-head evidence", run.ProfileRunID, frontier.FrontierID)
+	}
+	resourcesAtHead := make(map[string]struct{})
+	for _, summary := range run.CheckpointSummaries {
+		if summary.CheckpointID != head.CheckpointID {
+			continue
+		}
+		for _, resource := range summary.Resources {
+			if resource.Observed {
+				resourcesAtHead[resource.Resource.ResourceID] = struct{}{}
+			}
+		}
+		break
+	}
+	for _, resourceID := range resourceIDs {
+		if _, ok := resourcesAtHead[resourceID]; !ok {
+			return materializationHead{}, fmt.Errorf("profile run %q materialization head %q does not retain linked resource %q", run.ProfileRunID, head.CheckpointID, resourceID)
+		}
+	}
+	return materializationHead{CheckpointID: head.CheckpointID, MonotonicNS: head.MonotonicNS}, nil
 }
 
 func effectAtomKey(atom EffectAtom) string {

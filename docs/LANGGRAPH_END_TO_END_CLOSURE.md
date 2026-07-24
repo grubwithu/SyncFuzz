@@ -1,8 +1,30 @@
 # LangGraph 端到端闭环：从状态目标到 Historical Checkpoint Recovery
 
 > 汇报快照：2026-07-24  
-> 对应代码：`056e30d`（`master`）  
-> 对应主运行：`runs/langgraph-v2.4/manual-baseline/native-timing/1784813806441091527`
+> 对应代码：V3 recovery-set worktree（2026-07-24）
+> 当前主运行：`runs/langgraph-v3/live-calibration-003`（profile `1784896157047894121`）
+
+> 代码状态更新（2026-07-24，快照之后）：recovery IR 已实现
+> `MaterializationHead`、`retain-relevant-os-state` 与
+> `HistoricalRecoverySet(Q_before,Q_after,Q_head)`；LangGraph V3 plan 还冻结
+> source workspace/checkpoint-store digest、source thread、精确 native ID 与
+> retained source-container lease。executor 在每个 fresh container 中验证并克隆
+> snapshot、直接 restore exact ID，并加入 source 的 PID/network namespace；它以
+> 只读 `/proc/net/unix` 和 holder FD 对 eBPF `exact-socket-id` 重新验证 listener，
+> 绝不重跑候选任务或连接服务。
+
+> V3 privileged live calibration 已完成：`Q_before` 以 exact native checkpoint
+> `1f1875b4-f72b-6627-8006-b8f6651a2cd2` 恢复为 `agent=absent`，而同一 source
+> PID/network namespace 中的 eBPF-linked `socket:180463219`（PID 58、FD 3）仍是
+> 唯一 listener，故分类为 `residual`；`Q_after` 和 `Q_head` 都为 `consistent`。
+> 三条 query 使用不同 runtime instance，source lease 已在观察后释放。该结果来自
+> `manual-langgraph-baseline-v1`，证明 V3 evidence/recovery contract，不构成漏洞、
+> generator 质量或 coverage 结论。
+
+> 旧手工 calibration：`runs/langgraph-v2.4/head-set-002` 在三个独立 container
+> 中 restore 了 before、after 与 head 的 exact source ID，但只观察了 socket
+> device/inode。它没有保留 source runtime，故不满足 V3 listener-holder contract，
+> 仍为 `inconclusive`；该手工候选不构成 generator discovery 或 coverage 结果。
 
 本文以目前唯一一条已完整跑通的 LangGraph 路径为主线，解释 SyncFuzz v2 到底在做什么、每一个 artifact 代表什么、已经证明了什么，以及还没有证明什么。它是明天汇报当前开发进度的技术底稿，而不是论文实验结果表。
 
@@ -26,7 +48,10 @@ StateObjective
 
 这证明了 v2 的**证据与恢复闭环可以端到端运行**：不是由 SyncFuzz 预先写好“漏洞利用后果”，也不是把 controller 的观察点冒充为 Agent checkpoint，而是先在真实执行中确认一个持久 OS effect，再围绕该 effect 前后的**框架原生 durable checkpoint**做恢复对照。
 
-本轮最终分类是 `inconclusive`。这是一个正确且有意的保守结论：当前 Unix socket passive probe 只观察 metadata，不能确定 effect multiplicity（single / duplicate），因此系统不会把“逻辑状态 absent、OS socket present”直接宣传成漏洞。
+V3 主运行最终分类是 `residual`：before checkpoint 的 Agent logical state 缺失，而
+listener 仍由被保留的 source runtime 唯一持有；after/head controls 均为
+`consistent`。这证明了本次恢复 contract 下的 A/O 残留，但不是自动的漏洞或安全影响
+结论。下文保留的 V2 metadata-only baseline 则仍为 `inconclusive`，仅供说明演进过程。
 
 ## 2. 要回答的问题与最小实验单位
 
@@ -51,7 +76,7 @@ Q_after  = <seed, H, C_{i+1}, retain relevant OS state, W, mechanism>
 Q_head   = <seed, H, H,       retain relevant OS state, W, mechanism>
 ```
 
-其中 historical checkpoint cut 是唯一 discovery 变量。任务、模型、容器镜像、目标 adapter、retention policy、被动观察方式和 recorded plan 必须保持一致。当前 LangGraph vertical slice 已实现 `Q_before/Q_after`，且使用 LangGraph fork 作为 mechanism；`Q_head` 与显式 head/retention artifact 仍待实现，故当前 artifact 名称仍为 `RecoveryPair`。
+其中 historical checkpoint cut 是唯一 discovery 变量。任务、模型、容器镜像、目标 adapter、retention policy、被动观察方式和 recorded plan 必须保持一致。当前 LangGraph V3 vertical slice 已实现 `Q_before/Q_after/Q_head`，并将 materialization head、retention policy 与 source-runtime lease 写入 `HistoricalRecoverySet`；下文涉及仅有 `RecoveryPair` 的描述均指历史 V2 baseline。
 
 这与旧路线有根本区别：旧 mutation 路线会改 prompt profile、场景 primitive、activation 或 trusted follow-up；v2 不把这些变化当作新的 recovery query。它们可能仍是历史 regression fixture 或后续 case study，但不构成 StateSeed 发现或 coverage claim。
 
@@ -323,7 +348,7 @@ fresh runtime 的 resolver 不使用 `source_checkpoint_id`，也不要求 histo
 
 “exactly one match or fail” 是必要的 fail-closed 规则：如果一个 shape 在 fresh history 中对应多个 durable checkpoint，SyncFuzz 不会任选一个来制造结论。
 
-### 6.7 第七步：冻结 recorded historical-recovery plan 与形成当前 RecoveryPair
+### 6.7 第七步：冻结 recorded historical-recovery plan 与形成当前 RecoveryPair（历史 baseline）
 
 `synthesis prepare-langgraph-fork` 把当前 LangGraph fork adapter 所需的不可变输入写为 `langgraph-fork-plan.json`。它是目标 historical-recovery plan 的当前 before/after 子集：
 
@@ -351,7 +376,7 @@ Q_after:  <same seed, fork, after-command,  unix-socket-metadata:agent.sock>
 
 ### 6.8 第八步：执行 before / after historical recovery query
 
-`recovery execute` 通过已注册的 LangGraph `ForkExecutor` 依次执行两条 query。这里的 `ForkExecutor` 是当前 adapter 的实现名称；方法层面它执行的是 historical recovery。每条 query 都会：
+下列过程是历史 V2 baseline 的执行方式，保留在这里仅用于解释既有 `inconclusive` artifact；它不是当前 V3 executor：
 
 1. 在 runtime root 下建立全新的 workspace；
 2. 以不同 Docker container 启动一次 initial process，完成同一个 task 并写入该 query 自己的 disk checkpoint store；
@@ -369,7 +394,9 @@ Q_before runtime = langgraph-fork-syncfuzz-langgraph-fork-3094571268
 Q_after  runtime = langgraph-fork-syncfuzz-langgraph-fork-1228889475
 ```
 
-这两个 ID 不同，且每个 observation 均记录 `runtime_recreated: true` 与一个 fresh native checkpoint ID。因此没有把两条 query 偷偷放在同一个 long-lived runtime 里比较。也因此它们不是共享同一个物理 `O_H`：实际比较的是两个 independently materialized `<A_C^(q),O_H^(q)>`。后续 head contract 必须定义并验证哪些状态关系在这些 `O_H^(q)` 之间可比。
+这两个 ID 不同，且每个 observation 均记录 `runtime_recreated: true` 与一个 fresh native checkpoint ID。因此没有把两条 query 偷偷放在同一个 long-lived runtime 里比较。也因此它们不是共享同一个物理 `O_H`：实际比较的是两个 independently materialized `<A_C^(q),O_H^(q)>`。
+
+当前 V3 executor 不重跑 candidate task，也不在 fresh runtime 解析 structural coordinate。它先验证 retained source-container lease 和 snapshot digest，复制 regular workspace 与 disk checkpoint store，在独立容器中把 source socket 节点只读 bind-mount 到同一路径、加入 source PID/network namespace，再用冻结的 exact native checkpoint ID 启动 `resume`。每个 `Q_before/Q_after/Q_head` 都有自己的 clone/container；只读 `/proc/net/unix` 与 holder FD probe 重新验证 profile 的 listener identity。
 
 ## 7. 被动观察到底观察了什么
 
@@ -454,7 +481,7 @@ origin      = residual
 - socket 是否是同名重建但 service identity 已变；
 - 是否存在另一个与 effect multiplicity 相关的资源变化。
 
-为避免把一个弱 probe 包装成漏洞证据，LangGraph executor 当前将 `EffectMultiplicity` 固定报告为 `unknown`。classifier 的 fail-closed 规则规定只要 origin 或 multiplicity 是 unknown，就输出 `inconclusive`，不猜测 `residual`、`duplicate` 或 `reconstruction`。
+该段描述的是旧 V2 metadata-only baseline：它将 `EffectMultiplicity` 固定报告为 `unknown`。当前 V3 executor 要求 retained source runtime，并从同一 PID/network namespace 的 `/proc/net/unix` 和 holder FD 验证 profile eBPF 关联的唯一 kernel socket；任一 lease、socket ID、listener 或 holder 不匹配仍 fail closed 为 `unknown`/`inconclusive`。classifier 不猜测 `residual`、`duplicate` 或 `reconstruction`。
 
 因此这次结果的正确表述是：
 
@@ -555,14 +582,14 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 
 ## 14. 当前最直接的技术缺口
 
-本闭环的下一道门槛首先是：**把 historical checkpoint recovery 的 `H` 与 OS retention policy 从隐含执行行为变成可审计 contract。**在此基础上，再增强 multiplicity / origin observation，而不是扩大 prompt mutation。
+当前代码已把 historical checkpoint recovery 的 `H`、OS retention policy 与 retained source runtime 从隐含执行行为变成可审计 contract；`runs/langgraph-v3/live-calibration-003` 已以 distinct native head 完成 V3 privileged calibration。下一步是 full-vs-pruned probe fidelity 与更多 objective family，而不是扩大 prompt mutation。
 
 优先工作应是：
 
-1. 将 `MaterializationHead`、目标资源在 `H` 仍存在的 evidence、`retention_policy` 与 adapter `mechanism` 写入 StateSeed / recorded plan；明确 current query 是 `<A_C,O_H^(q)>`，而不是假装复用原 profile container。
-2. 扩展当前 before/after `RecoveryPair` 为 before/after/head recovery set，并执行 `Q_head=<A_H,O_H>` no-logical-rollback control。
-3. 为 Unix listener 定义一个仍然不改变目标语义、但可区分 single / duplicate / reconstruction 的确定性 probe；例如以 listener holder process、FD/socket ownership、生命周期记录或协议无副作用 health semantics 组合证据。任何主动协议交互都必须作为新的、明确命名的 passive-observation contract，而不能静默替换 `lstat`。
-4. 把该 probe 与 head-equivalence check 的 full-vs-pruned fidelity 加入校准，验证优化观察面不会改变 verdict。
+1. 用新的 retained-runtime distinct-head LangGraph profile 实际执行 `Q_before/Q_after/Q_head`；只有 `Q_head=consistent` 时才允许解释 before/after 差异。
+2. 完成 Unix listener holder probe 的 privileged calibration：验证 source container lease、`/proc/net/unix` 的 exact socket ID 与唯一 holder FD 都可在三个 independent recovery runtime 中读取。任何主动协议交互仍必须作为新的、明确命名的 observation contract，而不能替换该只读 probe。
+3. 把该 probe 与 head-equivalence check 的 full-vs-pruned fidelity 加入校准，验证优化观察面不会改变 verdict。
+4. 给 MAF adapter 增加 distinct native head binding 后再接入 set executor；在此之前它只能运行兼容 `RecoveryPair`。
 5. 在多个 objective 与 state family 上重复这条闭环，并用随机 / 非-frontier historical cut 作对照，测量 frontier guidance 是否真的提高有效 A/O relation / localization 产出。
 6. 再引入外部 generator 的多次 synthesis 评估：生成成功率、持久性、head retention、seed retention 和 coverage increment。
 
@@ -570,7 +597,7 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 
 可以将当前进度概括为：
 
-> 我们已经完成了第一条真实 LangGraph vertical slice：从一个状态目标出发，在实际 Agent shell 执行中由 eBPF 和 probe 确认 Unix listener 的持久 effect，自动定位 effect 两侧的 frontier，并用同一 monotonic clock 将该 frontier 映射到 LangGraph 原生 durable checkpoints。当前 adapter 以 fork 实现 historical recovery：每条 query 先 materialize 自己的 head OS state，再按结构坐标恢复一个历史 logical checkpoint，仅做固定的被动 socket 观察。before/after 子集已跑通；head control、显式 retention contract 与 multiplicity evidence 仍待补齐，因此结果被保守分类为 inconclusive，而不是漏洞。 
+> 我们已经完成了第一条真实 LangGraph V3 vertical slice：从一个状态目标出发，在实际 Agent shell 执行中由 eBPF 和 probe 确认 Unix listener 的持久 effect，自动定位 effect 两侧的 frontier，并用同一 monotonic clock 将该 frontier 映射到 LangGraph 原生 durable checkpoints。`runs/langgraph-v3/live-calibration-003` 以 materialization head、`retain-relevant-os-state` 和 before/after/head controls 完成恢复：before 为 `residual`，after/head 为 `consistent`，listener multiplicity 为 `single`。这不是漏洞结论，且手工 candidate 不构成 generator 或 coverage 结果。
 
 如果被追问“为什么不直接把 before 的 `agent absent / socket present` 当作漏洞”，回答应是：
 
@@ -597,15 +624,16 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 完整重跑遵循以下顺序；每一步都消费前一步 artifact，而不是手填 ID：
 
 ```text
-1. synthesis schedule / generate
+1. synthesis schedule / generate（或明确标记的手工 baseline candidate）
 2. make langgraph-profile-image
-3. make synthesis-langgraph-profile
-4. synthesis evaluate + synthesis promote      -> StateSeed
-5. make synthesis-langgraph-bind-frontier       -> native binding
-6. make synthesis-langgraph-prepare-fork        -> recorded plan + bound profile
-7. profile recovery-pair                         -> 当前 before/after compatibility pair
-8. syncfuzz recovery execute                     -> current fork-pair execution
-9. （待实现）materialization-head + recovery set -> before/after/head controls
+3. make synthesis-langgraph-profile              -> retained source runtime + ProfileRun
+4. synthesis evaluate                            -> frontier eligibility
+5. make synthesis-langgraph-bind-frontier        -> native binding
+6. make synthesis-langgraph-prepare-fork         -> V3 recorded plan + bound profile
+7. synthesis promote --profile-run bound-profile-run.json -> StateSeed
+8. profile recovery-set                          -> Q_before/Q_after/Q_head
+9. syncfuzz recovery execute --set               -> V3 recovery-set execution
+10. make synthesis-langgraph-release-runtime
 ```
 
 第 8 步的核心命令形态是：
@@ -613,8 +641,8 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 ```bash
 GOCACHE=/tmp/syncfuzz-go-cache go run ./cmd/syncfuzz recovery execute \
   --seed runs/<root>/state-seed.json \
-  --pair runs/<root>/recovery-pair.json \
-  --out runs/<root>/fork-pair-execution.json \
+  --set runs/<root>/historical-recovery-set.json \
+  --out runs/<root>/recovery-set-execution.json \
   --timeout 2m
 ```
 
