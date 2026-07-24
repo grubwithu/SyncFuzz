@@ -4,13 +4,13 @@ SyncFuzz is a research prototype for discovering cross-layer state desynchroniza
 
 The project starts from one narrow claim:
 
-> Agent recovery is not only a question of which state to checkpoint. It is also a vulnerability search problem: where can a fault split the agent's logical state from OS state, external effects, or authority state?
+> Agent recovery is not only a question of which state to checkpoint. It is also a vulnerability search problem: where can a fault split the agent's logical state from OS state?
 
 SyncFuzz focuses on terminal/code agents that execute shell commands, maintain checkpoints, retry failed work, cancel runs, fork branches, or resume from old state. The first milestone is a deterministic known-answer testbed, then a cross-layer differential fuzzer.
 
 ## Active Research Route
 
-The active route is [state-objective-driven checkpoint frontier fuzzing](docs/RESEARCH_PLAN.md): SyncFuzz first validates that an agent execution actually formed a persistent OS effect, then compares recovery from the checkpoints immediately before and after that effect. The previous mutation catalog and trusted-action experiments are retained only as historical/regression material; they are not the basis for new discovery claims.
+The active route is [state-objective-driven historical checkpoint recovery fuzzing](docs/RESEARCH_PLAN.md): SyncFuzz first validates that an Agent execution actually formed a persistent OS effect, then restores historical logical checkpoints while retaining the materialized head OS state. A frontier contributes before / after cuts, and a head recovery is the no-logical-rollback control. `fork`, `rewind`, and `replay` are adapter mechanisms rather than discovery axes; their OS-retention and re-execution semantics must be recorded before results can be compared. The previous mutation catalog and trusted-action experiments are retained only as historical/regression material; they are not the basis for new discovery claims.
 
 ## Current MVP
 
@@ -100,8 +100,10 @@ The V2.1b artifact contract is available through `profile promote-seed` and
 it is marked `synthesis-candidate`, the selected frontier validates every atom
 in a supplied `StateObjective`, and persistent linked evidence exists. A
 `calibration-fixture` can never become a StateSeed or add coverage. The
-resulting fork pair fixes the recorded plan and passive observation, varying
-only the checkpoint.
+current compatibility artifact is a fork before/after pair: it fixes the
+recorded plan and passive observation, varying only the historical checkpoint.
+The target recovery-set contract additionally freezes the materialization head
+and OS-retention policy and adds a head no-rollback control.
 
 V2.4a adds `synthesis schedule`, `synthesis generate`, `synthesis evaluate`,
 and `synthesis promote`. Scheduling uses only objective atoms and the V2
@@ -122,13 +124,24 @@ monotonic time at which the durable saver persisted it, in the same clock
 domain as the eBPF/controller trace. `synthesis bind-langgraph-frontier` uses
 that evidence to bind a validated controller frontier only when a native
 checkpoint strictly brackets the linked objective-effect window; it refuses
-an older manifest with history order alone. This produces a mapping artifact,
-not a recovery execution: the fresh-runtime LangGraph fork executor remains
-the next step. The command requires explicit network permission for the model
-provider and does not serialize provider credentials. `synthesis bind-maf-frontier` then requires the profile's native-runtime ID to
-match the MAF checkpoint manifest before it can write the durable recovery
-plan; it verifies the persisted before/after queue coordinates rather than
-guessing from checkpoint-file order.
+an older manifest with history order alone. `synthesis prepare-langgraph-fork`
+freezes that binding into a recorded plan, and `recovery execute` now runs the
+current before/after historical-cut subset in independent fresh containers.
+Each query performs an initial head materialization followed by a fresh resume
+process in its own workspace, resolves a unique native coordinate rather than
+reusing an old checkpoint ID, and returns a fixed passive observation to the
+deterministic classifier. The explicit head/retention contract and head control
+are the next recovery-model extension.
+The current Unix-socket baseline is deliberately `inconclusive`: metadata
+alone does not prove effect multiplicity. It demonstrates the end-to-end
+recovery path, not a confirmed vulnerability. See
+[the LangGraph end-to-end closure note](docs/LANGGRAPH_END_TO_END_CLOSURE.md)
+for the complete evidence chain and limits. The command requires explicit
+network permission for the model provider and does not serialize provider
+credentials. `synthesis bind-maf-frontier` then requires the profile's
+native-runtime ID to match the MAF checkpoint manifest before it can write the
+durable recovery plan; it verifies the persisted before/after queue
+coordinates rather than guessing from checkpoint-file order.
 
 The V2.3 recovery executor additionally registers the first real durable
 adapter, `maf-workflow`. Its adapter-owned plan maps V2 coordinates to exact
@@ -415,7 +428,7 @@ targets/                   Real target adapters and runtime-specific entrypoints
 
 ## Roadmap
 
-The staged plan is documented in [docs/ROADMAP.md](docs/ROADMAP.md). The short version:
+The active research route is [state-objective-driven historical checkpoint recovery fuzzing](docs/RESEARCH_PLAN.md) (summarized in the "Active Research Route" section above). The historical staged plan below is retained in [docs/archived/ROADMAP.md](docs/archived/ROADMAP.md); its phase descriptions predate the current A/O two-layer model and are kept only as a record of what was built. The short version of that historical plan:
 
 1. Known-answer MVP with deterministic seeds and suite runner.
 2. Cross-layer tracing for filesystem, process, shell, external, and authority state.
@@ -424,4 +437,4 @@ The staged plan is documented in [docs/ROADMAP.md](docs/ROADMAP.md). The short v
 5. Real target adapters for LangGraph, MAF, AutoGen, and OpenHands.
 6. Vulnerability confirmation, baselines, and paper-ready evaluation.
 
-The Phase 2 implementation review is recorded in [docs/PHASE2_REVIEW.md](docs/PHASE2_REVIEW.md).
+The Phase 2 implementation review is recorded in [docs/archived/PHASE2_REVIEW.md](docs/archived/PHASE2_REVIEW.md).

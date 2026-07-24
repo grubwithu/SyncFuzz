@@ -1,6 +1,6 @@
-# SyncFuzz v2 研究计划：状态目标驱动的 Checkpoint Frontier Fuzzing
+# SyncFuzz v2 研究计划：状态目标驱动的 Historical Checkpoint Recovery Fuzzing
 
-状态：**当前路线**（2026-07-23）。本文取代旧路线中以 `primitive substitution`、`activation substitution`、`phase shift`、`cross-seed crossover` 为核心的变异计划。此前的设计与实验记录保留在历史分支和归档文档中，但不再作为新的实现或论文主张的基础。
+状态：**当前路线**（2026-07-24）。本文取代旧路线中以 `primitive substitution`、`activation substitution`、`phase shift`、`cross-seed crossover` 为核心的变异计划。此前的设计与实验记录保留在历史分支和归档文档中，但不再作为新的实现或论文主张的基础。
 
 本计划由 [ChatGPT-0723.md](ChatGPT-0723.md) 收束而来；后者是讨论记录，本文是可执行的规范。
 
@@ -8,7 +8,16 @@
 
 SyncFuzz 要回答的问题是：
 
-> 当 shell-enabled Agent 在一次执行中形成了可跨恢复边界存活的 OS 状态时，从该状态形成前后不同的 logical checkpoint 恢复，是否会得到不同的 Agent/OS 关系？
+> 当 shell-enabled Agent 已执行到 logical head `H` 并形成持久 OS state `O_H` 时，从严格早于 `H` 的历史 logical checkpoint `C` 恢复、而 relevant OS state 仍被保留，是否会得到不兼容的 Agent/OS 关系？
+
+形式化地，研究对象不是某个产品名为 `fork`、`rewind` 或 `replay` 的 API，而是 historical checkpoint cut：
+
+```text
+initial execution reaches H:        <A_H, O_H>
+recover a historical C while retain: <A_C, O_H>
+```
+
+只有 `C ≺ H` 且 `ΔO(C,H) ≠ ∅` 时，logical rollback 才可能形成新的 A/O mixed state。产品 API 只是 adapter 用于实现该 cut 的 mechanism；若一个 mechanism 会重放 effect、销毁 relevant runtime 或复制 OS namespace，它具有不同的 OS retention semantics，不能与 retain-state recovery 混为同一个实验条件。
 
 新的闭环为：
 
@@ -19,16 +28,16 @@ State Objective
   -> eBPF + state-probe validation
   -> executable StateSeed
   -> checkpoint-effect frontier mining
-  -> paired recovery queries (before / after)
+  -> historical checkpoint recovery set (before / after / head)
   -> differential A/O classification
 ```
 
 这包含两个相互独立、按顺序运行的搜索器：
 
 1. **State Fuzzer**：为未覆盖的 OS 状态目标合成自然任务，并只保留经真实执行验证的状态形成实例。
-2. **Checkpoint Frontier Fuzzer**：围绕已观测的持久 OS 状态变化，成对测试 frontier 前后的恢复点。
+2. **Historical Checkpoint Recovery Fuzzer**：围绕已观测的持久 OS 状态变化，选择 historical cut，并在固定 OS retention policy 下测试 frontier 前、frontier 后与 logical head。
 
-恢复测试的第一版只支持 `fork`。`replay` 与 `rewind` 是之后对同一 frontier 增加的 recovery-boundary 维度，而不是第一版的笛卡尔积。
+当前 LangGraph executor 使用产品的 `fork` 路径实现 retain-state historical recovery；这是**当前 adapter mechanism**，不是 discovery 搜索维度。以后接入 replay / rewind 时，先验证它们是否实际构造相同的 `<A_C,O_H>`；不相同则把其 OS retention / re-execution 语义作为独立受控条件，而不是把 API 名字并入 fuzz 笛卡尔积。
 
 ## 2. 不再采用的设计
 
@@ -52,20 +61,22 @@ State Objective
 | `NormalizedEffect` | 对 raw eBPF / probe evidence 的有限语义归一化结果 | 否 |
 | `StateSummary(C)` | checkpoint `C` 时可确认的持久 OS 资源及其依赖闭包 | 否 |
 | `CheckpointFrontier` | 相邻 checkpoint 间出现经确认的持久状态增量 `ΔR` | 否 |
-| `StateSeed` | 可重放、满足 objective、且至少跨一个 checkpoint 存活的 `ProfileRun` | 否，自动晋升 |
-| `RecoveryPair` | 同一 seed、同一 frontier、相同执行条件下的 before/after 两个 recovery query | 否 |
-| `RecoveryQuery` | `<seed_id, boundary, checkpoint_id, passive_observation>` | 否 |
+| `MaterializationHead` | initial execution 完成后、relevant OS effect 仍被确认存在的 logical head `H` | 否，来自 ProfileRun；当前 artifact 尚未显式冻结，见第 7 节待办 |
+| `StateSeed` | 满足 objective、跨 frontier 存活，并可用于在 head OS state 上做历史恢复的 `ProfileRun` | 否，自动晋升 |
+| `HistoricalRecoverySet` | 同一 seed、head、retention policy、plan、probe 下的 before / after / head controls | 否；当前代码只实现其 before/after 子集 `RecoveryPair` |
+| `RecoveryQuery` | `<seed_id, materialization_head, historical_checkpoint, retention_policy, passive_observation, mechanism>` | 否 |
 
 `StateObjective` 不是 prompt；`SynthesisCandidate` 不是 Query；`StateSeed` 不是人工 testcase；`RecoveryPair` 不是 Query genealogy。
 
-对于一个 frontier `(C_i, C_{i+1}]`，第一版只产生：
+对于一个 frontier `(C_i, C_{i+1}]` 和 materialization head `H`，目标实验结构是：
 
 ```text
-Q_before = <seed, fork, C_i, same passive observation>
-Q_after  = <seed, fork, C_{i+1}, same passive observation>
+Q_before = <seed, H, C_i,     retain relevant OS state, W, mechanism>
+Q_after  = <seed, H, C_{i+1}, retain relevant OS state, W, mechanism>
+Q_head   = <seed, H, H,       retain relevant OS state, W, mechanism>
 ```
 
-两者的 task、recorded execution plan、topology、activation、oracle 和 probe schema 必须相同；**checkpoint 是唯一允许变化的字段**。两条结果用 `comparison_pair_id` 与 `frontier_id` 关联，不使用 parent/child 谱系。
+三者的 task、recorded execution plan、topology、retention policy、oracle 和 probe schema 必须相同；**historical checkpoint cut 是唯一 discovery 变量**。`Q_before` 是核心发现 query，`Q_after` 是 frontier-local control，`Q_head` 是 no-logical-rollback control。当前兼容 artifact `RecoveryPair` 仍只写 before/after；在 head control 和显式 retention contract 落地前，不能把它称为完整 recovery set。
 
 ## 4. State Objective 与状态面
 
@@ -120,7 +131,7 @@ R(C) = persistent resources observable at C
 
 真实 profiling 的默认执行环境是每 run 一个低权限 Docker container。container 是 workspace、进程树和 cgroup 的归因边界；collector 运行在宿主机，以该 container 的 host PID 解析 cgroup identity 后过滤所有 descendant event。collector 不进入 container，container 也不获得 `privileged`、`CAP_BPF` 或宿主机 `/proc` 访问。
 
-同一 recovery query 的 initial branch 与 fork follow-up 留在同一个 container，以保留要判断的 OS residue；同一 `RecoveryPair` 的 before/after query 必须使用彼此独立的新 container。`local` 仅用于单元测试、fixture 和离线分析，不作为正式 profiling/coverage 结果的默认环境。初始 sandbox 保持非 root、无网络、`cap-drop=ALL`、`no-new-privileges`、CPU/内存/PID 限制；外部服务测试需要显式、单独的网络策略。
+同一 historical recovery query 的 initial materialization 与 fresh recovery process 留在同一个 container，以保留要判断的 `O_H`；同一 recovery set 的 before / after / head query 必须使用彼此独立的新 container。这样每条 query 测试的是自己的 `<A_C^(q), O_H^(q)>`，而不是跨容器传递一个物理 OS instance；实验必须另行检查这些 freshly materialized head 在声明的状态关系上可比。`local` 仅用于单元测试、fixture 和离线分析，不作为正式 profiling/coverage 结果的默认环境。初始 sandbox 保持非 root、无网络、`cap-drop=ALL`、`no-new-privileges`、CPU/内存/PID 限制；外部服务测试需要显式、单独的网络策略。
 
 ### 5.2 Frontier 选择与覆盖
 
@@ -130,7 +141,7 @@ frontier 分数仅用于调度，依据 persistence、capability creation、name
 
 ```text
 <family, operation, lifetime, resource_relation,
- boundary, checkpoint_relation, outcome>
+ recovery_mechanism, retention_policy, checkpoint_relation, outcome>
 ```
 
 并周期性执行 full-vs-pruned probe 对照。pruned probe 的 verdict、resource identity、attribution 或 reconstruction 分类与 full probe 不一致时，不能将其作为可靠优化。
@@ -143,17 +154,17 @@ frontier 分数仅用于调度，依据 persistence、capability creation、name
 2. 通过通用 generator interface 合成一个正常的软件工程任务；LLM 只是可替换实现，不是 oracle；
 3. Agent 执行候选，collector 与 probes 验证实际 effect；
 4. 若 objective 未满足，记录缺失 atom 并 repair/regenerate；
-5. 只有满足 effect、persistence、attribution、replayability 的候选才晋升为 `StateSeed`。
+5. 只有满足 effect、persistence、attribution，以及在 materialization head 仍可确认 relevant OS state 的候选才晋升为 `StateSeed`。
 
 当前手写 LangGraph 任务仅用于校准 collector、adapter 和 oracle；它们不作为“靠手写 seed 覆盖状态面”的证据。自然性以人工抽样审查，不能由模型自述代替。
 
-### Checkpoint Frontier Fuzzer
+### Historical Checkpoint Recovery Fuzzer
 
 1. 从已晋升的 seed 提取并分层选择 frontier；
-2. 建立 before/after `RecoveryPair`；
-3. 使用固定的 passive observation 和相同 execution plan 重跑；
+2. 将 frontier 前、frontier 后和 logical head 组成一个 historical recovery set；
+3. 对每条 query 固定 retention policy，先 materialize `H`，再用 adapter mechanism 恢复 selected `C`，并使用固定 passive observation；
 4. 用 deterministic evidence 分类 `consistent`、`residual`、`missing`、`duplicate`、`reconstruction` 或 `inconclusive`；
-5. 将 negative paired result 也保留为 boundary-localization evidence。
+5. 将 before/after 的 boundary-localization evidence 与 head negative control 一并保留。
 
 `trusted action` 可以在确认 contract violation 后由人工做独立 case study，但它不进入上述 scheduler、coverage 或 Query 生成逻辑。
 
@@ -163,12 +174,12 @@ frontier 分数仅用于调度，依据 persistence、capability creation、name
 | --- | --- | --- |
 | V2.0 规范与清理 | 本文、v2 data-model audit、旧 mutation 标记为 legacy | 新代码不消费 `TargetScenarioMutation`、mutation-focus prompt variant 或 Query genealogy |
 | V2.1a Evidence contract | checkpoint、raw event、normalized effect、checkpoint state summary、frontier JSON schema，raw-trace import，deterministic normalizer 与 fixture tests | **已实现**；不依赖特权 eBPF 也能从记录的 trace 得到稳定 frontier map |
-| V2.1b Objective / pair / coverage IR | `StateObjective`、validated seed、recovery pair 与 coverage record schema | 这些对象不复用旧 Scenario mutation / Query genealogy |
+| V2.1b Objective / recovery / coverage IR | `StateObjective`、validated seed、historical recovery set 与 coverage record schema | 这些对象不复用旧 Scenario mutation / Query genealogy；当前 `RecoveryPair` 是 recovery set 的 before/after 兼容子集 |
 | V2.2 Profiling collector | checkpoint monotonic timestamp、collector interface、Linux host-side eBPF adapter、per-run container/cgroup scope、core state probes | LangGraph calibration fixture 在独立 container 中生成可归因的 raw trace 与 `R(C)`；不支持 eBPF 或 cgroup v2 的环境明确失败而非静默降级 |
-| V2.3 Fork frontier pairs | `frontier -> Q_before/Q_after` generator、recorded-plan recovery executor、generic paired classifier | Unix-listener calibration 证明 only-checkpoint-changes invariant，并能区分 residue / reconstruction / clean negative |
+| V2.3 Historical checkpoint recovery | `frontier -> Q_before/Q_after/Q_head` generator、显式 head/retention contract、adapter recovery executor、generic classifier | historical cut 是唯一 discovery 变量；head control 证明现象来自 logical rollback，而非普通 branch sharing |
 | V2.4 Execution-validated synthesis | objective grammar、coverage scheduler、generator command contract、candidate repair/retention | 新 StateSeed 只能由实际 trace 验证后进入 corpus；手写 fixture 不计覆盖 |
 | V2.5 Breadth and fidelity | 分层 frontier selection、coverage ledger、full-vs-pruned calibration | 可报告各 family 的 objective、effect、frontier 与 boundary coverage，且明确支持范围 |
-| V2.6 扩展 | replay/rewind、第二批 family、contract-profile automation | 每次只增加一个独立维度，并与 fork baseline 做受控比较 |
+| V2.6 扩展 | 其他 recovery mechanism、第二批 family、contract-profile automation | 仅当 adapter 证明同一 retention/re-execution 语义时，才与 historical-cut baseline 合并比较 |
 
 V2.1 先使用离线 trace fixture，是为了把 Normalizer、effect map 和 pairing 语义与 eBPF 部署权限隔离；它不是用手写 seed 替代自动生成。`syncfuzz profile analyze` 消费 checkpoint catalog、raw-event JSONL 与 checkpoint state summaries，写出 `normalized-effects.json` 和 `checkpoint-effect-map.json`。V2.2 通过后，真实 collector 是所有 coverage claim 的必要条件。
 
@@ -191,25 +202,25 @@ V2.2 的 resource syscall slice 已完成同一 calibration path 的 live valida
 
 新建模块按职责分为 `objective`、`profiling`、`observation/effect`、`frontier`、`recovery`、`coverage` 与 `synthesis`；避免把它们重新塞进 target matrix 或 Scenario mutation 文件。
 
-V2.1b 的独立 IR 已落在 `internal/syncfuzz/objective`、`recovery` 和 `coverage`：`StateObjective` 只接受 bounded effect atom、lifetime、resource relation 与 persistence；`StateSeed` 只能由每个 atom 均有 evidence link 的 persistent frontier 自动晋升；`RecoveryPair` 固定为同一 seed、同一 recorded plan artifact、同一 passive observation 的 fork before/after 对，checkpoint 是唯一可变字段；coverage 使用 `<family, operation, lifetime, resource_relation, boundary, checkpoint_relation, outcome>` 去重，绝不读取 legacy Scenario mutation、prompt variant 或 Query genealogy。每个 `ProfileRun` 必须显式标为 `synthesis-candidate` 或 `calibration-fixture`：只有前者可晋升为 `StateSeed`，后者即使是成功的真实 eBPF run 也只能校准 collector，绝不计入 coverage。`profile promote-seed` 可离线读取带 provenance 的 ProfileRun，也可导入一次完成的 target profiling artifact；导入时必须声明 provenance，`synthesis-candidate` 由 V2.4 scheduler 产生，不能为手写 smoke 标记。`profile recovery-pair` 只能复用 seed 锁定的 recorded plan artifact。实际 recorded-plan executor 属于 V2.3。
+V2.1b 的独立 IR 已落在 `internal/syncfuzz/objective`、`recovery` 和 `coverage`：`StateObjective` 只接受 bounded effect atom、lifetime、resource relation 与 persistence；`StateSeed` 只能由每个 atom 均有 evidence link 的 persistent frontier 自动晋升；当前 `RecoveryPair` 固定为同一 seed、同一 recorded plan artifact、同一 passive observation 的 fork before/after 兼容子集，checkpoint 是唯一可变字段；coverage 当前使用 `<family, operation, lifetime, resource_relation, boundary, checkpoint_relation, outcome>` 去重，绝不读取 legacy Scenario mutation、prompt variant 或 Query genealogy。目标 IR 将把这一子集扩展为显式 `<H,C,ρ,μ,W>` 的 historical recovery set，并把 `materialization_head`、`retention_policy` 和 `Q_head` 记录为一等字段；在实现前，不把现有 pair 误称为完整 set。每个 `ProfileRun` 必须显式标为 `synthesis-candidate` 或 `calibration-fixture`：只有前者可晋升为 `StateSeed`，后者即使是成功的真实 eBPF run 也只能校准 collector，绝不计入 coverage。`profile promote-seed` 可离线读取带 provenance 的 ProfileRun，也可导入一次完成的 target profiling artifact；导入时必须声明 provenance，`synthesis-candidate` 由 V2.4 scheduler 产生，不能为手写 smoke 标记。`profile recovery-pair` 只能复用 seed 锁定的 recorded plan artifact。实际 recorded-plan executor 属于 V2.3。
 
-V2.3 的 executor core 已落在 `internal/syncfuzz/recovery`：`ForkExecutorRegistry` 只为真正暴露 durable Agent checkpoint 的 adapter 注册 executor；每个 `RecoveryObservation` 必须绑定原始 query、recorded plan 与 passive observation，并报告独立 `runtime_instance_id`。`ExecuteForkPair` 强制 before/after 使用不同 runtime instance，且只向 executor 传递不同的 checkpoint coordinate；其 deterministic classifier 输出 `consistent`、`residual`、`missing`、`duplicate`、`reconstruction` 或 `inconclusive`。`command` adapter 没有 Agent-native durable checkpoint，因此 registry 明确拒绝它；不能以 controller observation checkpoint 代替 fork execution。
+V2.3 的 executor core 已落在 `internal/syncfuzz/recovery`：`ForkExecutorRegistry` 只为真正暴露 durable Agent checkpoint 的 adapter 注册 executor；每个 `RecoveryObservation` 必须绑定原始 query、recorded plan 与 passive observation，并报告独立 `runtime_instance_id`。`ExecuteForkPair` 强制 before/after 使用不同 runtime instance，且只向 executor 传递不同的 checkpoint coordinate；其 deterministic classifier 输出 `consistent`、`residual`、`missing`、`duplicate`、`reconstruction` 或 `inconclusive`。这是 historical recovery set 的当前 before/after 实现，不是方法对 `fork` 名称的依赖；待补 `H` 与 retention contract 后，executor registry 应按 adapter 的实际 recovery semantics 而不是 API 名称注册。`command` adapter 没有 Agent-native durable checkpoint，因此 registry 明确拒绝它；不能以 controller observation checkpoint 代替恢复 execution。
 
 第一个接入点是 `maf-workflow` recovery adapter，而不是 legacy `target run` 的 generic command adapter。它调用 MAF Workflow 的 `FileCheckpointStorage`，在准备阶段形成两个真实、文件持久化的 native checkpoint（effect 之前和之后）；每个 query 都复制准备好的 initial workspace、重建新的 `Workflow` 对象，并用一个精确 native checkpoint ID 进行 restore。adapter plan 显式保存 V2 checkpoint coordinate 到 native MAF ID 的 binding，因而 recovery executor 不能把 controller checkpoint ID 直接交给 MAF。`make maf-workflow-native-fork-smoke` 是该 integration 的 live calibration：它产生 `prepared`、`before`、`after` 三个独立 workspace 与各自的 restore observation。`runs/maf-v2.3-fork-smoke-2` 已成功验证该路径：`v2-start` queue 的 native checkpoint `31f70e81-…` 在 fresh runtime 中 re-execute Plant，得到 `agent=absent, os=present, origin=reconstructed`；`v2-plant` queue 的 checkpoint `e58a22b6-…` 不重放 Plant，得到 `agent=present, os=present, origin=residual`。两者 runtime identity 不同，且均有 MAF restore callback 与重建 Workflow object 的 evidence。该 calibration 的 paired classifier 语义为 `before=reconstruction`、`after=consistent`、总体 `reconstruction`，因此它是预期的 clean calibration，不是 violation。此校准尚是 local fixture，不是 StateSeed、coverage 或 container profiling claim；把 synthesis-generated ProfileRun 映射到 native MAF coordinate 并纳入每-query container isolation 是 V2.4 的工作。
 
 V2.4a 的 synthesis contract 已落在 `internal/syncfuzz/synthesis`。coverage scheduler 只按 objective atom 在 V2 coverage ledger 中的 `<family,operation>` 稀缺性排序；generator command 接收 `SYNCFUZZ_SYNTHESIS_REQUEST` 所指向的 bounded JSON request，并只能在 stdout 返回一个自然任务 JSON。scheduler 为 task 计算 canonical `SynthesisCandidateID`；generator 无法指定 target、adapter、candidate ID、mutation、prompt variant 或 parent query。`ProfileRun(kind=synthesis-candidate)` 与 `StateSeed` 现在都必须携带该 candidate ID，且 `profile promote-seed` 必须同时收到相匹配的 scheduler candidate artifact；因此历史 target run 不能只靠填写 `--profile-kind` 进入 seed corpus。`synthesis evaluate` 仅接受 linked persistent frontier 作为实际 effect，输出 missing-atom feedback 供下一次 attempt 使用；`synthesis promote` 只有在 candidate/profile identity 一致且所有 objective atom 都已验证时才会保留 seed。`synthesis bind-maf-frontier` 已将一个 profile frontier 显式映射到 MAF native checkpoint ID；它要求 profile 的 `native_checkpoint_run_id` 与 manifest 的 initial runtime identity 一致，并验证 MAF 持久化的 `v2-start` / `v2-plant` queue coordinate，拒绝把无关 profile 绑到便利的 checkpoint fixture。当前没有内建 LLM 或默认 generator。
 
-LangGraph 已成为第一条真实 candidate execution 路径：`synthesis execute-langgraph` 只接收 scheduler-issued candidate，以候选的 `task` 作为真实 Agent prompt，在专用镜像的独立 container 中同时开启 process/resource eBPF profiling，并写出 candidate-bound `ProfileRun`。wrapper 强制使用 disk checkpointer，额外记录 `langgraph-native-checkpoints.json`：其中的 `native_checkpoint_run_id` 和精确 LangGraph checkpoint ID 与 controller 的 profiling checkpoint 分开保存。每次 durable `put` 还记录同一 `CLOCK_MONOTONIC` 域的 `persisted_monotonic_ns`。`synthesis bind-langgraph-frontier` 只在同一 native runtime、同一 validated frontier 中，以每个 linked objective effect 的时间窗选择严格前后的 native checkpoint；历史索引、checkpoint 文件顺序或 controller checkpoint 名均不能替代此证据。该 mapping 已由 live profile `1784813806441091527` 校准：`before-command..after-command` 被映射到精确的 native before/after ID。binding 现同时写出每个 native ID 的 structural coordinate（history index、message count、`next`）；fresh runtime 绝不复用 profile ID，而是必须在新 initial runtime 中将该完整 coordinate 解析为唯一的新 ID。wrapper 已支持该失败即停的 resolution 和无 Agent follow-up 的 passive recovery observation，并对一个 workspace-contained Unix endpoint 做固定、只读的 `lstat` identity observation。`synthesis prepare-langgraph-fork` 现把 candidate task、model/image、runtime root、固定 passive observation 与两个 structural coordinate 冻结为 LangGraph recorded plan，并将 bound ProfileRun 指向该 plan；credentials 不会进入 plan。下一步是执行该 plan：每个 query 建立独立 container，在容器内运行 initial+fresh-resume 两个 Python process，再把 observation 接回 paired classifier。
+LangGraph 已成为第一条真实 candidate execution 路径：`synthesis execute-langgraph` 只接收 scheduler-issued candidate，以候选的 `task` 作为真实 Agent prompt，在专用镜像的独立 container 中同时开启 process/resource eBPF profiling，并写出 candidate-bound `ProfileRun`。wrapper 强制使用 disk checkpointer，额外记录 `langgraph-native-checkpoints.json`：其中的 `native_checkpoint_run_id` 和精确 LangGraph checkpoint ID 与 controller 的 profiling checkpoint 分开保存。每次 durable `put` 还记录同一 `CLOCK_MONOTONIC` 域的 `persisted_monotonic_ns`。`synthesis bind-langgraph-frontier` 只在同一 native runtime、同一 validated frontier 中，以每个 linked objective effect 的时间窗选择严格前后的 native checkpoint；历史索引、checkpoint 文件顺序或 controller checkpoint 名均不能替代此证据。该 mapping 已由 live profile `1784813806441091527` 校准：`before-command..after-command` 被映射到精确的 native before/after ID。binding 现同时写出每个 native ID 的 structural coordinate（history index、message count、`next`）；fresh runtime 绝不复用 profile ID，而是必须在新 initial runtime 中将该完整 coordinate 解析为唯一的新 ID。wrapper 已支持该失败即停的 resolution 和无 Agent follow-up 的 passive recovery observation，并对一个 workspace-contained Unix endpoint 做固定、只读的 `lstat` identity observation。`synthesis prepare-langgraph-fork` 把 candidate task、model/image、runtime root、固定 passive observation 与两个 structural coordinate 冻结为 LangGraph recorded plan，并将 bound ProfileRun 指向该 plan；credentials 不会进入 plan。`recovery execute` 的 LangGraph executor 已实际执行该 plan：每个 query 建立独立 container，在其内部运行 initial 与 fresh-resume 两个 Python process，再把 observation 交给 paired classifier。最新 pair 使用 runtime `langgraph-fork-syncfuzz-langgraph-fork-3094571268`（before）和 `langgraph-fork-syncfuzz-langgraph-fork-1228889475`（after）；两者均成功按 fresh coordinate 恢复并在无 follow-up 的条件下观察到 `agent.sock`，但 `effect_multiplicity` 仍为 `unknown`，故 pair 正确分类为 `inconclusive`，不构成漏洞结论。完整的输入、evidence chain、语义和限制见 [LANGGRAPH_END_TO_END_CLOSURE.md](LANGGRAPH_END_TO_END_CLOSURE.md)。
 
 ## 9. 实验与论文证据
 
 在宣称新方法有效前，需要分别完成：
 
 1. **Synthesis validity**：目标 effect 的生成成功率、持久性、可重放性与自动 coverage 增量；
-2. **Frontier guidance**：eBPF-selected frontier pair 相比随机或非 frontier checkpoint pair 的有效 A/O relation / localization 产出；
+2. **Frontier guidance**：eBPF-selected historical recovery set 相比随机或非-frontier checkpoint cut 的有效 A/O relation / localization 产出；
 3. **Breadth**：按已声明 family 与 effect grammar 报告 coverage，禁止以 testcase 数量替代；
 4. **Probe fidelity**：full 与 pruned probe 的分类一致率、漏资源率和开销；
-5. **Recovery semantics**：fork first，随后才在相同 seed/frontier 上评估 replay 与 rewind。
+5. **Recovery semantics**：先固定 `retain relevant OS state` 的 historical-cut contract；之后才评估各产品的 fork / replay / rewind API 是否满足该 contract，或应作为不同 retention / re-execution condition 单列。
 
 所有 verdict 依赖可审计的 trace、probe 和 deterministic oracle。Recovery contract 自动生成仍是独立问题：它可为 oracle 提供期望语义，但不替代 effect validation 或 frontier selection。
 
@@ -218,11 +229,11 @@ LangGraph 已成为第一条真实 candidate execution 路径：`synthesis execu
 | 任务 | v2 处理方式 |
 | --- | --- |
 | 根因分析 | 已完成；作为 calibration fixture / case study，不再扩展为 mutation 主线 |
-| Mutator | 改为 objective-driven task synthesis 与唯一合法的 checkpoint-coordinate recovery pair |
+| Mutator | 改为 objective-driven task synthesis 与 historical checkpoint cut；不再变异 recovery API 名称 |
 | Oracle / Contract 自动化 | 保留为后续 contract-profile 工作；当前先以 deterministic A/O 分类保证证据闭环 |
 | Violation / Seed 分类 | 由 effect grammar、validated StateSeed 与 coverage ledger 给出，而非手工 testcase 标签 |
 | eBPF 引入 | 作为 profiling 与 frontier mining 的核心发现信号；state probe 负责持久性确认 |
 
 ## 11. 紧接着要做的工作
 
-第一层 **FD→`(device,inode)` identity probe** 已实现并完成 privileged live calibration；deleted-open-FD 的 collector effect 与 checkpoint probe 已形成 `exact-device-inode` link。Unix socket 的 namespace/FD identity 与 dependency closure 也已由 `1784805732832067342` 完成 privileged live calibration：`bind` / `listen` 经 `exact-socket-id` 关联到完整 endpoint closure。canonical-path、FD identity 与 Unix socket 的首轮 known-answer audit 均已完成，并由可重跑的 `profile calibration-audit` 输出 fixture-scoped precision/recall。V2.1b Objective / pair / coverage IR 与 provenance gate 已完成；V2.3 的 MAF-native durable-checkpoint recovery adapter 已完成 live fixture calibration；V2.4a 已实现 objective scheduler、generator contract、candidate provenance/retention gate，以及 logical-frontier 到 native MAF checkpoint 的 identity binding。LangGraph 现已接入真实 candidate 的 isolated, eBPF-profiled execution，并保留 initial durable runtime 的精确 checkpoint catalog；这一步不会把 controller checkpoint 冒充为 Agent checkpoint。LangGraph native-frontier mapper 已由 `1784813806441091527` 完成 live calibration：它要求同一 `CLOCK_MONOTONIC` 域的 native durable-save 时间戳，并只接受严格包围 linked objective-effect window 的 native checkpoint 对。wrapper 已补齐 fresh-process 的 exact-native-ID selection 与固定 Unix-socket metadata observation；接下来要将这些输入冻结为 LangGraph recorded plan，并在每个独立 container 中执行 before/after recovery pair。`command` adapter 仍被明确排除，不能把 controller observation checkpoint 当作恢复点。V2.5 再以 full-vs-pruned 与新增 family 扩展 fidelity/breadth 实验。collector 与 controller checkpoint 只能产生可审计 evidence：它们不单独决定漏洞 verdict 或 StateSeed 晋升。当前没有内建 LLM generator，不新增 trusted-action，也不把任何手写 smoke input 晋升为 StateSeed。
+第一层 **FD→`(device,inode)` identity probe** 已实现并完成 privileged live calibration；deleted-open-FD 的 collector effect 与 checkpoint probe 已形成 `exact-device-inode` link。Unix socket 的 namespace/FD identity 与 dependency closure 也已由 `1784805732832067342` 完成 privileged live calibration：`bind` / `listen` 经 `exact-socket-id` 关联到完整 endpoint closure。canonical-path、FD identity 与 Unix socket 的首轮 known-answer audit 均已完成，并由可重跑的 `profile calibration-audit` 输出 fixture-scoped precision/recall。V2.1b Objective / pair / coverage IR 与 provenance gate 已完成；V2.3 的 MAF-native durable-checkpoint recovery adapter 已完成 live fixture calibration；V2.4a 已实现 objective scheduler、generator contract、candidate provenance/retention gate，以及 logical-frontier 到 native MAF checkpoint 的 identity binding。LangGraph 现已接入真实 candidate 的 isolated, eBPF-profiled execution，并保留 initial durable runtime 的精确 checkpoint catalog；这一步不会把 controller checkpoint 冒充为 Agent checkpoint。LangGraph native-frontier mapper 已由 `1784813806441091527` 完成 live calibration：它要求同一 `CLOCK_MONOTONIC` 域的 native durable-save 时间戳，并只接受严格包围 linked objective-effect window 的 native checkpoint 对。LangGraph 的当前 fork executor 已完成 before / after live execution：query 内的 initial 与 fresh resume process 保留同一 workspace 以观察 `O_H^(q)`，before / after 则在独立 container 中执行。该实现是 historical recovery set 的 before/after 子集；它尚未显式记录 materialization head、head-time persistence 或 `Q_head` no-rollback control，且当前 Unix-socket metadata probe 的 multiplicity evidence 仍未知，故最新 pair 为 `inconclusive`。下一步首先是实现 explicit head/retention contract 与 head control，再增强 multiplicity probe；不能把该基线写成漏洞。`command` adapter 仍被明确排除，不能把 controller observation checkpoint 当作恢复点。V2.5 再以 full-vs-pruned 与新增 family 扩展 fidelity/breadth 实验。collector 与 controller checkpoint 只能产生可审计 evidence：它们不单独决定漏洞 verdict 或 StateSeed 晋升。当前没有内建 LLM generator，不新增 trusted-action，也不把任何手写 smoke input 晋升为 StateSeed。LangGraph reference vertical slice 的完整审计说明见 [LANGGRAPH_END_TO_END_CLOSURE.md](LANGGRAPH_END_TO_END_CLOSURE.md)。
