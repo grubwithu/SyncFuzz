@@ -102,7 +102,7 @@ Usage:
   syncfuzz recovery relation-novelty [--reports report-a.json,report-b.json | --fidelity-batch runs/<batch>] [--ledger relation-novelty-ledger.json] --out relation-novelty-ledger.json
   syncfuzz recovery fidelity-report --roots runs/<trial-a>,runs/<trial-b> --out fidelity-report.json
   syncfuzz recovery fidelity-batch-report --root runs/<batch> --target-accepted-trials 3 --max-attempts 6 --out fidelity-report.json
-  syncfuzz synthesis schedule --objectives objective-a.json,objective-b.json [--coverage-ledger coverage.json] [--limit 0] --out schedule.json
+  syncfuzz synthesis schedule --objectives objective-a.json,objective-b.json [--coverage-ledger coverage.json] [--relation-novelty-ledger relation-novelty-ledger.json] [--limit 0] --out schedule.json
   syncfuzz synthesis generate --objective objective.json --target <target-id> --adapter <adapter-id> --scaffold <scaffold-artifact> --generator-id <id> --generator-command '<command>' [--attempt 0] [--feedback candidate-evaluation.json] --out candidate.json
   syncfuzz synthesis execute-langgraph --objective objective.json --candidate candidate.json --allow-network --retain-runtime [--container-image syncfuzz-langgraph:dev] [--out runs/langgraph-candidate-execution.json] [--out-profile-run profile-run.json]
   syncfuzz synthesis evaluate --objective objective.json --candidate candidate.json --profile-run profile-run.json --out evaluation.json
@@ -519,6 +519,7 @@ func synthesisSchedule(args []string) {
 	fs := flag.NewFlagSet("synthesis schedule", flag.ExitOnError)
 	objectivePaths := fs.String("objectives", "", "comma-separated StateObjective JSON paths")
 	coverageLedger := fs.String("coverage-ledger", "", "optional V2 coverage ledger JSON array")
+	relationNoveltyLedger := fs.String("relation-novelty-ledger", "", "optional complete recovery relation-novelty ledger JSON")
 	limit := fs.Int("limit", 0, "maximum scheduled objectives; 0 selects all")
 	outPath := fs.String("out", "synthesis-schedule.json", "ObjectiveSchedule JSON output path")
 	if err := fs.Parse(args); err != nil {
@@ -546,7 +547,16 @@ func synthesisSchedule(args []string) {
 			os.Exit(1)
 		}
 	}
-	schedule, err := synthesis.ScheduleObjectives(objectives, ledger, *limit)
+	var relations *coverage.RelationNoveltyLedger
+	if strings.TrimSpace(*relationNoveltyLedger) != "" {
+		value, err := coverage.ReadRelationNoveltyLedger(*relationNoveltyLedger)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis schedule failed: %v\n", err)
+			os.Exit(1)
+		}
+		relations = &value
+	}
+	schedule, err := synthesis.ScheduleObjectivesWithRelationNovelty(objectives, ledger, relations, *limit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis schedule failed: %v\n", err)
 		os.Exit(1)
@@ -557,7 +567,7 @@ func synthesisSchedule(args []string) {
 	}
 	fmt.Printf("scheduled_objectives: %d\n", len(schedule.Selections))
 	for _, selection := range schedule.Selections {
-		fmt.Printf("objective: %s score=%d uncovered_atoms=%d\n", selection.ObjectiveID, selection.Score, len(selection.UncoveredEffects))
+		fmt.Printf("objective: %s score=%d uncovered_atoms=%d proven_relation_tuples=%d unknown_causal_relation_tuples=%d\n", selection.ObjectiveID, selection.Score, len(selection.UncoveredEffects), selection.ProvenRelationTuples, selection.UnknownCausalRelationTuples)
 	}
 	fmt.Printf("artifact: %s\n", *outPath)
 }

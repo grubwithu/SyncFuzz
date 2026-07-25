@@ -41,6 +41,89 @@ func TestScheduleObjectivesPrioritizesUncoveredAtoms(t *testing.T) {
 	}
 }
 
+func TestScheduleObjectivesWithRelationNoveltyUsesOnlyProvenScopeTuples(t *testing.T) {
+	ipc := testObjective("ipc.listen", profiling.StateFamilyIPC, "listen")
+	handle := testObjective("handle.dup", profiling.StateFamilyHandle, "dup")
+	ledger := relationNoveltyLedgerForTest(t, ipc)
+	ledger, _, err := coverage.UpdateRelationNoveltyLedger(ledger, []recovery.RecoveryRelationReport{relationNoveltyReportForTest(t, ipc, recovery.CausalEffectEvidenceUnknown)})
+	if err != nil {
+		t.Fatalf("add unknown relation report: %v", err)
+	}
+	schedule, err := ScheduleObjectivesWithRelationNovelty([]objective.StateObjective{ipc, handle}, nil, &ledger, 0)
+	if err != nil {
+		t.Fatalf("ScheduleObjectivesWithRelationNovelty returned error: %v", err)
+	}
+	byObjective := make(map[string]ObjectiveSelection, len(schedule.Selections))
+	for _, selection := range schedule.Selections {
+		byObjective[selection.ObjectiveID] = selection
+	}
+	if got := byObjective[ipc.ObjectiveID]; !got.RelationCoverageKnown || got.ProvenRelationTuples != 1 || got.UnknownCausalRelationTuples != 1 || got.RelationNoveltyScore != 50 {
+		t.Fatalf("expected one proven and one unknown IPC tuple, got %#v", got)
+	}
+	if got := byObjective[handle.ObjectiveID]; !got.RelationCoverageKnown || got.ProvenRelationTuples != 0 || got.UnknownCausalRelationTuples != 0 || got.RelationNoveltyScore != 250 {
+		t.Fatalf("expected missing handle relation coverage to retain exploration bonus, got %#v", got)
+	}
+}
+
+func relationNoveltyLedgerForTest(t *testing.T, stateObjective objective.StateObjective) coverage.RelationNoveltyLedger {
+	t.Helper()
+	ledger, _, err := coverage.UpdateRelationNoveltyLedger(coverage.RelationNoveltyLedger{}, []recovery.RecoveryRelationReport{relationNoveltyReportForTest(t, stateObjective, recovery.CausalEffectEvidenceProven)})
+	if err != nil {
+		t.Fatalf("build relation-novelty ledger: %v", err)
+	}
+	return ledger
+}
+
+func relationNoveltyReportForTest(t *testing.T, stateObjective objective.StateObjective, causalStatus recovery.CausalEffectEvidenceStatus) recovery.RecoveryRelationReport {
+	t.Helper()
+	control := func(name, checkpointID string, agentState recovery.StatePresence) recovery.RecoveryRelationControl {
+		evidence, relation := recovery.DeriveRecoveryRelation(recovery.RecoveryObservation{
+			AgentState:         agentState,
+			OSState:            recovery.StatePresencePresent,
+			OSStateOrigin:      recovery.StateOriginResidual,
+			EffectMultiplicity: recovery.EffectMultiplicitySingle,
+			Evidence:           []string{"passive identity observation"},
+		})
+		return recovery.RecoveryRelationControl{Name: name, CheckpointID: checkpointID, Evidence: evidence, Relation: relation}
+	}
+	report := recovery.RecoveryRelationReport{
+		SchemaVersion:   recovery.RecoveryRelationReportSchema,
+		SeedID:          "state-seed:" + stateObjective.ObjectiveID,
+		ObjectiveID:     stateObjective.ObjectiveID,
+		ProfileRunID:    "profile:" + stateObjective.ObjectiveID,
+		FrontierID:      "before-command..after-command",
+		EffectScope:     stateObjective.CanonicalEffects(),
+		SeedResourceIDs: []string{"resource:test"},
+		Controls: []recovery.RecoveryRelationControl{
+			control("before", "C0", recovery.StatePresenceAbsent),
+			control("after", "C1", recovery.StatePresencePresent),
+			control("head", "C2", recovery.StatePresencePresent),
+		},
+		CausalEffectEvidence: &recovery.CausalEffectEvidence{
+			Status:         causalStatus,
+			AdapterID:      recovery.LangGraphForkAdapterID,
+			RecordedPlanID: "recorded-plan:" + stateObjective.ObjectiveID,
+		},
+		Contract: recovery.ContractEvaluation{Status: recovery.ContractNotEvaluated, Reason: "relation coverage does not evaluate a framework contract"},
+	}
+	if causalStatus == recovery.CausalEffectEvidenceProven {
+		report.CausalEffectEvidence.LangGraphToolEffectProof = &recovery.LangGraphToolEffectProvenance{
+			ToolCallID:                 "call-1",
+			ToolName:                   "shell",
+			ShellSessionID:             "shell-1",
+			CommandSHA256:              strings.Repeat("a", 64),
+			CommandStartedMonotonicNS:  100,
+			CommandFinishedMonotonicNS: 300,
+			FirstEffectMonotonicNS:     150,
+			LastEffectMonotonicNS:      160,
+		}
+	}
+	if err := report.Validate(); err != nil {
+		t.Fatalf("test relation report is invalid: %v", err)
+	}
+	return report
+}
+
 func TestEvaluateProfileRequiresSchedulerCandidateAndLinkedEffects(t *testing.T) {
 	stateObjective := testObjective("ipc.listen", profiling.StateFamilyIPC, "listen")
 	request, err := NewGeneratorRequest(stateObjective, "maf-workflow-checkpoint", "maf-workflow", "scaffolds/maf", 0, nil)

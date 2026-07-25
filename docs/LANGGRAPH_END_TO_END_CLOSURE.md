@@ -537,8 +537,12 @@ result 或多个匹配 span 都明确是 unknown。`recovery execute --out-relat
 causal evidence status、已证明的 tool name 与三个 normalized relation
 signature；task、tool-call ID、shell session、command hash 与 contract status
 都不参与 key。fidelity batch 只读取 `full/` reports：重复 profile 会增加
-confidence record，但相同 semantic tuple 只计一次 novelty。该 ledger 暂未接入
-objective scheduler，因此不应将它误报为已实现的 guided generation。
+confidence record，但相同 semantic tuple 只计一次 novelty。`synthesis
+schedule --relation-novelty-ledger` 可将该 ledger 作为次级 exploration signal：
+只有 causally proven tuple 会降低同一 canonical effect scope 的探索优先级；
+unknown causal tuple 仅保留审计计数。它不读取 task、tool/session identity、
+command hash 或 contract status，也不将 relation 结论升级为 guided generation
+的 Oracle。
 
 ## 10. 关键 artifact 清单与审计路径
 

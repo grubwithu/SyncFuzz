@@ -149,11 +149,17 @@ normalized relation signatures. It deliberately excludes task text, tool-call
 IDs, shell sessions, command hashes, and contract status. `--fidelity-batch`
 loads each accepted `attempt-*/full/recovery-relation-report.json`, so repeated
 profiles add confidence records while the same semantic tuple is counted once.
-The ledger is not yet connected to objective scheduling.
+`synthesis schedule --relation-novelty-ledger` consumes this ledger as a
+secondary exploration signal. It groups only by canonical effect scope, counts
+unique causally proven tuples, and gives objectives with no proven relation a
+small priority bonus. Unknown-causal tuples are reported but never lower that
+bonus. The scheduler does not read task text, tool/session identifiers,
+command hashes, or contract status.
 
 V2.4a adds `synthesis schedule`, `synthesis generate`, `synthesis evaluate`,
-and `synthesis promote`. Scheduling uses only objective atoms and the V2
-coverage ledger; a generator reads a bounded JSON request through
+and `synthesis promote`. Scheduling uses objective atoms and the V2 coverage
+ledger; an optional relation-novelty ledger adds only a proven-relation
+exploration signal. A generator reads a bounded JSON request through
 `SYNCFUZZ_SYNTHESIS_REQUEST` and emits one natural task JSON object. The
 scheduler assigns the candidate ID, and every synthesis ProfileRun/StateSeed
 must carry that ID before it can be retained. There is no built-in LLM

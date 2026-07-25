@@ -61,8 +61,10 @@ the canonical effect scope, adapter ID, causal evidence status, proven tool
 name, and all three normalized relation signatures. It intentionally excludes
 candidate task text, tool-call/session IDs, command hashes, and contract status;
 independent profiles with the same tuple improve confidence but do not inflate
-novelty. The ledger is an offline coverage artifact at this stage, not yet an
-input to `synthesis schedule`.
+novelty. `synthesis schedule --relation-novelty-ledger` now consumes the
+ledger as a secondary priority signal: only causally proven tuples lower that
+signal, while unknown-causal tuples remain visible without being credited as
+coverage. It is not a contract oracle or generator feedback channel.
 
 ## V2.1a Profiling Evidence
 
