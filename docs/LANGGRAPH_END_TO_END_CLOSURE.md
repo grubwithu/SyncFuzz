@@ -26,6 +26,13 @@
 > device/inode。它没有保留 source runtime，故不满足 V3 listener-holder contract，
 > 仍为 `inconclusive`；该手工候选不构成 generator discovery 或 coverage 结果。
 
+> 代码增量（2026-07-25）：LangGraph fork plan 现也支持第二个 retained-resource
+> family `handle.workspace-file.survival`。它以 exact `handle/open` frontier link
+> 绑定 `/workspace/agent-result.txt` 这类 regular file，冻结 device/inode/mode，
+> recovery 只做 read-only bind mount 与 `lstat` identity 比对，不读取文件内容。
+> 该路径已完成单元测试和 artifact contract，但尚未完成真实 generated-candidate
+> live run，因此不应与上面的 listener calibration 混为已有实验结果。
+
 本文以目前唯一一条已完整跑通的 LangGraph 路径为主线，解释 SyncFuzz v2 到底在做什么、每一个 artifact 代表什么、已经证明了什么，以及还没有证明什么。它是明天汇报当前开发进度的技术底稿，而不是论文实验结果表。
 
 ## 1. 一句话结论

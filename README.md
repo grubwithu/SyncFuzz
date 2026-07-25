@@ -167,6 +167,11 @@ generator: [the MAF scaffold example](examples/synthesis/maf-workflow-scaffold.e
 defines the context a separately configured generator may read.
 The corresponding [LangGraph scaffold](examples/synthesis/langgraph-shell-react-scaffold.example.json)
 is used by the isolated real-candidate execution path.
+The example objective set also includes
+[`handle.workspace-file.survival`](examples/objectives/workspace-file-survival.example.json),
+which exercises the retained regular-workspace-file observer. Its recovery
+contract compares immutable device/inode/mode identity and never uses file
+contents as an Oracle.
 `synthesis execute-langgraph --retain-runtime` is the first real
 candidate-execution path: it runs one scheduler-issued LangGraph task in the
 dedicated isolated image with both eBPF collectors, writes a candidate-bound

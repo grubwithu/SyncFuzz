@@ -13,11 +13,12 @@ import (
 )
 
 type LangGraphForkPlanConfig struct {
-	Model                 string
-	ContainerImage        string
-	RuntimeRoot           string
-	PassiveUnixSocketPath string
-	PassiveProbeMode      recovery.LangGraphPassiveProbeMode
+	Model                    string
+	ContainerImage           string
+	RuntimeRoot              string
+	PassiveUnixSocketPath    string
+	PassiveWorkspaceFilePath string
+	PassiveProbeMode         recovery.LangGraphPassiveProbeMode
 }
 
 // PrepareLangGraphForkPlan turns a timestamp-validated native binding into an
@@ -36,8 +37,13 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 	if binding.CandidateID != candidate.CandidateID || binding.ProfileRunID != run.ProfileRunID || binding.NativeCheckpointRunID != run.NativeCheckpointRunID || binding.FrontierID == "" || run.AdapterID != recovery.LangGraphForkAdapterID || candidate.AdapterID != recovery.LangGraphForkAdapterID || run.TargetID != candidate.TargetID {
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph native binding does not match the candidate/profile recovery identity")
 	}
-	if strings.TrimSpace(config.Model) == "" || strings.TrimSpace(config.ContainerImage) == "" || strings.TrimSpace(config.RuntimeRoot) == "" || strings.TrimSpace(config.PassiveUnixSocketPath) == "" {
-		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph fork plan requires model, container image, runtime root, and passive Unix socket path")
+	if strings.TrimSpace(config.Model) == "" || strings.TrimSpace(config.ContainerImage) == "" || strings.TrimSpace(config.RuntimeRoot) == "" {
+		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph fork plan requires model, container image, and runtime root")
+	}
+	hasSocket := strings.TrimSpace(config.PassiveUnixSocketPath) != ""
+	hasWorkspaceFile := strings.TrimSpace(config.PassiveWorkspaceFilePath) != ""
+	if hasSocket == hasWorkspaceFile {
+		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph fork plan requires exactly one passive Unix socket or workspace file path")
 	}
 	probeMode := config.PassiveProbeMode.Effective()
 	if !probeMode.Valid() {
@@ -67,17 +73,42 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 	if err != nil {
 		return recovery.LangGraphForkPlan{}, err
 	}
-	snapshot, err := recovery.CaptureLangGraphWorkspaceSnapshot(sourceWorkspace, strings.TrimSpace(config.PassiveUnixSocketPath))
-	if err != nil {
-		return recovery.LangGraphForkPlan{}, fmt.Errorf("capture LangGraph recovery source snapshot: %w", err)
-	}
 	sourceRuntime, err := langGraphSourceRuntime(run)
 	if err != nil {
 		return recovery.LangGraphForkPlan{}, err
 	}
-	socketProbe, err := langGraphUnixSocketProbe(run, binding, headCheckpointID)
-	if err != nil {
-		return recovery.LangGraphForkPlan{}, err
+	var (
+		snapshot             recovery.LangGraphWorkspaceSnapshot
+		socketProbe          recovery.LangGraphUnixSocketProbe
+		workspaceFileProbe   *recovery.LangGraphWorkspaceFileProbe
+		passiveObservationID string
+	)
+	if hasSocket {
+		snapshot, err = recovery.CaptureLangGraphWorkspaceSnapshot(sourceWorkspace, strings.TrimSpace(config.PassiveUnixSocketPath))
+		if err != nil {
+			return recovery.LangGraphForkPlan{}, fmt.Errorf("capture LangGraph recovery source snapshot: %w", err)
+		}
+		socketProbe, err = langGraphUnixSocketProbe(run, binding, headCheckpointID)
+		if err != nil {
+			return recovery.LangGraphForkPlan{}, err
+		}
+		passiveObservationID = "unix-socket-listener-holder-v1:" + strings.TrimSpace(config.PassiveUnixSocketPath)
+	} else {
+		if probeMode != recovery.LangGraphPassiveProbeFull {
+			return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph workspace file recovery supports only the full passive probe")
+		}
+		if len(stateObjective.Effects) != 1 || stateObjective.Effects[0].Family != profiling.StateFamilyHandle || stateObjective.Effects[0].Operation != "open" {
+			return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph workspace file recovery requires a single handle/open objective")
+		}
+		snapshot, err = recovery.CaptureLangGraphWorkspaceFileSnapshot(sourceWorkspace, strings.TrimSpace(config.PassiveWorkspaceFilePath))
+		if err != nil {
+			return recovery.LangGraphForkPlan{}, fmt.Errorf("capture LangGraph recovery source snapshot: %w", err)
+		}
+		workspaceFileProbe, err = langGraphWorkspaceFileProbe(run, binding, headCheckpointID, strings.TrimSpace(config.PassiveWorkspaceFilePath))
+		if err != nil {
+			return recovery.LangGraphForkPlan{}, err
+		}
+		passiveObservationID = "workspace-file-identity-v1:" + strings.TrimSpace(config.PassiveWorkspaceFilePath)
 	}
 	plan := recovery.LangGraphForkPlan{
 		SchemaVersion:                   recovery.LangGraphForkPlanSchema,
@@ -90,14 +121,16 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		ContainerImage:                  strings.TrimSpace(config.ContainerImage),
 		RuntimeRoot:                     runtimeRoot,
 		PassiveUnixSocketPath:           strings.TrimSpace(config.PassiveUnixSocketPath),
+		PassiveWorkspaceFilePath:        strings.TrimSpace(config.PassiveWorkspaceFilePath),
 		PassiveProbeMode:                probeMode,
-		PassiveObservationID:            "unix-socket-listener-holder-v1:" + strings.TrimSpace(config.PassiveUnixSocketPath),
+		PassiveObservationID:            passiveObservationID,
 		MaterializationHeadID:           "materialization-head:" + run.ProfileRunID + ":" + headCheckpointID,
 		MaterializationHeadCheckpointID: headCheckpointID,
 		SourceThreadID:                  manifest.ThreadID,
 		SourceRuntime:                   sourceRuntime,
 		WorkspaceSnapshot:               snapshot,
 		UnixSocketProbe:                 socketProbe,
+		WorkspaceFileProbe:              workspaceFileProbe,
 		CheckpointCoordinates: map[string]recovery.LangGraphNativeCheckpointCoordinate{
 			binding.BeforeProfileCheckpointID: binding.BeforeNativeCoordinate,
 			binding.AfterProfileCheckpointID:  binding.AfterNativeCoordinate,
@@ -118,6 +151,70 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph binding does not preserve before, after, and materialization-head coordinates")
 	}
 	return plan, nil
+}
+
+func langGraphWorkspaceFileProbe(run objective.ProfileRun, binding LangGraphNativeFrontierBinding, headCheckpointID, workspaceFilePath string) (*recovery.LangGraphWorkspaceFileProbe, error) {
+	frontier, ok := profileFrontier(run, binding.FrontierID)
+	if !ok {
+		return nil, fmt.Errorf("LangGraph profile has no bound frontier %q", binding.FrontierID)
+	}
+	canonicalPath, err := langGraphWorkspaceCanonicalPath(workspaceFilePath)
+	if err != nil {
+		return nil, err
+	}
+	var head *profiling.CheckpointStateSummary
+	for index := range run.CheckpointSummaries {
+		if run.CheckpointSummaries[index].CheckpointID == headCheckpointID {
+			head = &run.CheckpointSummaries[index]
+			break
+		}
+	}
+	if head == nil {
+		return nil, fmt.Errorf("LangGraph materialization head %q has no state summary", headCheckpointID)
+	}
+	resourceIDs := make([]string, 0, 1)
+	for _, persistent := range head.Resources {
+		resource := persistent.Resource
+		if resource.Family == profiling.StateFamilyNamespace && resource.Kind == "workspace-file" && resource.CanonicalPath == canonicalPath && resource.ResourceID != "" {
+			resourceIDs = append(resourceIDs, resource.ResourceID)
+		}
+	}
+	sort.Strings(resourceIDs)
+	if len(resourceIDs) != 1 {
+		return nil, fmt.Errorf("LangGraph materialization head does not prove exactly one retained workspace file at %q", canonicalPath)
+	}
+	linked := make(map[string]struct{})
+	for _, link := range frontier.EvidenceLinks {
+		if link.Relation == profiling.EvidenceLinkExactCanonicalPath && link.ResourceID == resourceIDs[0] {
+			linked[link.EffectID] = struct{}{}
+		}
+	}
+	effectIDs := make([]string, 0, len(linked))
+	for _, effect := range frontier.Effects {
+		if _, ok := linked[effect.EffectID]; !ok || effect.Family != profiling.StateFamilyHandle || effect.Operation != "open" {
+			continue
+		}
+		effectIDs = append(effectIDs, effect.EffectID)
+	}
+	sort.Strings(effectIDs)
+	if len(effectIDs) == 0 {
+		return nil, fmt.Errorf("LangGraph frontier has no exact canonical-path-linked workspace file open effect for %q", canonicalPath)
+	}
+	probe := &recovery.LangGraphWorkspaceFileProbe{
+		SchemaVersion: recovery.LangGraphWorkspaceFileProbeSchema,
+		ResourceID:    resourceIDs[0],
+		CanonicalPath: canonicalPath,
+		OpenEffectIDs: effectIDs,
+	}
+	return probe, probe.Validate()
+}
+
+func langGraphWorkspaceCanonicalPath(relativePath string) (string, error) {
+	cleaned := filepath.Clean(strings.TrimSpace(relativePath))
+	if cleaned == "." || cleaned == ".." || filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("LangGraph workspace file path %q is not workspace-relative", relativePath)
+	}
+	return "/workspace/" + filepath.ToSlash(cleaned), nil
 }
 
 func cloneLangGraphToolEffectProvenance(source *LangGraphToolEffectProvenance) *recovery.LangGraphToolEffectProvenance {

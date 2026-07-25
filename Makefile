@@ -74,9 +74,11 @@ LANGGRAPH_SYNTHESIS_FORK_PLAN ?=
 LANGGRAPH_SYNTHESIS_BOUND_PROFILE ?=
 LANGGRAPH_SYNTHESIS_RUNTIME_ROOT ?=
 LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET ?=
+LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE ?=
 LANGGRAPH_SYNTHESIS_PASSIVE_PROBE_MODE ?= full
 LANGGRAPH_V3_FRONTIER ?= before-command..after-command
 LANGGRAPH_V3_PASSIVE_SOCKET ?= agent.sock
+LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE ?=
 LANGGRAPH_V3_PASSIVE_PROBE_MODE ?= full
 LANGGRAPH_V3_FIDELITY_REPEAT ?= 3
 LANGGRAPH_V3_FIDELITY_MAX_ATTEMPTS ?= 6
@@ -212,7 +214,7 @@ help:
 	@echo "  make synthesis-langgraph-v3-fidelity LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name>"
 	@echo "  make synthesis-langgraph-v3-fidelity-batch LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> LANGGRAPH_V3_FIDELITY_REPEAT=3 LANGGRAPH_V3_FIDELITY_MAX_ATTEMPTS=6"
 	@echo "  make synthesis-langgraph-bind-frontier LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> LANGGRAPH_SYNTHESIS_FRONTIER=before-command..after-command LANGGRAPH_SYNTHESIS_MANIFEST=runs/<target-run>/langgraph-native-checkpoints.json LANGGRAPH_SYNTHESIS_BINDING=runs/<name>/langgraph-native-frontier-binding.json LANGGRAPH_SYNTHESIS_BEFORE_COORDINATE=runs/<name>/before-coordinate.json LANGGRAPH_SYNTHESIS_AFTER_COORDINATE=runs/<name>/after-coordinate.json"
-	@echo "  make synthesis-langgraph-prepare-fork LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> LANGGRAPH_SYNTHESIS_BINDING=runs/<name>/langgraph-native-frontier-binding.json LANGGRAPH_SYNTHESIS_FORK_PLAN=runs/<name>/langgraph-fork-plan.json LANGGRAPH_SYNTHESIS_BOUND_PROFILE=runs/<name>/bound-profile-run.json LANGGRAPH_SYNTHESIS_RUNTIME_ROOT=runs/<name>/recovery-runtimes LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET=agent.sock"
+	@echo "  make synthesis-langgraph-prepare-fork LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> LANGGRAPH_SYNTHESIS_BINDING=runs/<name>/langgraph-native-frontier-binding.json LANGGRAPH_SYNTHESIS_FORK_PLAN=runs/<name>/langgraph-fork-plan.json LANGGRAPH_SYNTHESIS_BOUND_PROFILE=runs/<name>/bound-profile-run.json LANGGRAPH_SYNTHESIS_RUNTIME_ROOT=runs/<name>/recovery-runtimes [LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET=agent.sock | LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE=agent-result.txt]"
 	@echo "  make target-langgraph-shell-react"
 	@echo "  make target-langgraph-shell-react-suite REPEAT=3"
 	@echo "  make target-langgraph-shell-react-matrix-suite TARGET_GROUP=phase5a-baseline REPEAT=1 CANDIDATE_LIMIT=3"
@@ -433,8 +435,8 @@ synthesis-langgraph-bind-frontier:
 	$(SYNCFUZZ) synthesis bind-langgraph-frontier --objective $(LANGGRAPH_SYNTHESIS_OBJECTIVE) --candidate $(LANGGRAPH_SYNTHESIS_CANDIDATE) --profile-run $(LANGGRAPH_SYNTHESIS_ROOT)/profile-run.json --frontier $(LANGGRAPH_SYNTHESIS_FRONTIER) --manifest $(LANGGRAPH_SYNTHESIS_MANIFEST) --out-binding $(LANGGRAPH_SYNTHESIS_BINDING) $(if $(LANGGRAPH_SYNTHESIS_BEFORE_COORDINATE),--out-before-coordinate $(LANGGRAPH_SYNTHESIS_BEFORE_COORDINATE),) $(if $(LANGGRAPH_SYNTHESIS_AFTER_COORDINATE),--out-after-coordinate $(LANGGRAPH_SYNTHESIS_AFTER_COORDINATE),)
 
 synthesis-langgraph-prepare-fork:
-	@$(LOAD_DOTENV); model="$(LANGCHAIN_MODEL)"; test -n "$$model" || model="$$LANGCHAIN_MODEL"; test -n "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" && test -n "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" && test -n "$(LANGGRAPH_SYNTHESIS_ROOT)" && test -n "$(LANGGRAPH_SYNTHESIS_BINDING)" && test -n "$$model" && test -n "$(LANGGRAPH_SYNTHESIS_FORK_PLAN)" && test -n "$(LANGGRAPH_SYNTHESIS_BOUND_PROFILE)" && test -n "$(LANGGRAPH_SYNTHESIS_RUNTIME_ROOT)" && test -n "$(LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET)" || (echo "usage: make synthesis-langgraph-prepare-fork LANGCHAIN_MODEL=<provider:model> LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> LANGGRAPH_SYNTHESIS_BINDING=runs/<name>/langgraph-native-frontier-binding.json LANGGRAPH_SYNTHESIS_FORK_PLAN=runs/<name>/langgraph-fork-plan.json LANGGRAPH_SYNTHESIS_BOUND_PROFILE=runs/<name>/bound-profile-run.json LANGGRAPH_SYNTHESIS_RUNTIME_ROOT=runs/<name>/recovery-runtimes LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET=agent.sock"; exit 2)
-	$(LOAD_DOTENV); model="$(LANGCHAIN_MODEL)"; test -n "$$model" || model="$$LANGCHAIN_MODEL"; $(SYNCFUZZ) synthesis prepare-langgraph-fork --objective $(LANGGRAPH_SYNTHESIS_OBJECTIVE) --candidate $(LANGGRAPH_SYNTHESIS_CANDIDATE) --profile-run $(LANGGRAPH_SYNTHESIS_ROOT)/profile-run.json --binding $(LANGGRAPH_SYNTHESIS_BINDING) --model "$$model" --container-image $(LANGGRAPH_PROFILE_IMAGE) --runtime-root $(LANGGRAPH_SYNTHESIS_RUNTIME_ROOT) --passive-unix-socket-path $(LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET) --passive-probe-mode $(LANGGRAPH_SYNTHESIS_PASSIVE_PROBE_MODE) --out-plan $(LANGGRAPH_SYNTHESIS_FORK_PLAN) --out-profile-run $(LANGGRAPH_SYNTHESIS_BOUND_PROFILE)
+	@$(LOAD_DOTENV); model="$(LANGCHAIN_MODEL)"; test -n "$$model" || model="$$LANGCHAIN_MODEL"; test -n "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" && test -n "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" && test -n "$(LANGGRAPH_SYNTHESIS_ROOT)" && test -n "$(LANGGRAPH_SYNTHESIS_BINDING)" && test -n "$$model" && test -n "$(LANGGRAPH_SYNTHESIS_FORK_PLAN)" && test -n "$(LANGGRAPH_SYNTHESIS_BOUND_PROFILE)" && test -n "$(LANGGRAPH_SYNTHESIS_RUNTIME_ROOT)" && { test -n "$(LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET)" && test -z "$(LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE)" || test -z "$(LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET)" && test -n "$(LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE)"; } || (echo "usage: make synthesis-langgraph-prepare-fork LANGCHAIN_MODEL=<provider:model> LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> LANGGRAPH_SYNTHESIS_BINDING=runs/<name>/langgraph-native-frontier-binding.json LANGGRAPH_SYNTHESIS_FORK_PLAN=runs/<name>/langgraph-fork-plan.json LANGGRAPH_SYNTHESIS_BOUND_PROFILE=runs/<name>/bound-profile-run.json LANGGRAPH_SYNTHESIS_RUNTIME_ROOT=runs/<name>/recovery-runtimes [LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET=agent.sock | LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE=agent-result.txt]"; exit 2)
+	$(LOAD_DOTENV); model="$(LANGCHAIN_MODEL)"; test -n "$$model" || model="$$LANGCHAIN_MODEL"; $(SYNCFUZZ) synthesis prepare-langgraph-fork --objective $(LANGGRAPH_SYNTHESIS_OBJECTIVE) --candidate $(LANGGRAPH_SYNTHESIS_CANDIDATE) --profile-run $(LANGGRAPH_SYNTHESIS_ROOT)/profile-run.json --binding $(LANGGRAPH_SYNTHESIS_BINDING) --model "$$model" --container-image $(LANGGRAPH_PROFILE_IMAGE) --runtime-root $(LANGGRAPH_SYNTHESIS_RUNTIME_ROOT) $(if $(LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET),--passive-unix-socket-path $(LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET),--passive-workspace-file-path $(LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE)) --passive-probe-mode $(LANGGRAPH_SYNTHESIS_PASSIVE_PROBE_MODE) --out-plan $(LANGGRAPH_SYNTHESIS_FORK_PLAN) --out-profile-run $(LANGGRAPH_SYNTHESIS_BOUND_PROFILE)
 
 # One execution-validated StateFuzz attempt. The external generator receives
 # only the bounded request through SYNCFUZZ_SYNTHESIS_REQUEST and is not stored
@@ -463,8 +465,10 @@ synthesis-langgraph-statefuzz-attempt: ebpf-build
 		LANGGRAPH_SYNTHESIS_ROOT="$$root" \
 		LANGGRAPH_SYNTHESIS_FRONTIER="$(LANGGRAPH_SYNTHESIS_FRONTIER)" \
 		LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET="$(LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET)" \
+		LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE="$(LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE)" \
 		LANGGRAPH_V3_FRONTIER="$(LANGGRAPH_V3_FRONTIER)" \
 		LANGGRAPH_V3_PASSIVE_SOCKET="$(LANGGRAPH_V3_PASSIVE_SOCKET)" \
+		LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE="$(LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE)" \
 		LANGGRAPH_V3_PASSIVE_PROBE_MODE="$(LANGGRAPH_V3_PASSIVE_PROBE_MODE)" \
 		LANGGRAPH_V3_STOP_ON_REJECTION=true \
 		LANGGRAPH_PROFILE_IMAGE="$(LANGGRAPH_PROFILE_IMAGE)" \
@@ -507,12 +511,16 @@ synthesis-langgraph-statefuzz-report: ebpf-build
 # The native checkpoint manifest is inferred from that immutable target plan,
 # so callers never need to extract a target run ID from JSON by hand.
 synthesis-langgraph-v3-calibration: ebpf-build
-	@test -n "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" && test -n "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" && test -n "$(LANGGRAPH_SYNTHESIS_ROOT)" || (echo "usage: make synthesis-langgraph-v3-calibration LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> [LANGGRAPH_V3_FRONTIER=before-command..after-command] [LANGGRAPH_V3_PASSIVE_SOCKET=agent.sock]"; exit 2)
+	@test -n "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" && test -n "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" && test -n "$(LANGGRAPH_SYNTHESIS_ROOT)" || (echo "usage: make synthesis-langgraph-v3-calibration LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> [LANGGRAPH_V3_FRONTIER=before-command..after-command] [LANGGRAPH_V3_PASSIVE_SOCKET=agent.sock | LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE=agent-result.txt]"; exit 2)
 	@set -eu; \
 	root='$(LANGGRAPH_SYNTHESIS_ROOT)'; \
 	frontier='$(if $(LANGGRAPH_SYNTHESIS_FRONTIER),$(LANGGRAPH_SYNTHESIS_FRONTIER),$(LANGGRAPH_V3_FRONTIER))'; \
-	socket='$(if $(LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET),$(LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET),$(LANGGRAPH_V3_PASSIVE_SOCKET))'; \
+	workspace_file='$(if $(LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE),$(LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE),$(LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE))'; \
+	socket='$(if $(LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET),$(LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET),$(if $(LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE),,$(if $(LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE),,$(LANGGRAPH_V3_PASSIVE_SOCKET))))'; \
 	probe_mode='$(LANGGRAPH_V3_PASSIVE_PROBE_MODE)'; \
+	{ test -n "$$socket" && test -z "$$workspace_file" || test -z "$$socket" && test -n "$$workspace_file"; } || (echo "select exactly one passive Unix socket or workspace file"; exit 2); \
+	if test -n "$$workspace_file" && test "$$probe_mode" != full; then echo "workspace file recovery requires LANGGRAPH_V3_PASSIVE_PROBE_MODE=full"; exit 2; fi; \
+	if test -n "$$socket"; then passive_args="--passive-unix-socket-path $$socket"; passive_observation="unix-socket-listener-holder-v1:$$socket"; else passive_args="--passive-workspace-file-path $$workspace_file"; passive_observation="workspace-file-identity-v1:$$workspace_file"; fi; \
 	$(LOAD_DOTENV); model="$$LANGCHAIN_MODEL"; \
 	test -n "$$model" || (echo "LANGCHAIN_MODEL is required in the shell or $(DOTENV_FILE)"; exit 2); \
 	release_runtime() { if test -f "$$root/profile-run.json"; then $(EBPF_SUDO) $(EBPF_BINARY) synthesis release-langgraph-runtime --profile-run "$$root/profile-run.json" || true; fi; }; \
@@ -528,9 +536,9 @@ synthesis-langgraph-v3-calibration: ebpf-build
 		*) echo "LANGGRAPH_V3_STOP_ON_REJECTION must be true or false"; exit 2;; \
 	esac; \
 	$(SYNCFUZZ) synthesis bind-langgraph-frontier --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --candidate "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" --profile-run "$$root/profile-run.json" --frontier "$$frontier" --out-binding "$$root/langgraph-native-frontier-binding.json" --out-before-coordinate "$$root/before-coordinate.json" --out-after-coordinate "$$root/after-coordinate.json"; \
-	$(SYNCFUZZ) synthesis prepare-langgraph-fork --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --candidate "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" --profile-run "$$root/profile-run.json" --binding "$$root/langgraph-native-frontier-binding.json" --model "$$model" --container-image "$(LANGGRAPH_PROFILE_IMAGE)" --runtime-root "$$root/recovery-runtimes" --passive-unix-socket-path "$$socket" --passive-probe-mode "$$probe_mode" --out-plan "$$root/langgraph-fork-plan.json" --out-profile-run "$$root/bound-profile-run.json"; \
+	$(SYNCFUZZ) synthesis prepare-langgraph-fork --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --candidate "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" --profile-run "$$root/profile-run.json" --binding "$$root/langgraph-native-frontier-binding.json" --model "$$model" --container-image "$(LANGGRAPH_PROFILE_IMAGE)" --runtime-root "$$root/recovery-runtimes" $$passive_args --passive-probe-mode "$$probe_mode" --out-plan "$$root/langgraph-fork-plan.json" --out-profile-run "$$root/bound-profile-run.json"; \
 	$(SYNCFUZZ) synthesis promote --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --candidate "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" --profile-run "$$root/bound-profile-run.json" --frontier "$$frontier" --out "$$root/state-seed.json"; \
-	$(SYNCFUZZ) profile recovery-set --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --seed "$$root/state-seed.json" --passive-observation "unix-socket-listener-holder-v1:$$socket" --out "$$root/historical-recovery-set.json"; \
+	$(SYNCFUZZ) profile recovery-set --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --seed "$$root/state-seed.json" --passive-observation "$$passive_observation" --out "$$root/historical-recovery-set.json"; \
 	$(EBPF_SUDO) --preserve-env=LANGCHAIN_MODEL,OPENAI_API_KEY,OPENAI_ADMIN_KEY,OPENAI_BASE_URL,ANTHROPIC_API_KEY $(EBPF_BINARY) recovery execute --seed "$$root/state-seed.json" --set "$$root/historical-recovery-set.json" --out "$$root/recovery-set-execution.json" --out-relation "$$root/recovery-relation-report.json" --timeout "$(TARGET_TIMEOUT)"; \
 	$(EBPF_SUDO) $(EBPF_BINARY) synthesis release-langgraph-runtime --profile-run "$$root/profile-run.json"; \
 	trap - EXIT INT TERM

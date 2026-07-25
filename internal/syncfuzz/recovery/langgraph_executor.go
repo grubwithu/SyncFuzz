@@ -38,6 +38,14 @@ type langGraphPassiveSocketHolder struct {
 	FDs []int `json:"fds"`
 }
 
+type langGraphPassiveWorkspaceFileMetadata struct {
+	IsRegularFile   bool   `json:"is_regular_file"`
+	Device          uint64 `json:"device"`
+	Inode           uint64 `json:"inode"`
+	Mode            uint32 `json:"mode"`
+	ProbeDurationNS uint64 `json:"probe_duration_ns"`
+}
+
 type langGraphRecoveryArtifact struct {
 	RuntimeInstanceID              string   `json:"runtime_instance_id"`
 	RuntimeRecreated               bool     `json:"runtime_recreated"`
@@ -51,6 +59,11 @@ type langGraphRecoveryArtifact struct {
 		AfterFork            langGraphPassiveSocketMetadata `json:"after_fork"`
 		SameEndpointIdentity bool                           `json:"same_endpoint_identity"`
 	} `json:"passive_unix_socket"`
+	PassiveWorkspaceFile struct {
+		BeforeFork       langGraphPassiveWorkspaceFileMetadata `json:"before_fork"`
+		AfterFork        langGraphPassiveWorkspaceFileMetadata `json:"after_fork"`
+		SameFileIdentity bool                                  `json:"same_file_identity"`
+	} `json:"passive_workspace_file"`
 }
 
 func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecutionRequest) (RecoveryObservation, error) {
@@ -91,14 +104,14 @@ func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecut
 	if err := forkPlan.WorkspaceSnapshot.CloneTo(workspace); err != nil {
 		return RecoveryObservation{}, fmt.Errorf("clone LangGraph recovery source snapshot: %w", err)
 	}
-	socketMountTarget, err := workspaceChild(workspace, forkPlan.PassiveUnixSocketPath)
+	passiveMountTarget, err := workspaceChild(workspace, forkPlan.WorkspaceSnapshot.PassiveResourcePath())
 	if err != nil {
 		return RecoveryObservation{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(socketMountTarget), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(passiveMountTarget), 0o755); err != nil {
 		return RecoveryObservation{}, err
 	}
-	if err := os.WriteFile(socketMountTarget, nil, 0o600); err != nil {
+	if err := os.WriteFile(passiveMountTarget, nil, 0o600); err != nil {
 		return RecoveryObservation{}, err
 	}
 	encodedSnapshot, err := json.Marshal(forkPlan.WorkspaceSnapshot)
@@ -135,38 +148,83 @@ func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecut
 	}
 	probeMode := forkPlan.PassiveProbeMode.Effective()
 	if artifact.PassiveUnixSocket.BeforeFork.ProbeMode != probeMode || artifact.PassiveUnixSocket.AfterFork.ProbeMode != probeMode {
-		return RecoveryObservation{}, fmt.Errorf("LangGraph recovery observation did not use the planned %s passive probe", probeMode)
+		if forkPlan.PassiveUnixSocketPath != "" {
+			return RecoveryObservation{}, fmt.Errorf("LangGraph recovery observation did not use the planned %s passive probe", probeMode)
+		}
 	}
+	osState, origin, multiplicity, passiveMetrics, passiveEvidence, err := langGraphPassiveRecoveryState(forkPlan, artifact, probeMode)
+	if err != nil {
+		return RecoveryObservation{}, err
+	}
+	agentState := forkPlan.AgentStateByCheckpoint[request.Query.CheckpointID]
+	evidence := []string{"LangGraph fresh container: " + runtimeID, "retained source runtime verified: " + forkPlan.SourceRuntime.ContainerID, "source snapshot verified: " + forkPlan.WorkspaceSnapshot.WorkspaceSHA256, "native checkpoint restored by exact ID: " + artifact.RestoredCheckpointID, "timestamp-validated logical state: " + string(agentState), "passive probe mode: " + string(probeMode)}
+	evidence = append(evidence, passiveEvidence...)
+	evidence = append(evidence, "passive observation artifact: "+observationPath)
+	return RecoveryObservation{SchemaVersion: ExecutionSchemaVersion, QueryID: request.Query.QueryID, SeedID: request.Query.SeedID, Boundary: request.Query.Boundary, CheckpointID: request.Query.CheckpointID, RecordedPlanID: request.Query.RecordedPlanID, PassiveObservationID: request.Query.PassiveObservationID, MaterializationHeadID: request.Query.MaterializationHeadID, RetentionPolicy: request.Query.RetentionPolicy, RuntimeInstanceID: runtimeID, AgentState: agentState, OSState: osState, OSStateOrigin: origin, EffectMultiplicity: multiplicity, PassiveProbe: passiveMetrics, Evidence: evidence}, nil
+}
+
+func langGraphPassiveRecoveryState(plan LangGraphForkPlan, artifact langGraphRecoveryArtifact, probeMode LangGraphPassiveProbeMode) (StatePresence, StateOrigin, EffectMultiplicity, *PassiveProbeMetrics, []string, error) {
+	if plan.PassiveUnixSocketPath != "" {
+		listenerIdentityMatches := matchesUnixSocketIdentity(artifact.PassiveUnixSocket.AfterFork, plan.UnixSocketProbe)
+		listenerMatches := matchesUnixSocketProbe(artifact.PassiveUnixSocket.AfterFork, plan.UnixSocketProbe)
+		osState := StatePresenceAbsent
+		if socketPresent(artifact.PassiveUnixSocket.AfterFork) && listenerIdentityMatches {
+			osState = StatePresencePresent
+		}
+		origin := StateOriginNone
+		if osState == StatePresencePresent && artifact.PassiveUnixSocket.SameEndpointIdentity && matchesSnapshotSocket(artifact.PassiveUnixSocket.BeforeFork, plan.WorkspaceSnapshot) && matchesSnapshotSocket(artifact.PassiveUnixSocket.AfterFork, plan.WorkspaceSnapshot) {
+			origin = StateOriginResidual
+		} else if osState == StatePresencePresent {
+			origin = StateOriginUnknown
+		}
+		multiplicity := EffectMultiplicityUnknown
+		if origin == StateOriginResidual && probeMode == LangGraphPassiveProbeFull && listenerMatches {
+			multiplicity = EffectMultiplicitySingle
+		}
+		metrics := &PassiveProbeMetrics{Mode: probeMode, DurationNS: artifact.PassiveUnixSocket.AfterFork.ProbeDurationNS, ScannedProcesses: artifact.PassiveUnixSocket.AfterFork.ScannedProcesses, ScannedFDs: artifact.PassiveUnixSocket.AfterFork.ScannedFDs}
+		evidence := []string{"passive probe scan counts: processes=" + strconv.Itoa(artifact.PassiveUnixSocket.AfterFork.ScannedProcesses) + ",fds=" + strconv.Itoa(artifact.PassiveUnixSocket.AfterFork.ScannedFDs), "eBPF-linked listener effects: " + plan.UnixSocketProbe.BindEffectID + "," + plan.UnixSocketProbe.ListenEffectID}
+		return osState, origin, multiplicity, metrics, evidence, nil
+	}
+	if plan.WorkspaceFileProbe == nil {
+		return StatePresenceUnknown, StateOriginUnknown, EffectMultiplicityUnknown, nil, nil, fmt.Errorf("LangGraph recovery plan has no passive workspace file probe")
+	}
+	after := artifact.PassiveWorkspaceFile.AfterFork
 	osState := StatePresenceAbsent
-	listenerIdentityMatches := matchesUnixSocketIdentity(artifact.PassiveUnixSocket.AfterFork, forkPlan.UnixSocketProbe)
-	listenerMatches := matchesUnixSocketProbe(artifact.PassiveUnixSocket.AfterFork, forkPlan.UnixSocketProbe)
-	if socketPresent(artifact.PassiveUnixSocket.AfterFork) && listenerIdentityMatches {
+	if matchesSnapshotWorkspaceFile(after, plan.WorkspaceSnapshot) {
 		osState = StatePresencePresent
 	}
 	origin := StateOriginNone
-	if osState == StatePresencePresent && artifact.PassiveUnixSocket.SameEndpointIdentity && matchesSnapshotSocket(artifact.PassiveUnixSocket.BeforeFork, forkPlan.WorkspaceSnapshot) && matchesSnapshotSocket(artifact.PassiveUnixSocket.AfterFork, forkPlan.WorkspaceSnapshot) {
+	if osState == StatePresencePresent && artifact.PassiveWorkspaceFile.SameFileIdentity && matchesSnapshotWorkspaceFile(artifact.PassiveWorkspaceFile.BeforeFork, plan.WorkspaceSnapshot) {
 		origin = StateOriginResidual
 	} else if osState == StatePresencePresent {
 		origin = StateOriginUnknown
 	}
 	multiplicity := EffectMultiplicityUnknown
-	if origin == StateOriginResidual && probeMode == LangGraphPassiveProbeFull && listenerMatches {
+	if origin == StateOriginResidual {
 		multiplicity = EffectMultiplicitySingle
 	}
-	agentState := forkPlan.AgentStateByCheckpoint[request.Query.CheckpointID]
-	return RecoveryObservation{SchemaVersion: ExecutionSchemaVersion, QueryID: request.Query.QueryID, SeedID: request.Query.SeedID, Boundary: request.Query.Boundary, CheckpointID: request.Query.CheckpointID, RecordedPlanID: request.Query.RecordedPlanID, PassiveObservationID: request.Query.PassiveObservationID, MaterializationHeadID: request.Query.MaterializationHeadID, RetentionPolicy: request.Query.RetentionPolicy, RuntimeInstanceID: runtimeID, AgentState: agentState, OSState: osState, OSStateOrigin: origin, EffectMultiplicity: multiplicity, PassiveProbe: &PassiveProbeMetrics{Mode: probeMode, DurationNS: artifact.PassiveUnixSocket.AfterFork.ProbeDurationNS, ScannedProcesses: artifact.PassiveUnixSocket.AfterFork.ScannedProcesses, ScannedFDs: artifact.PassiveUnixSocket.AfterFork.ScannedFDs}, Evidence: []string{"LangGraph fresh container: " + runtimeID, "retained source runtime verified: " + forkPlan.SourceRuntime.ContainerID, "source snapshot verified: " + forkPlan.WorkspaceSnapshot.WorkspaceSHA256, "native checkpoint restored by exact ID: " + artifact.RestoredCheckpointID, "timestamp-validated logical state: " + string(agentState), "passive probe mode: " + string(probeMode), "passive probe scan counts: processes=" + strconv.Itoa(artifact.PassiveUnixSocket.AfterFork.ScannedProcesses) + ",fds=" + strconv.Itoa(artifact.PassiveUnixSocket.AfterFork.ScannedFDs), "eBPF-linked listener effects: " + forkPlan.UnixSocketProbe.BindEffectID + "," + forkPlan.UnixSocketProbe.ListenEffectID, "passive observation artifact: " + observationPath}}, nil
+	metrics := &PassiveProbeMetrics{Mode: probeMode, DurationNS: after.ProbeDurationNS}
+	evidence := []string{"passive workspace file identity: " + plan.WorkspaceFileProbe.CanonicalPath, "eBPF-linked workspace file open effects: " + strings.Join(plan.WorkspaceFileProbe.OpenEffectIDs, ",")}
+	return osState, origin, multiplicity, metrics, evidence, nil
 }
 
 // langGraphRecoveryDockerArgs is kept separate from execution so the V3
 // recovery contract can be asserted without a Docker daemon or model provider.
 func langGraphRecoveryDockerArgs(plan LangGraphForkPlan, workspace, runtimeID string, sandboxUID, sandboxGID int, checkpointID string, providerEnvironment map[string]string) []string {
-	args := []string{"run", "--rm", "--name", "syncfuzz-" + runtimeID, "--pids-limit", "128", "--memory", "256m", "--cpus", "1", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--network", "container:" + plan.SourceRuntime.ContainerName, "--pid", "container:" + plan.SourceRuntime.ContainerName, "--user", strconv.Itoa(sandboxUID) + ":" + strconv.Itoa(sandboxGID), "-v", workspace + ":/workspace", "-v", plan.WorkspaceSnapshot.SourceSocketPath() + ":/workspace/" + plan.PassiveUnixSocketPath + ":ro", "-w", "/workspace", "-e", "LANGCHAIN_MODEL=" + plan.Model}
+	passivePath := plan.WorkspaceSnapshot.PassiveResourcePath()
+	args := []string{"run", "--rm", "--name", "syncfuzz-" + runtimeID, "--pids-limit", "128", "--memory", "256m", "--cpus", "1", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--network", "container:" + plan.SourceRuntime.ContainerName, "--pid", "container:" + plan.SourceRuntime.ContainerName, "--user", strconv.Itoa(sandboxUID) + ":" + strconv.Itoa(sandboxGID), "-v", workspace + ":/workspace", "-v", plan.WorkspaceSnapshot.SourcePassiveResourcePath() + ":/workspace/" + passivePath + ":ro", "-w", "/workspace", "-e", "LANGCHAIN_MODEL=" + plan.Model}
 	for _, key := range []string{"OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY"} {
 		if value := providerEnvironment[key]; value != "" {
 			args = append(args, "-e", key+"="+value)
 		}
 	}
-	return append(args, plan.ContainerImage, "python3", "/opt/syncfuzz-langgraph/run_target.py", "--workspace", "/workspace", "--prompt-file", "/workspace/target-prompt.txt", "--task-file", "/workspace/target-task.json", "--thread-id", plan.SourceThreadID, "--execution-policy", "host", "--checkpoint-backend", "disk", "--internal-phase", "resume", "--checkpoint-id", checkpointID, "--passive-fork-observe", "--passive-unix-socket-path", plan.PassiveUnixSocketPath, "--passive-unix-socket-probe-mode", string(plan.PassiveProbeMode.Effective()), "--passive-unix-socket-expected-id", plan.UnixSocketProbe.SocketID, "--passive-unix-socket-expected-holder-pid", strconv.FormatUint(uint64(plan.UnixSocketProbe.HolderPID), 10), "--passive-unix-socket-expected-holder-fd", strconv.Itoa(plan.UnixSocketProbe.HolderFD), "--runtime-instance-id", runtimeID, "--recovery-observation-artifact", "/workspace/langgraph-recovery-observation.json")
+	command := []string{plan.ContainerImage, "python3", "/opt/syncfuzz-langgraph/run_target.py", "--workspace", "/workspace", "--prompt-file", "/workspace/target-prompt.txt", "--task-file", "/workspace/target-task.json", "--thread-id", plan.SourceThreadID, "--execution-policy", "host", "--checkpoint-backend", "disk", "--internal-phase", "resume", "--checkpoint-id", checkpointID, "--passive-fork-observe", "--runtime-instance-id", runtimeID, "--recovery-observation-artifact", "/workspace/langgraph-recovery-observation.json"}
+	if plan.PassiveUnixSocketPath != "" {
+		command = append(command, "--passive-unix-socket-path", plan.PassiveUnixSocketPath, "--passive-unix-socket-probe-mode", string(plan.PassiveProbeMode.Effective()), "--passive-unix-socket-expected-id", plan.UnixSocketProbe.SocketID, "--passive-unix-socket-expected-holder-pid", strconv.FormatUint(uint64(plan.UnixSocketProbe.HolderPID), 10), "--passive-unix-socket-expected-holder-fd", strconv.Itoa(plan.UnixSocketProbe.HolderFD))
+	} else {
+		command = append(command, "--passive-workspace-file-path", plan.PassiveWorkspaceFilePath, "--passive-workspace-file-expected-device", strconv.FormatUint(plan.WorkspaceSnapshot.PassiveWorkspaceFileDevice, 10), "--passive-workspace-file-expected-inode", strconv.FormatUint(plan.WorkspaceSnapshot.PassiveWorkspaceFileInode, 10))
+	}
+	return append(args, command...)
 }
 
 func langGraphProviderEnvironment() map[string]string {
@@ -216,6 +274,10 @@ func sameStrings(left []string, right []string) bool {
 
 func matchesSnapshotSocket(observation langGraphPassiveSocketMetadata, snapshot LangGraphWorkspaceSnapshot) bool {
 	return socketPresent(observation) && observation.Device == snapshot.PassiveUnixSocketDevice && observation.Inode == snapshot.PassiveUnixSocketInode && observation.Mode == snapshot.PassiveUnixSocketMode
+}
+
+func matchesSnapshotWorkspaceFile(observation langGraphPassiveWorkspaceFileMetadata, snapshot LangGraphWorkspaceSnapshot) bool {
+	return observation.IsRegularFile && observation.Device == snapshot.PassiveWorkspaceFileDevice && observation.Inode == snapshot.PassiveWorkspaceFileInode && observation.Mode == snapshot.PassiveWorkspaceFileMode
 }
 
 func matchesUnixSocketProbe(observation langGraphPassiveSocketMetadata, probe LangGraphUnixSocketProbe) bool {

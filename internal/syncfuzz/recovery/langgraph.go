@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	LangGraphForkAdapterID          = "langgraph"
-	LangGraphForkPlanSchema         = "syncfuzz.langgraph-fork-plan.v3"
-	LangGraphNativeCoordinateSchema = "syncfuzz.langgraph-native-coordinate.v1"
-	LangGraphUnixSocketProbeSchema  = "syncfuzz.langgraph-unix-socket-probe.v1"
+	LangGraphForkAdapterID            = "langgraph"
+	LangGraphForkPlanSchema           = "syncfuzz.langgraph-fork-plan.v3"
+	LangGraphNativeCoordinateSchema   = "syncfuzz.langgraph-native-coordinate.v1"
+	LangGraphUnixSocketProbeSchema    = "syncfuzz.langgraph-unix-socket-probe.v1"
+	LangGraphWorkspaceFileProbeSchema = "syncfuzz.langgraph-workspace-file-probe.v1"
 )
 
 // LangGraphPassiveProbeMode controls how a recovery container establishes
@@ -158,6 +159,34 @@ type LangGraphUnixSocketProbe struct {
 	ListenEffectID string `json:"listen_effect_id"`
 }
 
+// LangGraphWorkspaceFileProbe binds one or more eBPF open effects to one
+// regular workspace file. It deliberately records only path/identity
+// provenance, never file contents or a target-specific success condition.
+type LangGraphWorkspaceFileProbe struct {
+	SchemaVersion string   `json:"schema_version"`
+	ResourceID    string   `json:"resource_id"`
+	CanonicalPath string   `json:"canonical_path"`
+	OpenEffectIDs []string `json:"open_effect_ids"`
+}
+
+func (p LangGraphWorkspaceFileProbe) Validate() error {
+	if p.SchemaVersion != LangGraphWorkspaceFileProbeSchema || strings.TrimSpace(p.ResourceID) == "" || strings.TrimSpace(p.CanonicalPath) == "" || !filepath.IsAbs(p.CanonicalPath) || len(p.OpenEffectIDs) == 0 {
+		return fmt.Errorf("LangGraph workspace file probe is incomplete")
+	}
+	seen := make(map[string]struct{}, len(p.OpenEffectIDs))
+	for _, effectID := range p.OpenEffectIDs {
+		effectID = strings.TrimSpace(effectID)
+		if effectID == "" {
+			return fmt.Errorf("LangGraph workspace file probe has an empty open effect ID")
+		}
+		if _, exists := seen[effectID]; exists {
+			return fmt.Errorf("LangGraph workspace file probe repeats open effect %q", effectID)
+		}
+		seen[effectID] = struct{}{}
+	}
+	return nil
+}
+
 func (p LangGraphUnixSocketProbe) Validate() error {
 	if p.SchemaVersion != LangGraphUnixSocketProbeSchema || !strings.HasPrefix(p.SocketID, "socket:") || p.HolderPID == 0 || p.HolderFD < 0 || strings.TrimSpace(p.BindEffectID) == "" || strings.TrimSpace(p.ListenEffectID) == "" || p.BindEffectID == p.ListenEffectID {
 		return fmt.Errorf("LangGraph Unix socket probe is incomplete")
@@ -240,6 +269,7 @@ type LangGraphForkPlan struct {
 	ContainerImage                  string                                         `json:"container_image"`
 	RuntimeRoot                     string                                         `json:"runtime_root"`
 	PassiveUnixSocketPath           string                                         `json:"passive_unix_socket_path"`
+	PassiveWorkspaceFilePath        string                                         `json:"passive_workspace_file_path,omitempty"`
 	PassiveProbeMode                LangGraphPassiveProbeMode                      `json:"passive_probe_mode,omitempty"`
 	PassiveObservationID            string                                         `json:"passive_observation_id"`
 	MaterializationHeadID           string                                         `json:"materialization_head_id"`
@@ -248,6 +278,7 @@ type LangGraphForkPlan struct {
 	SourceRuntime                   LangGraphSourceRuntime                         `json:"source_runtime"`
 	WorkspaceSnapshot               LangGraphWorkspaceSnapshot                     `json:"workspace_snapshot"`
 	UnixSocketProbe                 LangGraphUnixSocketProbe                       `json:"unix_socket_probe"`
+	WorkspaceFileProbe              *LangGraphWorkspaceFileProbe                   `json:"workspace_file_probe,omitempty"`
 	CheckpointCoordinates           map[string]LangGraphNativeCheckpointCoordinate `json:"checkpoint_coordinates"`
 	AgentStateByCheckpoint          map[string]StatePresence                       `json:"agent_state_by_checkpoint"`
 	ToolLifecycleByCheckpoint       map[string]LangGraphDurableToolLifecycle       `json:"tool_lifecycle_by_checkpoint,omitempty"`
@@ -258,8 +289,13 @@ func (p LangGraphForkPlan) ValidateFor(plan RecordedPlan) error {
 	if p.SchemaVersion != LangGraphForkPlanSchema || p.RecordedPlanID != plan.RecordedPlanID || p.AdapterID != plan.AdapterID || p.TargetID != plan.TargetID {
 		return fmt.Errorf("LangGraph fork plan does not match recorded plan %q", plan.RecordedPlanID)
 	}
-	if p.AdapterID != LangGraphForkAdapterID || strings.TrimSpace(p.CandidateID) == "" || strings.TrimSpace(p.Task) == "" || strings.TrimSpace(p.Model) == "" || strings.TrimSpace(p.ContainerImage) == "" || strings.TrimSpace(p.RuntimeRoot) == "" || strings.TrimSpace(p.PassiveUnixSocketPath) == "" || p.PassiveObservationID != plan.PassiveObservationID || strings.TrimSpace(p.SourceThreadID) == "" {
-		return fmt.Errorf("LangGraph fork plan requires candidate, task, model, image, runtime root, source thread, and passive Unix socket path")
+	if p.AdapterID != LangGraphForkAdapterID || strings.TrimSpace(p.CandidateID) == "" || strings.TrimSpace(p.Task) == "" || strings.TrimSpace(p.Model) == "" || strings.TrimSpace(p.ContainerImage) == "" || strings.TrimSpace(p.RuntimeRoot) == "" || p.PassiveObservationID != plan.PassiveObservationID || strings.TrimSpace(p.SourceThreadID) == "" {
+		return fmt.Errorf("LangGraph fork plan requires candidate, task, model, image, runtime root, source thread, and passive observation")
+	}
+	hasSocket := strings.TrimSpace(p.PassiveUnixSocketPath) != ""
+	hasWorkspaceFile := strings.TrimSpace(p.PassiveWorkspaceFilePath) != ""
+	if hasSocket == hasWorkspaceFile {
+		return fmt.Errorf("LangGraph fork plan requires exactly one passive resource path")
 	}
 	if !p.PassiveProbeMode.Effective().Valid() {
 		return fmt.Errorf("LangGraph fork plan has unsupported passive probe mode %q", p.PassiveProbeMode)
@@ -270,14 +306,33 @@ func (p LangGraphForkPlan) ValidateFor(plan RecordedPlan) error {
 	if p.SourceRuntime.ContainerImage != p.ContainerImage {
 		return fmt.Errorf("LangGraph source runtime image does not match the fork plan")
 	}
-	if err := p.UnixSocketProbe.Validate(); err != nil {
-		return err
-	}
 	if err := p.WorkspaceSnapshot.Validate(); err != nil {
 		return err
 	}
-	if p.WorkspaceSnapshot.PassiveUnixSocketPath != p.PassiveUnixSocketPath {
-		return fmt.Errorf("LangGraph workspace snapshot socket path does not match the fork plan")
+	if hasSocket {
+		if err := p.UnixSocketProbe.Validate(); err != nil {
+			return err
+		}
+		if p.WorkspaceFileProbe != nil || p.WorkspaceSnapshot.PassiveUnixSocketPath != p.PassiveUnixSocketPath {
+			return fmt.Errorf("LangGraph workspace snapshot socket path does not match the fork plan")
+		}
+	} else {
+		if p.PassiveProbeMode.Effective() != LangGraphPassiveProbeFull {
+			return fmt.Errorf("LangGraph workspace file recovery supports only the full passive probe")
+		}
+		if p.WorkspaceFileProbe == nil {
+			return fmt.Errorf("LangGraph fork plan has no workspace file probe")
+		}
+		if err := p.WorkspaceFileProbe.Validate(); err != nil {
+			return err
+		}
+		if p.WorkspaceSnapshot.PassiveWorkspaceFilePath != p.PassiveWorkspaceFilePath {
+			return fmt.Errorf("LangGraph workspace snapshot file path does not match the fork plan")
+		}
+		expectedCanonicalPath := "/workspace/" + filepath.ToSlash(filepath.Clean(p.PassiveWorkspaceFilePath))
+		if p.WorkspaceFileProbe.CanonicalPath != expectedCanonicalPath {
+			return fmt.Errorf("LangGraph workspace file probe path does not match the fork plan")
+		}
 	}
 	hasMaterializationHead := strings.TrimSpace(p.MaterializationHeadID) != "" || strings.TrimSpace(p.MaterializationHeadCheckpointID) != ""
 	if hasMaterializationHead {

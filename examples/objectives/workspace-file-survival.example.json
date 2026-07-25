@@ -1,0 +1,13 @@
+{
+  "schema_version": "syncfuzz.objective.v1",
+  "objective_id": "handle.workspace-file.survival",
+  "effects": [
+    {
+      "family": "handle",
+      "operation": "open"
+    }
+  ],
+  "lifetime": "survive-tool-return",
+  "resource_relation": "fixed-path-workspace-file",
+  "persistence": "across-checkpoint"
+}

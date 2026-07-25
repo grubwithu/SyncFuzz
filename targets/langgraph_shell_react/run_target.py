@@ -235,6 +235,23 @@ def parse_args() -> argparse.Namespace:
         help="Profile-recorded listener holder FD used by the passive recovery probe.",
     )
     parser.add_argument(
+        "--passive-workspace-file-path",
+        default=os.environ.get("SYNCFUZZ_LANGGRAPH_PASSIVE_WORKSPACE_FILE_PATH", "").strip(),
+        help="Optional workspace-relative regular file to identify without reading it during passive recovery.",
+    )
+    parser.add_argument(
+        "--passive-workspace-file-expected-device",
+        type=int,
+        default=-1,
+        help="Profile-recorded device number required for a retained workspace file probe.",
+    )
+    parser.add_argument(
+        "--passive-workspace-file-expected-inode",
+        type=int,
+        default=-1,
+        help="Profile-recorded inode required for a retained workspace file probe.",
+    )
+    parser.add_argument(
         "--recovery-observation-artifact",
         default=os.environ.get(
             "SYNCFUZZ_LANGGRAPH_RECOVERY_OBSERVATION_ARTIFACT",
@@ -837,6 +854,9 @@ def merge_run_summaries(
     merged["passive_unix_socket_path"] = str(
         resume.get("passive_unix_socket_path", "")
     )
+    merged["passive_workspace_file_path"] = str(
+        resume.get("passive_workspace_file_path", "")
+    )
     merged["recovery_observation_artifact"] = str(
         resume.get("recovery_observation_artifact", "")
     )
@@ -938,6 +958,10 @@ def build_phase_command(
         command.append("--passive-fork-observe")
     if args.passive_unix_socket_path:
         command.extend(["--passive-unix-socket-path", args.passive_unix_socket_path])
+    if args.passive_workspace_file_path:
+        command.extend(
+            ["--passive-workspace-file-path", args.passive_workspace_file_path]
+        )
     if runtime_instance_id:
         command.extend(["--runtime-instance-id", runtime_instance_id])
     return command
@@ -2301,6 +2325,75 @@ def passive_unix_socket_observation(
     return observation
 
 
+def passive_workspace_file_observation(
+    workspace: Path, value: str, args: argparse.Namespace
+) -> dict[str, Any]:
+    """Capture regular-file identity without opening or reading the file."""
+
+    endpoint = resolve_passive_unix_socket_path(workspace, value)
+    root = workspace.resolve()
+    try:
+        relative_path = str(endpoint.relative_to(root))
+    except ValueError:  # guarded by resolve_passive_unix_socket_path
+        relative_path = ""
+    started_ns = time.monotonic_ns()
+    observation: dict[str, Any] = {
+        "kind": "workspace-file-metadata",
+        "clock_domain": "CLOCK_MONOTONIC",
+        "observed_monotonic_ns": started_ns,
+        "workspace_relative_path": relative_path,
+        "endpoint_path": str(endpoint),
+        "exists": False,
+        "is_regular_file": False,
+    }
+    try:
+        metadata = os.lstat(endpoint)
+    except FileNotFoundError:
+        observation["probe_duration_ns"] = max(0, time.monotonic_ns() - started_ns)
+        return observation
+    except OSError as exc:
+        observation["error"] = f"lstat: {exc}"
+        observation["probe_duration_ns"] = max(0, time.monotonic_ns() - started_ns)
+        return observation
+    observation.update(
+        {
+            "exists": True,
+            "is_regular_file": stat.S_ISREG(metadata.st_mode),
+            "device": int(metadata.st_dev),
+            "inode": int(metadata.st_ino),
+            "mode": stat.S_IMODE(metadata.st_mode),
+        }
+    )
+    if (
+        args.passive_workspace_file_expected_device >= 0
+        and int(metadata.st_dev) != args.passive_workspace_file_expected_device
+    ):
+        observation["identity_error"] = "recorded workspace file device does not match"
+    if (
+        args.passive_workspace_file_expected_inode >= 0
+        and int(metadata.st_ino) != args.passive_workspace_file_expected_inode
+    ):
+        observation["identity_error"] = "recorded workspace file inode does not match"
+    observation["probe_duration_ns"] = max(0, time.monotonic_ns() - started_ns)
+    return observation
+
+
+def passive_fork_observation(workspace: Path, args: argparse.Namespace) -> dict[str, Any]:
+    has_socket = bool(args.passive_unix_socket_path)
+    has_workspace_file = bool(args.passive_workspace_file_path)
+    if has_socket == has_workspace_file:
+        raise SystemExit(
+            "--passive-fork-observe requires exactly one passive Unix socket or workspace file path"
+        )
+    if has_socket:
+        return passive_unix_socket_observation(
+            workspace, args.passive_unix_socket_path, args
+        )
+    return passive_workspace_file_observation(
+        workspace, args.passive_workspace_file_path, args
+    )
+
+
 def passive_unix_listener_observation(
     endpoint: Path,
     *,
@@ -2414,16 +2507,17 @@ def summarize_passive_recovery_observation(
     after_fork: dict[str, Any],
     fork_result: Any | None,
 ) -> dict[str, Any]:
-    same_endpoint_identity = (
-        bool(before_fork.get("is_unix_socket"))
-        and bool(after_fork.get("is_unix_socket"))
+    is_socket = bool(args.passive_unix_socket_path)
+    same_identity = (
+        bool(before_fork.get("is_unix_socket" if is_socket else "is_regular_file"))
+        and bool(after_fork.get("is_unix_socket" if is_socket else "is_regular_file"))
         and before_fork.get("device") == after_fork.get("device")
         and before_fork.get("inode") == after_fork.get("inode")
     )
     fork_messages = result_messages(fork_result)
-    return {
+    result = {
         "schema_version": "syncfuzz.langgraph-recovery-observation.v1",
-        "observation_kind": "unix-socket-metadata",
+        "observation_kind": "unix-socket-metadata" if is_socket else "workspace-file-metadata",
         "runtime_instance_id": args.runtime_instance_id
         or f"langgraph-runtime:{thread_id}:pid:{os.getpid()}",
         "runtime_pid": os.getpid(),
@@ -2447,14 +2541,22 @@ def summarize_passive_recovery_observation(
         if selected_state is not None
         else [],
         "fork_invoked": fork_invoked,
-        "passive_unix_socket": {
-            "before_fork": before_fork,
-            "after_fork": after_fork,
-            "same_endpoint_identity": same_endpoint_identity,
-        },
         "fork_tool_message_count": tool_message_count(fork_messages),
         "fork_ai_tool_call_count": ai_tool_call_count(fork_messages),
     }
+    if is_socket:
+        result["passive_unix_socket"] = {
+            "before_fork": before_fork,
+            "after_fork": after_fork,
+            "same_endpoint_identity": same_identity,
+        }
+    else:
+        result["passive_workspace_file"] = {
+            "before_fork": before_fork,
+            "after_fork": after_fork,
+            "same_file_identity": same_identity,
+        }
+    return result
 
 
 def extract_checkpoint_id(state: Any) -> str:
@@ -2831,10 +2933,8 @@ def main() -> int:
     passive_recovery_observation = None
     if args.fork_user_message.strip():
         passive_before_fork = None
-        if args.passive_unix_socket_path:
-            passive_before_fork = passive_unix_socket_observation(
-                workspace, args.passive_unix_socket_path, args
-            )
+        if args.passive_unix_socket_path or args.passive_workspace_file_path:
+            passive_before_fork = passive_fork_observation(workspace, args)
         lifecycle.begin_operation(
             "fork",
             checkpoint_index=selected_checkpoint_index,
@@ -2852,9 +2952,7 @@ def main() -> int:
             )
         finally:
             if passive_before_fork is not None:
-                passive_after_fork = passive_unix_socket_observation(
-                    workspace, args.passive_unix_socket_path, args
-                )
+                passive_after_fork = passive_fork_observation(workspace, args)
                 passive_recovery_observation = summarize_passive_recovery_observation(
                     args=args,
                     thread_id=thread_id,
@@ -2879,22 +2977,14 @@ def main() -> int:
             fork_history = collect_state_history(agent, selected_state.config)
             lifecycle.note_history(summarize_history(fork_history), "fork")
     elif args.passive_fork_observe:
-        if not args.passive_unix_socket_path:
-            raise SystemExit(
-                "--passive-fork-observe requires --passive-unix-socket-path"
-            )
         lifecycle.begin_operation(
             "passive_fork_observe",
             checkpoint_index=selected_checkpoint_index,
             checkpoint_selector=checkpoint_selector,
             checkpoint_id=extract_checkpoint_id(selected_state),
         )
-        passive_before_fork = passive_unix_socket_observation(
-            workspace, args.passive_unix_socket_path, args
-        )
-        passive_after_fork = passive_unix_socket_observation(
-            workspace, args.passive_unix_socket_path, args
-        )
+        passive_before_fork = passive_fork_observation(workspace, args)
+        passive_after_fork = passive_fork_observation(workspace, args)
         passive_recovery_observation = summarize_passive_recovery_observation(
             args=args,
             thread_id=thread_id,
@@ -2980,6 +3070,7 @@ def main() -> int:
         "passive_fork_observe_requested": args.passive_fork_observe,
         "runtime_instance_id": args.runtime_instance_id,
         "passive_unix_socket_path": args.passive_unix_socket_path,
+        "passive_workspace_file_path": args.passive_workspace_file_path,
         "recovery_observation_artifact": args.recovery_observation_artifact
         if passive_recovery_observation is not None
         else "",

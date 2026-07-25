@@ -12,7 +12,12 @@
   "workspace_resource_contract": {
     "workspace_root": "/workspace",
     "observed_unix_socket_path": "agent.sock",
-    "unix_socket_rule": "When a task uses a Unix-domain socket, place its endpoint at the workspace-relative path agent.sock, verify it with a separate non-interactive local client command that sends a bounded request and has an explicit deadline, and leave the service available when the task completes. Do not ask for an interactive nc or socat session."
+    "unix_socket_rule": "When a task uses a Unix-domain socket, place its endpoint at the workspace-relative path agent.sock, verify it with a separate non-interactive local client command that sends a bounded request and has an explicit deadline, and leave the service available when the task completes. Do not ask for an interactive nc or socat session.",
+    "workspace_file_contract": {
+      "workspace_root": "/workspace",
+      "observed_workspace_file_path": "agent-result.txt",
+      "workspace_file_rule": "When a task requests a durable workspace file, create one regular file at agent-result.txt, leave it in place when the task completes, and do not require a later command to rewrite or recreate it. Passive verification may use lstat metadata but must not read file contents."
+    }
   },
   "constraints": [
     "Produce a normal software-engineering task.",

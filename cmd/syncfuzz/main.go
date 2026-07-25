@@ -112,7 +112,7 @@ Usage:
   syncfuzz synthesis promote --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --out state-seed.json
   syncfuzz synthesis bind-maf-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest maf-workflow-fork-manifest.json --python python3 --runner targets/maf_workflow_checkpoint/run_target.py --prepared-workspace prepared --runtime-root forks --out-plan maf-fork-plan.json --out-profile-run bound-profile-run.json --out-binding native-frontier-binding.json
   syncfuzz synthesis bind-langgraph-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after [--lifecycle langgraph-lifecycle.json] --manifest langgraph-native-checkpoints.json --out-binding langgraph-native-frontier-binding.json
-  syncfuzz synthesis prepare-langgraph-fork --objective objective.json --candidate candidate.json --profile-run profile-run.json --binding langgraph-native-frontier-binding.json --model provider:model --container-image syncfuzz-langgraph:dev --runtime-root recovery-runtimes --passive-unix-socket-path agent.sock --out-plan langgraph-fork-plan.json --out-profile-run bound-profile-run.json
+  syncfuzz synthesis prepare-langgraph-fork --objective objective.json --candidate candidate.json --profile-run profile-run.json --binding langgraph-native-frontier-binding.json --model provider:model --container-image syncfuzz-langgraph:dev --runtime-root recovery-runtimes [--passive-unix-socket-path agent.sock | --passive-workspace-file-path agent-result.txt] --out-plan langgraph-fork-plan.json --out-profile-run bound-profile-run.json
   syncfuzz synthesis release-langgraph-runtime --profile-run profile-run.json
   syncfuzz profile container-scope --container <running-container>
   syncfuzz profile process-monitor --cgroup-id <cgroup-v2-id> [--duration 10s] [--out raw-os-events.jsonl]
@@ -1114,14 +1114,15 @@ func synthesisPrepareLangGraphFork(args []string) {
 	containerImage := fs.String("container-image", synthesis.DefaultLangGraphProfileImage, "isolated LangGraph recovery container image")
 	runtimeRoot := fs.String("runtime-root", "", "host directory for independent LangGraph recovery workspaces")
 	passiveUnixSocketPath := fs.String("passive-unix-socket-path", "", "workspace-relative Unix endpoint observed without connecting")
+	passiveWorkspaceFilePath := fs.String("passive-workspace-file-path", "", "workspace-relative regular file retained as the exact passive observation node")
 	passiveProbeMode := fs.String("passive-probe-mode", string(recovery.LangGraphPassiveProbeFull), "passive Unix listener probe mode: full or pruned")
 	outPlan := fs.String("out-plan", "langgraph-fork-plan.json", "LangGraph recorded fork plan JSON output path")
 	outProfileRun := fs.String("out-profile-run", "bound-profile-run.json", "ProfileRun updated to use the LangGraph fork plan")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*profileRunPath) == "" || strings.TrimSpace(*bindingPath) == "" || strings.TrimSpace(*model) == "" || strings.TrimSpace(*containerImage) == "" || strings.TrimSpace(*runtimeRoot) == "" || strings.TrimSpace(*passiveUnixSocketPath) == "" {
-		fmt.Fprintln(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork requires --objective, --candidate, --profile-run, --binding, --model, --container-image, --runtime-root, and --passive-unix-socket-path")
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*profileRunPath) == "" || strings.TrimSpace(*bindingPath) == "" || strings.TrimSpace(*model) == "" || strings.TrimSpace(*containerImage) == "" || strings.TrimSpace(*runtimeRoot) == "" || (strings.TrimSpace(*passiveUnixSocketPath) == "" && strings.TrimSpace(*passiveWorkspaceFilePath) == "") || (strings.TrimSpace(*passiveUnixSocketPath) != "" && strings.TrimSpace(*passiveWorkspaceFilePath) != "") {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork requires --objective, --candidate, --profile-run, --binding, --model, --container-image, --runtime-root, and exactly one passive resource path")
 		os.Exit(2)
 	}
 	stateObjective, err := objective.ReadStateObjective(*objectivePath)
@@ -1144,7 +1145,7 @@ func synthesisPrepareLangGraphFork(args []string) {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
 		os.Exit(1)
 	}
-	plan, err := synthesis.PrepareLangGraphForkPlan(stateObjective, candidate, profileRun, binding, synthesis.LangGraphForkPlanConfig{Model: *model, ContainerImage: *containerImage, RuntimeRoot: *runtimeRoot, PassiveUnixSocketPath: *passiveUnixSocketPath, PassiveProbeMode: recovery.LangGraphPassiveProbeMode(*passiveProbeMode)})
+	plan, err := synthesis.PrepareLangGraphForkPlan(stateObjective, candidate, profileRun, binding, synthesis.LangGraphForkPlanConfig{Model: *model, ContainerImage: *containerImage, RuntimeRoot: *runtimeRoot, PassiveUnixSocketPath: *passiveUnixSocketPath, PassiveWorkspaceFilePath: *passiveWorkspaceFilePath, PassiveProbeMode: recovery.LangGraphPassiveProbeMode(*passiveProbeMode)})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
 		os.Exit(1)

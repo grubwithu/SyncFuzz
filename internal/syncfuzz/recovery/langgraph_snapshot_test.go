@@ -182,6 +182,84 @@ func TestLangGraphRecoveryDockerArgsPassesPrunedProbeIdentity(t *testing.T) {
 	}
 }
 
+func TestLangGraphRecoveryDockerArgsBindMountsRetainedWorkspaceFile(t *testing.T) {
+	plan := LangGraphForkPlan{
+		Model:                    "openai:test",
+		ContainerImage:           "syncfuzz-langgraph:test",
+		PassiveWorkspaceFilePath: "agent-result.txt",
+		SourceThreadID:           "profile-thread",
+		SourceRuntime:            LangGraphSourceRuntime{ContainerName: "syncfuzz-profile-source"},
+		WorkspaceSnapshot: LangGraphWorkspaceSnapshot{
+			SourceWorkspace:             "/profile/workspace",
+			PassiveWorkspaceFilePath:    "agent-result.txt",
+			CheckpointStoreRelativePath: "langgraph-checkpoints",
+			WorkspaceSHA256:             strings.Repeat("a", 64),
+			CheckpointStoreSHA256:       strings.Repeat("b", 64),
+			PassiveWorkspaceFileDevice:  42,
+			PassiveWorkspaceFileInode:   99,
+		},
+		WorkspaceFileProbe: &LangGraphWorkspaceFileProbe{
+			SchemaVersion: LangGraphWorkspaceFileProbeSchema,
+			ResourceID:    "workspace:agent-result.txt",
+			CanonicalPath: "/workspace/agent-result.txt",
+			OpenEffectIDs: []string{"open-effect"},
+		},
+	}
+	args := langGraphRecoveryDockerArgs(plan, "/recovery/workspace", "runtime-1", 10001, 10001, "native-checkpoint-1", nil)
+	if !hasArgumentPair(args, "-v", "/profile/workspace/agent-result.txt:/workspace/agent-result.txt:ro") {
+		t.Fatalf("recovery invocation must bind-mount the retained workspace file read-only: %#v", args)
+	}
+	if !hasArgumentPair(args, "--passive-workspace-file-path", "agent-result.txt") || !hasArgumentPair(args, "--passive-workspace-file-expected-device", "42") || !hasArgumentPair(args, "--passive-workspace-file-expected-inode", "99") {
+		t.Fatalf("recovery invocation must carry exact workspace file identity: %#v", args)
+	}
+	if hasArgument(args, "--passive-unix-socket-path") {
+		t.Fatalf("workspace file recovery must not configure a Unix socket observer: %#v", args)
+	}
+}
+
+func TestLangGraphPassiveRecoveryStateRecognizesRetainedWorkspaceFile(t *testing.T) {
+	plan := LangGraphForkPlan{
+		PassiveWorkspaceFilePath: "agent-result.txt",
+		WorkspaceSnapshot: LangGraphWorkspaceSnapshot{
+			PassiveWorkspaceFilePath:   "agent-result.txt",
+			PassiveWorkspaceFileDevice: 42,
+			PassiveWorkspaceFileInode:  99,
+			PassiveWorkspaceFileMode:   0o640,
+		},
+		WorkspaceFileProbe: &LangGraphWorkspaceFileProbe{
+			SchemaVersion: LangGraphWorkspaceFileProbeSchema,
+			ResourceID:    "workspace:agent-result.txt",
+			CanonicalPath: "/workspace/agent-result.txt",
+			OpenEffectIDs: []string{"open-effect"},
+		},
+	}
+	metadata := langGraphPassiveWorkspaceFileMetadata{
+		IsRegularFile:   true,
+		Device:          42,
+		Inode:           99,
+		Mode:            0o640,
+		ProbeDurationNS: 17,
+	}
+	artifact := langGraphRecoveryArtifact{}
+	artifact.PassiveWorkspaceFile.BeforeFork = metadata
+	artifact.PassiveWorkspaceFile.AfterFork = metadata
+	artifact.PassiveWorkspaceFile.SameFileIdentity = true
+
+	osState, origin, multiplicity, metrics, evidence, err := langGraphPassiveRecoveryState(plan, artifact, LangGraphPassiveProbeFull)
+	if err != nil {
+		t.Fatalf("langGraphPassiveRecoveryState returned error: %v", err)
+	}
+	if osState != StatePresencePresent || origin != StateOriginResidual || multiplicity != EffectMultiplicitySingle {
+		t.Fatalf("workspace file recovery state=%s origin=%s multiplicity=%s, want present/residual/single", osState, origin, multiplicity)
+	}
+	if metrics == nil || metrics.Mode != LangGraphPassiveProbeFull || metrics.DurationNS != 17 {
+		t.Fatalf("workspace file recovery probe metrics=%#v", metrics)
+	}
+	if len(evidence) != 2 || !strings.Contains(evidence[1], "open-effect") {
+		t.Fatalf("workspace file recovery evidence=%#v", evidence)
+	}
+}
+
 func hasArgument(args []string, expected string) bool {
 	for _, value := range args {
 		if value == expected {

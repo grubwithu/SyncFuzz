@@ -356,11 +356,11 @@ func validateLangGraphProbeFidelityPlans(full, pruned LangGraphForkPlan) error {
 	if full.RecordedPlanID == "" || full.AdapterID != LangGraphForkAdapterID || full.TargetID == "" {
 		return fmt.Errorf("full plan has no LangGraph recorded-plan identity")
 	}
-	if full.RecordedPlanID != pruned.RecordedPlanID || full.AdapterID != pruned.AdapterID || full.TargetID != pruned.TargetID || full.CandidateID != pruned.CandidateID || full.Task != pruned.Task || full.Model != pruned.Model || full.ContainerImage != pruned.ContainerImage || full.PassiveUnixSocketPath != pruned.PassiveUnixSocketPath || full.PassiveObservationID != pruned.PassiveObservationID || full.MaterializationHeadID != pruned.MaterializationHeadID || full.MaterializationHeadCheckpointID != pruned.MaterializationHeadCheckpointID || full.SourceThreadID != pruned.SourceThreadID {
+	if full.RecordedPlanID != pruned.RecordedPlanID || full.AdapterID != pruned.AdapterID || full.TargetID != pruned.TargetID || full.CandidateID != pruned.CandidateID || full.Task != pruned.Task || full.Model != pruned.Model || full.ContainerImage != pruned.ContainerImage || full.PassiveUnixSocketPath != pruned.PassiveUnixSocketPath || full.PassiveWorkspaceFilePath != pruned.PassiveWorkspaceFilePath || full.PassiveObservationID != pruned.PassiveObservationID || full.MaterializationHeadID != pruned.MaterializationHeadID || full.MaterializationHeadCheckpointID != pruned.MaterializationHeadCheckpointID || full.SourceThreadID != pruned.SourceThreadID {
 		return fmt.Errorf("paired plans change recovery identity outside passive probe mode")
 	}
-	if !reflect.DeepEqual(full.SourceRuntime, pruned.SourceRuntime) || !reflect.DeepEqual(full.WorkspaceSnapshot, pruned.WorkspaceSnapshot) || !reflect.DeepEqual(full.UnixSocketProbe, pruned.UnixSocketProbe) || !reflect.DeepEqual(full.CheckpointCoordinates, pruned.CheckpointCoordinates) || !reflect.DeepEqual(full.AgentStateByCheckpoint, pruned.AgentStateByCheckpoint) {
-		return fmt.Errorf("paired plans do not share source runtime, snapshot, listener identity, or checkpoint mapping")
+	if !reflect.DeepEqual(full.SourceRuntime, pruned.SourceRuntime) || !reflect.DeepEqual(full.WorkspaceSnapshot, pruned.WorkspaceSnapshot) || !reflect.DeepEqual(full.UnixSocketProbe, pruned.UnixSocketProbe) || !reflect.DeepEqual(full.WorkspaceFileProbe, pruned.WorkspaceFileProbe) || !reflect.DeepEqual(full.CheckpointCoordinates, pruned.CheckpointCoordinates) || !reflect.DeepEqual(full.AgentStateByCheckpoint, pruned.AgentStateByCheckpoint) {
+		return fmt.Errorf("paired plans do not share source runtime, snapshot, passive resource identity, or checkpoint mapping")
 	}
 	return nil
 }

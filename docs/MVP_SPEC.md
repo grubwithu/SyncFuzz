@@ -149,6 +149,17 @@ Promotion rejects an incomplete command, an unprofiled run, a calibration fixtur
 
 The V2.3 recovery core requires an adapter to expose a real durable checkpoint recovery mechanism. The method normalizes that mechanism as a historical cut `C < H` under an explicit OS-retention policy; `fork`, `rewind`, and `replay` are only comparable when they implement the same retention / re-execution semantics. `HistoricalRecoverySet` records `Q_before`, `Q_after`, and `Q_head` with one materialization head, plan, passive observation, and retention policy. Its executor requires independent runtime instances for all three controls and suppresses a finding when `Q_head` is not `consistent`. The older `RecoveryPair` executor remains for compatibility fixtures. The first registered adapter is `maf-workflow`: its adapter plan currently maps only before/after V2 coordinates to exact `FileCheckpointStorage` IDs, so it remains pair-only pending a distinct head binding. The generic command adapter is deliberately ineligible: its controller checkpoints are profiling observations, not durable Agent recovery points.
 
+The LangGraph retained-resource path also has a second experimental objective
+family: `handle.workspace-file.survival`. A prepared fork may retain exactly
+one workspace-relative regular file (`agent-result.txt`) alongside the durable
+checkpoint store. Preparation binds only exact `handle/open` evidence for the
+terminal materialization head. Recovery bind-mounts the source file read-only
+and compares `lstat` device, inode, mode, and regular-file type before and after
+restore; it does not read file contents or install a target-specific final-state
+Oracle. The workspace-file probe currently supports only the full passive mode,
+so it is a second-family implementation and is not yet part of the listener
+fidelity batch.
+
 Update, 2026-07-24: the LangGraph listener path now requires
 `execute-langgraph --retain-runtime`. Its V3 fork plan records the immutable
 source container lease plus eBPF-linked kernel socket ID and holder FD.
