@@ -1,6 +1,7 @@
 package recovery
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -55,6 +56,44 @@ func TestLangGraphWorkspaceSnapshotClonesDurableStoreAndRetainsSocketIdentity(t 
 	}
 	if err := snapshot.VerifySource(); err == nil {
 		t.Fatal("expected source snapshot mutation to be rejected")
+	}
+}
+
+func TestLangGraphWorkspaceFileSnapshotClonesWithoutCopyingRetainedFile(t *testing.T) {
+	source := t.TempDir()
+	for _, artifact := range []string{"target-prompt.txt", "target-task.json", "langgraph-checkpoints/storage.pkl"} {
+		path := filepath.Join(source, artifact)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create source artifact directory: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(artifact+"\n"), 0o644); err != nil {
+			t.Fatalf("write source artifact: %v", err)
+		}
+	}
+	retainedPath := filepath.Join(source, "agent-result.txt")
+	if err := os.WriteFile(retainedPath, []byte("source identity only\n"), 0o640); err != nil {
+		t.Fatalf("write retained workspace file: %v", err)
+	}
+
+	snapshot, err := CaptureLangGraphWorkspaceFileSnapshot(source, "agent-result.txt")
+	if err != nil {
+		t.Fatalf("CaptureLangGraphWorkspaceFileSnapshot returned error: %v", err)
+	}
+	if snapshot.PassiveWorkspaceFilePath != "agent-result.txt" || snapshot.PassiveWorkspaceFileInode == 0 || snapshot.PassiveUnixSocketPath != "" {
+		t.Fatalf("unexpected workspace file snapshot: %#v", snapshot)
+	}
+	destination := filepath.Join(t.TempDir(), "clone")
+	if err := snapshot.CloneTo(destination); err != nil {
+		t.Fatalf("CloneTo returned error: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "agent-result.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retained workspace file must be excluded from clone, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "langgraph-checkpoints", "storage.pkl")); err != nil {
+		t.Fatalf("durable store was not copied: %v", err)
+	}
+	if snapshot.SourcePassiveResourcePath() != retainedPath {
+		t.Fatalf("unexpected retained source path %q", snapshot.SourcePassiveResourcePath())
 	}
 }
 

@@ -19,29 +19,47 @@ const langGraphCheckpointStoreRelativePath = "langgraph-checkpoints"
 // dereferencing links or accepting unmodelled special files. This keeps a
 // recovery clone from following task-controlled paths outside its workspace.
 func CaptureLangGraphWorkspaceSnapshot(sourceWorkspace, passiveUnixSocketPath string) (LangGraphWorkspaceSnapshot, error) {
+	return captureLangGraphWorkspaceSnapshot(sourceWorkspace, passiveUnixSocketPath, "", false)
+}
+
+// CaptureLangGraphWorkspaceFileSnapshot freezes one regular workspace file as
+// a retained source node. CloneTo excludes this file and recovery bind-mounts
+// it read-only, preserving filesystem identity instead of copying it.
+func CaptureLangGraphWorkspaceFileSnapshot(sourceWorkspace, passiveWorkspaceFilePath string) (LangGraphWorkspaceSnapshot, error) {
+	return captureLangGraphWorkspaceSnapshot(sourceWorkspace, "", passiveWorkspaceFilePath, true)
+}
+
+func captureLangGraphWorkspaceSnapshot(sourceWorkspace, passiveUnixSocketPath, passiveWorkspaceFilePath string, expectRegularFile bool) (LangGraphWorkspaceSnapshot, error) {
 	workspace, err := filepath.Abs(strings.TrimSpace(sourceWorkspace))
 	if err != nil {
 		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("resolve LangGraph source workspace: %w", err)
 	}
-	if strings.TrimSpace(passiveUnixSocketPath) == "" || filepath.IsAbs(passiveUnixSocketPath) {
-		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("LangGraph snapshot requires a workspace-relative passive Unix socket path")
+	passivePath := passiveUnixSocketPath
+	if expectRegularFile {
+		passivePath = passiveWorkspaceFilePath
 	}
-	socketPath, err := workspaceChild(workspace, passiveUnixSocketPath)
+	if strings.TrimSpace(passivePath) == "" || filepath.IsAbs(passivePath) {
+		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("LangGraph snapshot requires a workspace-relative passive retained resource path")
+	}
+	resourcePath, err := workspaceChild(workspace, passivePath)
 	if err != nil {
 		return LangGraphWorkspaceSnapshot{}, err
 	}
-	socketInfo, err := os.Lstat(socketPath)
+	resourceInfo, err := os.Lstat(resourcePath)
 	if err != nil {
-		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("lstat retained LangGraph socket %s: %w", socketPath, err)
+		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("lstat retained LangGraph resource %s: %w", resourcePath, err)
 	}
-	if socketInfo.Mode()&os.ModeSocket == 0 {
-		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("retained LangGraph endpoint %s is not a Unix socket", socketPath)
+	if expectRegularFile && !resourceInfo.Mode().IsRegular() {
+		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("retained LangGraph resource %s is not a regular workspace file", resourcePath)
 	}
-	stat, ok := socketInfo.Sys().(*syscall.Stat_t)
+	if !expectRegularFile && resourceInfo.Mode()&os.ModeSocket == 0 {
+		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("retained LangGraph endpoint %s is not a Unix socket", resourcePath)
+	}
+	stat, ok := resourceInfo.Sys().(*syscall.Stat_t)
 	if !ok || stat.Ino == 0 {
-		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("retained LangGraph socket %s lacks inode metadata", socketPath)
+		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("retained LangGraph resource %s lacks inode metadata", resourcePath)
 	}
-	workspaceDigest, err := digestWorkspaceTree(workspace, passiveUnixSocketPath)
+	workspaceDigest, err := digestWorkspaceTree(workspace, passivePath)
 	if err != nil {
 		return LangGraphWorkspaceSnapshot{}, err
 	}
@@ -49,16 +67,24 @@ func CaptureLangGraphWorkspaceSnapshot(sourceWorkspace, passiveUnixSocketPath st
 	if err != nil {
 		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("digest LangGraph checkpoint store: %w", err)
 	}
-	return LangGraphWorkspaceSnapshot{
+	snapshot := LangGraphWorkspaceSnapshot{
 		SourceWorkspace:             workspace,
 		WorkspaceSHA256:             workspaceDigest,
 		CheckpointStoreRelativePath: langGraphCheckpointStoreRelativePath,
 		CheckpointStoreSHA256:       checkpointDigest,
-		PassiveUnixSocketPath:       filepath.Clean(passiveUnixSocketPath),
-		PassiveUnixSocketDevice:     uint64(stat.Dev),
-		PassiveUnixSocketInode:      uint64(stat.Ino),
-		PassiveUnixSocketMode:       uint32(socketInfo.Mode().Perm()),
-	}, nil
+	}
+	if expectRegularFile {
+		snapshot.PassiveWorkspaceFilePath = filepath.Clean(passiveWorkspaceFilePath)
+		snapshot.PassiveWorkspaceFileDevice = uint64(stat.Dev)
+		snapshot.PassiveWorkspaceFileInode = uint64(stat.Ino)
+		snapshot.PassiveWorkspaceFileMode = uint32(resourceInfo.Mode().Perm())
+	} else {
+		snapshot.PassiveUnixSocketPath = filepath.Clean(passiveUnixSocketPath)
+		snapshot.PassiveUnixSocketDevice = uint64(stat.Dev)
+		snapshot.PassiveUnixSocketInode = uint64(stat.Ino)
+		snapshot.PassiveUnixSocketMode = uint32(resourceInfo.Mode().Perm())
+	}
+	return snapshot, nil
 }
 
 // VerifySource asserts that the profiled workspace still represents exactly
@@ -67,18 +93,26 @@ func (s LangGraphWorkspaceSnapshot) VerifySource() error {
 	if err := s.Validate(); err != nil {
 		return err
 	}
-	actual, err := CaptureLangGraphWorkspaceSnapshot(s.SourceWorkspace, s.PassiveUnixSocketPath)
+	var (
+		actual LangGraphWorkspaceSnapshot
+		err    error
+	)
+	if s.PassiveUnixSocketPath != "" {
+		actual, err = CaptureLangGraphWorkspaceSnapshot(s.SourceWorkspace, s.PassiveUnixSocketPath)
+	} else {
+		actual, err = CaptureLangGraphWorkspaceFileSnapshot(s.SourceWorkspace, s.PassiveWorkspaceFilePath)
+	}
 	if err != nil {
 		return err
 	}
-	if actual.WorkspaceSHA256 != s.WorkspaceSHA256 || actual.CheckpointStoreSHA256 != s.CheckpointStoreSHA256 || actual.PassiveUnixSocketDevice != s.PassiveUnixSocketDevice || actual.PassiveUnixSocketInode != s.PassiveUnixSocketInode || actual.PassiveUnixSocketMode != s.PassiveUnixSocketMode {
+	if actual.WorkspaceSHA256 != s.WorkspaceSHA256 || actual.CheckpointStoreSHA256 != s.CheckpointStoreSHA256 || actual.PassiveUnixSocketDevice != s.PassiveUnixSocketDevice || actual.PassiveUnixSocketInode != s.PassiveUnixSocketInode || actual.PassiveUnixSocketMode != s.PassiveUnixSocketMode || actual.PassiveWorkspaceFileDevice != s.PassiveWorkspaceFileDevice || actual.PassiveWorkspaceFileInode != s.PassiveWorkspaceFileInode || actual.PassiveWorkspaceFileMode != s.PassiveWorkspaceFileMode {
 		return fmt.Errorf("LangGraph source workspace no longer matches the recorded snapshot")
 	}
 	return nil
 }
 
 // CloneTo copies the regular-file portion of this snapshot into destination.
-// The retained socket is intentionally excluded and must be bind-mounted by
+// The retained resource is intentionally excluded and must be bind-mounted by
 // the recovery container at the same workspace-relative path.
 func (s LangGraphWorkspaceSnapshot) CloneTo(destination string) error {
 	if err := s.VerifySource(); err != nil {
@@ -91,7 +125,7 @@ func (s LangGraphWorkspaceSnapshot) CloneTo(destination string) error {
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return err
 	}
-	entries, err := workspaceEntries(s.SourceWorkspace, s.PassiveUnixSocketPath)
+	entries, err := workspaceEntries(s.SourceWorkspace, s.PassiveResourcePath())
 	if err != nil {
 		return err
 	}
@@ -118,6 +152,17 @@ func (s LangGraphWorkspaceSnapshot) CloneTo(destination string) error {
 
 func (s LangGraphWorkspaceSnapshot) SourceSocketPath() string {
 	return filepath.Join(s.SourceWorkspace, s.PassiveUnixSocketPath)
+}
+
+func (s LangGraphWorkspaceSnapshot) SourcePassiveResourcePath() string {
+	return filepath.Join(s.SourceWorkspace, s.PassiveResourcePath())
+}
+
+func (s LangGraphWorkspaceSnapshot) PassiveResourcePath() string {
+	if s.PassiveUnixSocketPath != "" {
+		return s.PassiveUnixSocketPath
+	}
+	return s.PassiveWorkspaceFilePath
 }
 
 type workspaceEntry struct {

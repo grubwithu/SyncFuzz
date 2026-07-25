@@ -177,11 +177,11 @@ func (c LangGraphNativeCheckpointCoordinate) Validate() error {
 	return nil
 }
 
-// LangGraphWorkspaceSnapshot freezes the durable LangGraph store and the
-// retained passive Unix socket metadata from the profiled workspace. The
-// source is verified before every fork, then cloned into a new workspace; the
-// socket itself is bind-mounted read-only because Unix socket nodes cannot be
-// copied without creating a new endpoint.
+// LangGraphWorkspaceSnapshot freezes the durable LangGraph store and exactly
+// one retained passive resource from the profiled workspace. The source is
+// verified before every fork, then cloned into a new workspace; the retained
+// node is excluded from the clone and bind-mounted read-only at the same path
+// so a recovery probe cannot mistake a copied replacement for source state.
 type LangGraphWorkspaceSnapshot struct {
 	SourceWorkspace             string `json:"source_workspace"`
 	WorkspaceSHA256             string `json:"workspace_sha256"`
@@ -191,14 +191,36 @@ type LangGraphWorkspaceSnapshot struct {
 	PassiveUnixSocketDevice     uint64 `json:"passive_unix_socket_device"`
 	PassiveUnixSocketInode      uint64 `json:"passive_unix_socket_inode"`
 	PassiveUnixSocketMode       uint32 `json:"passive_unix_socket_mode"`
+	PassiveWorkspaceFilePath    string `json:"passive_workspace_file_path,omitempty"`
+	PassiveWorkspaceFileDevice  uint64 `json:"passive_workspace_file_device,omitempty"`
+	PassiveWorkspaceFileInode   uint64 `json:"passive_workspace_file_inode,omitempty"`
+	PassiveWorkspaceFileMode    uint32 `json:"passive_workspace_file_mode,omitempty"`
 }
 
 func (s LangGraphWorkspaceSnapshot) Validate() error {
-	if strings.TrimSpace(s.SourceWorkspace) == "" || !filepath.IsAbs(s.SourceWorkspace) || !isSHA256(s.WorkspaceSHA256) || s.CheckpointStoreRelativePath != "langgraph-checkpoints" || !isSHA256(s.CheckpointStoreSHA256) || strings.TrimSpace(s.PassiveUnixSocketPath) == "" || filepath.IsAbs(s.PassiveUnixSocketPath) || s.PassiveUnixSocketInode == 0 {
+	if strings.TrimSpace(s.SourceWorkspace) == "" || !filepath.IsAbs(s.SourceWorkspace) || !isSHA256(s.WorkspaceSHA256) || s.CheckpointStoreRelativePath != "langgraph-checkpoints" || !isSHA256(s.CheckpointStoreSHA256) {
 		return fmt.Errorf("LangGraph workspace snapshot is incomplete")
 	}
-	if _, err := workspaceChild(s.SourceWorkspace, s.PassiveUnixSocketPath); err != nil {
-		return fmt.Errorf("LangGraph workspace snapshot passive socket path: %w", err)
+	hasSocket := strings.TrimSpace(s.PassiveUnixSocketPath) != ""
+	hasFile := strings.TrimSpace(s.PassiveWorkspaceFilePath) != ""
+	if hasSocket == hasFile {
+		return fmt.Errorf("LangGraph workspace snapshot requires exactly one passive retained resource")
+	}
+	if hasSocket {
+		if filepath.IsAbs(s.PassiveUnixSocketPath) || s.PassiveUnixSocketInode == 0 {
+			return fmt.Errorf("LangGraph workspace snapshot has incomplete passive socket metadata")
+		}
+		if _, err := workspaceChild(s.SourceWorkspace, s.PassiveUnixSocketPath); err != nil {
+			return fmt.Errorf("LangGraph workspace snapshot passive socket path: %w", err)
+		}
+	}
+	if hasFile {
+		if filepath.IsAbs(s.PassiveWorkspaceFilePath) || s.PassiveWorkspaceFileInode == 0 {
+			return fmt.Errorf("LangGraph workspace snapshot has incomplete passive workspace file metadata")
+		}
+		if _, err := workspaceChild(s.SourceWorkspace, s.PassiveWorkspaceFilePath); err != nil {
+			return fmt.Errorf("LangGraph workspace snapshot passive workspace file path: %w", err)
+		}
 	}
 	return nil
 }
