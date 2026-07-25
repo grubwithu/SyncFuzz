@@ -109,6 +109,39 @@ freezes the materialization head, `retain-relevant-os-state` policy, recorded
 plan, passive observation, and three distinct checkpoint coordinates. A head
 control that is not `consistent` forces the set verdict to `inconclusive`.
 
+Recovery execution additionally has a relation artifact. The legacy
+`consistent` / `residual` / `missing` / `duplicate` outcome remains for
+compatibility, but is not a vulnerability verdict. A complete recovery set can
+write `recovery-relation-report.json`, separating evidence completeness,
+logical effect phase, OS presence/origin/multiplicity, normalized relation, and
+contract status. Contract evaluation defaults to `not-evaluated`; incomplete
+measurement is distinct from an unspecified framework contract. Existing
+artifacts can be classified offline without calling a provider:
+
+```bash
+GOCACHE=/tmp/syncfuzz-go-cache go run ./cmd/syncfuzz recovery classify-relation \
+  --seed runs/<root>/state-seed.json \
+  --execution runs/<root>/recovery-set-execution.json \
+  --out runs/<root>/recovery-relation-report.json
+```
+
+The LangGraph target now stores a `durable_tool_lifecycle` snapshot in every
+new native checkpoint manifest, then carries it through the native binding and
+fork plan. It contains only durable tool-call IDs/names and tool-result IDs;
+missing snapshots identify legacy artifacts, while an explicit empty snapshot
+means no complete tool identity was durable at that checkpoint. This does not
+by itself causally attribute an eBPF effect to a tool call. New target runs
+also timestamp every lifecycle event with `CLOCK_MONOTONIC`; the native binding
+writes `tool_effect_provenance` only when exactly one complete shell-command
+span contains the linked effect interval and the after checkpoint durably
+records that call and its result. Old artifacts and ambiguous spans remain
+`unknown`. `recovery execute --out-relation` and `recovery classify-relation`
+copy immutable plan evidence to `causal_effect_evidence` (`proven` or
+`unknown`) for later relation-novelty work. This does not change the current
+relation signature, phase, or contract status: they remain
+`effect-not-committed` / `effect-committed`, not `PRE_CALL`, `CALL_DURABLE`, or
+`RESULT_DURABLE`.
+
 V2.4a adds `synthesis schedule`, `synthesis generate`, `synthesis evaluate`,
 and `synthesis promote`. Scheduling uses only objective atoms and the V2
 coverage ledger; a generator reads a bounded JSON request through

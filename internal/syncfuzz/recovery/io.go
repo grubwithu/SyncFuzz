@@ -59,6 +59,29 @@ func ReadForkRecoverySetExecution(path string) (ForkRecoverySetExecution, error)
 	return execution, nil
 }
 
+func WriteRecoveryRelationReport(path string, report RecoveryRelationReport) error {
+	if err := report.Validate(); err != nil {
+		return err
+	}
+	return writeRecoveryJSON(path, report)
+}
+
+func ReadRecoveryRelationReport(path string) (RecoveryRelationReport, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return RecoveryRelationReport{}, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer file.Close()
+	var report RecoveryRelationReport
+	if err := json.NewDecoder(file).Decode(&report); err != nil {
+		return RecoveryRelationReport{}, fmt.Errorf("decode %s: %w", path, err)
+	}
+	if err := report.Validate(); err != nil {
+		return RecoveryRelationReport{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	return report, nil
+}
+
 func WriteLangGraphProbeFidelityReport(path string, report LangGraphProbeFidelityReport) error {
 	if report.SchemaVersion != LangGraphProbeFidelityReportSchema {
 		return fmt.Errorf("unsupported LangGraph probe fidelity report schema %q", report.SchemaVersion)

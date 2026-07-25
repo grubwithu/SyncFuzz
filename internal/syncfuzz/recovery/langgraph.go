@@ -47,6 +47,87 @@ type LangGraphNativeCheckpointCoordinate struct {
 	Next               []string `json:"next"`
 }
 
+// LangGraphDurableToolCall identifies one tool invocation represented in the
+// persisted LangGraph message state. It deliberately excludes tool arguments
+// and result content: this is lifecycle provenance, not task evidence.
+type LangGraphDurableToolCall struct {
+	ToolCallID string `json:"tool_call_id"`
+	ToolName   string `json:"tool_name"`
+}
+
+// LangGraphDurableToolLifecycle records complete tool-call and tool-result
+// identities known by one durable checkpoint. A missing lifecycle object
+// means an older target artifact did not record this evidence; an empty object
+// means the target did record it and found no durable tool activity.
+type LangGraphDurableToolLifecycle struct {
+	ToolCalls     []LangGraphDurableToolCall `json:"tool_calls"`
+	ToolResultIDs []string                   `json:"tool_result_ids"`
+}
+
+func (l LangGraphDurableToolLifecycle) Validate() error {
+	seenCalls := make(map[string]struct{}, len(l.ToolCalls))
+	for _, call := range l.ToolCalls {
+		callID := strings.TrimSpace(call.ToolCallID)
+		if callID == "" || strings.TrimSpace(call.ToolName) == "" {
+			return fmt.Errorf("LangGraph durable tool lifecycle has an incomplete tool call")
+		}
+		if _, exists := seenCalls[callID]; exists {
+			return fmt.Errorf("LangGraph durable tool lifecycle repeats tool call %q", callID)
+		}
+		seenCalls[callID] = struct{}{}
+	}
+	seenResults := make(map[string]struct{}, len(l.ToolResultIDs))
+	for _, resultID := range l.ToolResultIDs {
+		resultID = strings.TrimSpace(resultID)
+		if resultID == "" {
+			return fmt.Errorf("LangGraph durable tool lifecycle has an empty tool result ID")
+		}
+		if _, exists := seenResults[resultID]; exists {
+			return fmt.Errorf("LangGraph durable tool lifecycle repeats tool result %q", resultID)
+		}
+		seenResults[resultID] = struct{}{}
+	}
+	return nil
+}
+
+func (l LangGraphDurableToolLifecycle) Clone() LangGraphDurableToolLifecycle {
+	result := LangGraphDurableToolLifecycle{
+		ToolCalls:     make([]LangGraphDurableToolCall, len(l.ToolCalls)),
+		ToolResultIDs: make([]string, len(l.ToolResultIDs)),
+	}
+	copy(result.ToolCalls, l.ToolCalls)
+	copy(result.ToolResultIDs, l.ToolResultIDs)
+	return result
+}
+
+// LangGraphToolEffectProvenance proves that one shell-tool command span
+// completely contained the timestamped eBPF effect interval. It is optional:
+// legacy lifecycle artifacts lack command-span monotonic timestamps, and an
+// ambiguous overlap must remain absent rather than being guessed.
+type LangGraphToolEffectProvenance struct {
+	ToolCallID                 string `json:"tool_call_id"`
+	ToolName                   string `json:"tool_name"`
+	ShellSessionID             string `json:"shell_session_id"`
+	CommandSHA256              string `json:"command_sha256"`
+	CommandStartedMonotonicNS  uint64 `json:"command_started_monotonic_ns"`
+	CommandFinishedMonotonicNS uint64 `json:"command_finished_monotonic_ns"`
+	FirstEffectMonotonicNS     uint64 `json:"first_effect_monotonic_ns"`
+	LastEffectMonotonicNS      uint64 `json:"last_effect_monotonic_ns"`
+}
+
+func (p LangGraphToolEffectProvenance) Validate() error {
+	if strings.TrimSpace(p.ToolCallID) == "" || strings.TrimSpace(p.ToolName) == "" || strings.TrimSpace(p.ShellSessionID) == "" || !isSHA256(p.CommandSHA256) {
+		return fmt.Errorf("LangGraph tool-effect provenance is incomplete")
+	}
+	if p.CommandStartedMonotonicNS == 0 || p.CommandFinishedMonotonicNS < p.CommandStartedMonotonicNS || p.FirstEffectMonotonicNS == 0 || p.LastEffectMonotonicNS < p.FirstEffectMonotonicNS {
+		return fmt.Errorf("LangGraph tool-effect provenance has invalid monotonic timestamps")
+	}
+	if p.FirstEffectMonotonicNS < p.CommandStartedMonotonicNS || p.LastEffectMonotonicNS > p.CommandFinishedMonotonicNS {
+		return fmt.Errorf("LangGraph tool-effect provenance does not contain its effect interval")
+	}
+	return nil
+}
+
 // LangGraphSourceRuntime pins the original, still-running container whose
 // network and PID namespaces hold the retained OS effect. The immutable ID
 // prevents a replacement container with the same name from supplying state.
@@ -147,6 +228,8 @@ type LangGraphForkPlan struct {
 	UnixSocketProbe                 LangGraphUnixSocketProbe                       `json:"unix_socket_probe"`
 	CheckpointCoordinates           map[string]LangGraphNativeCheckpointCoordinate `json:"checkpoint_coordinates"`
 	AgentStateByCheckpoint          map[string]StatePresence                       `json:"agent_state_by_checkpoint"`
+	ToolLifecycleByCheckpoint       map[string]LangGraphDurableToolLifecycle       `json:"tool_lifecycle_by_checkpoint,omitempty"`
+	ToolEffectProvenance            *LangGraphToolEffectProvenance                 `json:"tool_effect_provenance,omitempty"`
 }
 
 func (p LangGraphForkPlan) ValidateFor(plan RecordedPlan) error {
@@ -203,6 +286,25 @@ func (p LangGraphForkPlan) ValidateFor(plan RecordedPlan) error {
 		state, ok := p.AgentStateByCheckpoint[profileCheckpoint]
 		if !ok || (state != StatePresenceAbsent && state != StatePresencePresent) {
 			return fmt.Errorf("LangGraph fork plan has no deterministic logical-state projection for checkpoint %q", profileCheckpoint)
+		}
+	}
+	if len(p.ToolLifecycleByCheckpoint) != 0 {
+		if len(p.ToolLifecycleByCheckpoint) != len(p.CheckpointCoordinates) {
+			return fmt.Errorf("LangGraph fork plan requires one durable tool lifecycle projection per checkpoint when lifecycle evidence is present")
+		}
+		for profileCheckpoint := range p.CheckpointCoordinates {
+			lifecycle, ok := p.ToolLifecycleByCheckpoint[profileCheckpoint]
+			if !ok {
+				return fmt.Errorf("LangGraph fork plan has no durable tool lifecycle projection for checkpoint %q", profileCheckpoint)
+			}
+			if err := lifecycle.Validate(); err != nil {
+				return fmt.Errorf("LangGraph fork plan durable tool lifecycle for checkpoint %q: %w", profileCheckpoint, err)
+			}
+		}
+	}
+	if p.ToolEffectProvenance != nil {
+		if err := p.ToolEffectProvenance.Validate(); err != nil {
+			return fmt.Errorf("LangGraph fork plan tool-effect provenance: %w", err)
 		}
 	}
 	if hasMaterializationHead {

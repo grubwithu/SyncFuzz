@@ -15,6 +15,46 @@ state primitive
   -> reproducible artifacts
 ```
 
+## Recovery Relation Artifacts
+
+State synthesis validation, recovery-relation classification, and contract
+judgment are separate stages:
+
+```text
+Effect Validation -> StateSeed -> RecoveryRelationReport -> Contract Triage
+```
+
+`RecoveryRelationReport` records per before/after/head control: evidence
+status, logical effect phase, OS presence, resource origin, multiplicity,
+activity when an adapter can prove it, and a normalized relation class. The
+initial classes are `aligned`, `uncommitted-original-residual`,
+`missing-committed-effect`, `reconstruction`, `duplicate`, and `unknown`.
+`unknown` means evidence is incomplete; `contract_status=not-evaluated` means
+the relation is known but has not been compared with a framework contract.
+Neither state is a vulnerability verdict.
+
+The LangGraph target now emits `durable_tool_lifecycle` for every new native
+checkpoint: complete tool-call IDs/names plus tool-result IDs from persisted
+message history. The native binding and fork plan retain those snapshots, with
+an absent snapshot reserved for legacy artifacts and an explicit empty snapshot
+meaning no complete tool identity was durable. New lifecycle events also carry
+`CLOCK_MONOTONIC` timestamps. A binding writes `tool_effect_provenance` only
+when exactly one finished shell-command span fully contains the linked eBPF
+effect interval and the selected after checkpoint contains that call/result;
+missing timestamps, missing durable result, or multiple spans are unknown.
+When `recovery execute --out-relation` or `recovery classify-relation` reads a
+new LangGraph fork plan, it copies this result into
+`causal_effect_evidence`: `proven` carries the immutable tool-effect proof;
+legacy, missing, or ambiguous plan evidence is explicitly `unknown`. This is
+adapter evidence for later relation-novelty work, not an Oracle. It does not
+change the relation signature, logical phase, or `contract_status`, so the
+adapter still derives only `effect-not-committed` / `effect-committed`, not
+`PRE_CALL`, `CALL_DURABLE`, or `RESULT_DURABLE`. Future relation coverage will
+use complete normalized signatures rather than the legacy aggregate outcome
+field. Its current `seed_resource_ids` are the StateSeed's validated frontier
+scope, not yet a per-effect ResourceGraph edge set; exact effect/resource graph
+coverage remains future adapter work.
+
 ## V2.1a Profiling Evidence
 
 `syncfuzz profile analyze` is the offline, deterministic half of the new profiling pipeline. It consumes a target-produced checkpoint catalog, collector-produced raw-event JSONL, and probe-produced checkpoint state summaries. It writes normalized OS effects and a checkpoint-effect map; an interval becomes a frontier only when both event evidence and a confirmed persistent state delta are present.

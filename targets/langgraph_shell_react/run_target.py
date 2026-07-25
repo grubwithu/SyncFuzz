@@ -661,6 +661,12 @@ def summarize_native_checkpoints(
                 "persisted_monotonic_ns": int(
                     (persisted_monotonic_ns or {}).get(checkpoint_id, 0)
                 ),
+                # This is a checkpoint-owned message-history fact. It does
+                # not attribute an OS effect to a tool call; the controller
+                # still needs separate causal evidence for that conclusion.
+                "durable_tool_lifecycle": dict(
+                    item.get("durable_tool_lifecycle", {}) or {}
+                ),
             }
         )
     return {
@@ -716,6 +722,7 @@ def merge_lifecycle_artifacts(
     return {
         "schema_version": "syncfuzz.langgraph-lifecycle.v1",
         "thread_id": thread_id,
+        "clock_domain": "CLOCK_MONOTONIC",
         "workspace": str(workspace),
         "model": model,
         "provider": provider,
@@ -1113,6 +1120,12 @@ class LangGraphLifecycleRecorder:
             "at": utc_now_rfc3339(),
             "event": event,
         }
+        # This shares the boot-relative clock domain used by native checkpoint
+        # persistence and the controller/eBPF collector in the default Docker
+        # time namespace. It enables a later, evidence-only join from an OS
+        # effect interval to a shell-tool command span.
+        if "monotonic_ns" not in fields:
+            item["monotonic_ns"] = time.monotonic_ns()
         if self._current_operation:
             item["operation"] = self._current_operation
         for key, value in fields.items():
@@ -1295,6 +1308,7 @@ class LangGraphLifecycleRecorder:
         return {
             "schema_version": "syncfuzz.langgraph-lifecycle.v1",
             "thread_id": self.thread_id,
+            "clock_domain": "CLOCK_MONOTONIC",
             "workspace": self.workspace,
             "model": self.model,
             "provider": self.provider,
@@ -2487,6 +2501,9 @@ def summarize_history(history: list[Any]) -> list[dict[str, Any]]:
                 "next": list(getattr(state, "next", ()) or ()),
                 "message_count": len(messages),
                 "messages": summarize_messages(messages),
+                "durable_tool_lifecycle": summarize_durable_tool_lifecycle(
+                    messages
+                ),
             }
         )
     return items
@@ -2544,20 +2561,97 @@ def summarize_message_content(role: str, text: str) -> str:
     return text[:2000]
 
 
-def summarize_tool_calls(message: Any) -> list[dict[str, str]]:
+def message_tool_calls(message: Any) -> list[Any]:
     tool_calls = getattr(message, "tool_calls", None) or []
     if not tool_calls:
         additional = getattr(message, "additional_kwargs", {}) or {}
-        tool_calls = additional.get("tool_calls", []) or []
+        if isinstance(additional, dict):
+            tool_calls = additional.get("tool_calls", []) or []
+    if not isinstance(tool_calls, (list, tuple)):
+        return []
+    return list(tool_calls)
+
+
+def identity_text(value: Any) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def tool_call_identity(call: Any) -> tuple[str, str]:
+    if isinstance(call, dict):
+        function = call.get("function", {})
+        if not isinstance(function, dict):
+            function = {}
+        return (
+            identity_text(call.get("id", "")),
+            identity_text(call.get("name") or function.get("name", "")),
+        )
+    return (
+        identity_text(getattr(call, "id", "")),
+        identity_text(getattr(call, "name", "")),
+    )
+
+
+def tool_result_call_id(message: Any) -> str:
+    value = getattr(message, "tool_call_id", "")
+    if value:
+        return identity_text(value)
+    additional = getattr(message, "additional_kwargs", {}) or {}
+    if not isinstance(additional, dict):
+        return ""
+    return identity_text(additional.get("tool_call_id", ""))
+
+
+def summarize_durable_tool_lifecycle(messages: list[Any]) -> dict[str, Any]:
+    """Return only complete tool identities persisted in a checkpoint state.
+
+    Message contents and arguments remain in the normal history summary. This
+    compact ledger lets later evidence processing distinguish a durable tool
+    call/result from an arbitrary inferred agent phase without exposing task
+    text in the checkpoint manifest.
+    """
+    tool_calls: list[dict[str, str]] = []
+    tool_result_ids: list[str] = []
+    seen_call_ids: set[str] = set()
+    seen_result_ids: set[str] = set()
+    for message in messages:
+        for call in message_tool_calls(message):
+            tool_call_id, tool_name = tool_call_identity(call)
+            if not tool_call_id or not tool_name or tool_call_id in seen_call_ids:
+                continue
+            seen_call_ids.add(tool_call_id)
+            tool_calls.append(
+                {
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                }
+            )
+        if message_role(message) != "tool":
+            continue
+        tool_call_id = tool_result_call_id(message)
+        if not tool_call_id or tool_call_id in seen_result_ids:
+            continue
+        seen_result_ids.add(tool_call_id)
+        tool_result_ids.append(tool_call_id)
+    return {
+        "tool_calls": tool_calls,
+        "tool_result_ids": tool_result_ids,
+    }
+
+
+def summarize_tool_calls(message: Any) -> list[dict[str, str]]:
+    tool_calls = message_tool_calls(message)
     summary: list[dict[str, str]] = []
     for call in tool_calls[:4]:
         if isinstance(call, dict):
-            name = str(call.get("name") or call.get("function", {}).get("name", ""))
+            function = call.get("function", {})
+            if not isinstance(function, dict):
+                function = {}
+            name = str(call.get("name") or function.get("name", ""))
             args = call.get("args")
             if args is None:
                 args = call.get("arguments")
-            if args is None and isinstance(call.get("function"), dict):
-                args = call["function"].get("arguments")
+            if args is None:
+                args = function.get("arguments")
         else:
             name = str(getattr(call, "name", ""))
             args = getattr(call, "args", "")

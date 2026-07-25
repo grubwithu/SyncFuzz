@@ -367,7 +367,16 @@ func TestReadLangGraphNativeCheckpointManifestRequiresDurableExactIDs(t *testing
   "checkpoint_backend":"disk",
   "durable":true,
   "checkpoint_dir":"/workspace/langgraph-checkpoints",
-  "native_checkpoints":[{"checkpoint_id":"checkpoint-1","history_index":0,"message_count":3,"next":[]}]
+  "native_checkpoints":[{
+    "checkpoint_id":"checkpoint-1",
+    "history_index":0,
+    "message_count":3,
+    "next":[],
+    "durable_tool_lifecycle":{
+      "tool_calls":[{"tool_call_id":"call-1","tool_name":"shell"}],
+      "tool_result_ids":["call-1"]
+    }
+  }]
 }`), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
@@ -375,12 +384,17 @@ func TestReadLangGraphNativeCheckpointManifestRequiresDurableExactIDs(t *testing
 	if err != nil {
 		t.Fatalf("ReadLangGraphNativeCheckpointManifest returned error: %v", err)
 	}
-	if manifest.InitialRuntimeInstanceID != "langgraph-native-runtime:run-1" || len(manifest.NativeCheckpoints) != 1 {
+	if manifest.InitialRuntimeInstanceID != "langgraph-native-runtime:run-1" || len(manifest.NativeCheckpoints) != 1 || manifest.NativeCheckpoints[0].DurableToolLifecycle == nil || manifest.NativeCheckpoints[0].DurableToolLifecycle.ToolCalls[0].ToolName != "shell" {
 		t.Fatalf("unexpected manifest: %#v", manifest)
 	}
 	manifest.Durable = false
 	if err := manifest.Validate(); err == nil {
 		t.Fatal("expected non-durable manifest rejection")
+	}
+	manifest.Durable = true
+	manifest.NativeCheckpoints[0].DurableToolLifecycle.ToolResultIDs = []string{"call-1", "call-1"}
+	if err := manifest.Validate(); err == nil {
+		t.Fatal("expected duplicate durable tool result rejection")
 	}
 }
 
@@ -473,11 +487,11 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 		ClockDomain:              "CLOCK_MONOTONIC",
 		CheckpointDir:            "/workspace/langgraph-checkpoints",
 		NativeCheckpoints: []LangGraphNativeCheckpoint{
-			{CheckpointID: "too-early", HistoryIndex: 3, MessageCount: 1, PersistedMonotonicNS: 90},
-			{CheckpointID: "before-native", HistoryIndex: 2, MessageCount: 2, PersistedMonotonicNS: 130},
-			{CheckpointID: "inside-effect", HistoryIndex: 1, MessageCount: 3, PersistedMonotonicNS: 145},
-			{CheckpointID: "after-native", HistoryIndex: 0, MessageCount: 4, PersistedMonotonicNS: 170},
-			{CheckpointID: "head-native", HistoryIndex: 0, MessageCount: 5, PersistedMonotonicNS: 180},
+			{CheckpointID: "too-early", HistoryIndex: 3, MessageCount: 1, PersistedMonotonicNS: 90, DurableToolLifecycle: &LangGraphDurableToolLifecycle{}},
+			{CheckpointID: "before-native", HistoryIndex: 2, MessageCount: 2, PersistedMonotonicNS: 130, DurableToolLifecycle: &LangGraphDurableToolLifecycle{ToolCalls: []LangGraphDurableToolCall{{ToolCallID: "call-1", ToolName: "shell"}}}},
+			{CheckpointID: "inside-effect", HistoryIndex: 1, MessageCount: 3, PersistedMonotonicNS: 145, DurableToolLifecycle: &LangGraphDurableToolLifecycle{ToolCalls: []LangGraphDurableToolCall{{ToolCallID: "call-1", ToolName: "shell"}}}},
+			{CheckpointID: "after-native", HistoryIndex: 0, MessageCount: 4, PersistedMonotonicNS: 170, DurableToolLifecycle: &LangGraphDurableToolLifecycle{ToolCalls: []LangGraphDurableToolCall{{ToolCallID: "call-1", ToolName: "shell"}}, ToolResultIDs: []string{"call-1"}}},
+			{CheckpointID: "head-native", HistoryIndex: 0, MessageCount: 5, PersistedMonotonicNS: 180, DurableToolLifecycle: &LangGraphDurableToolLifecycle{ToolCalls: []LangGraphDurableToolCall{{ToolCallID: "call-1", ToolName: "shell"}}, ToolResultIDs: []string{"call-1"}}},
 		},
 	}
 	manifestPath := filepath.Join(t.TempDir(), "langgraph-native-checkpoints.json")
@@ -488,7 +502,16 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 	if err := os.WriteFile(manifestPath, manifestRaw, 0o644); err != nil {
 		t.Fatalf("write LangGraph native manifest: %v", err)
 	}
-	binding, err := BindLangGraphNativeFrontier(stateObjective, candidate, run, "C0..C1", manifestPath, manifest)
+	lifecycle := &LangGraphLifecycleArtifact{
+		SchemaVersion: LangGraphLifecycleArtifactSchema,
+		ThreadID:      "run-1",
+		ClockDomain:   "CLOCK_MONOTONIC",
+		Events: []LangGraphLifecycleEvent{
+			{Index: 0, Event: "shell_command_started", MonotonicNS: 135, ToolCallID: "call-1", ShellSessionID: "shell-1", CommandSHA256: strings.Repeat("a", 64)},
+			{Index: 1, Event: "shell_command_finished", MonotonicNS: 165, ToolCallID: "call-1"},
+		},
+	}
+	binding, err := BindLangGraphNativeFrontierWithLifecycle(stateObjective, candidate, run, "C0..C1", manifestPath, manifest, lifecycle)
 	if err != nil {
 		t.Fatalf("BindLangGraphNativeFrontier returned error: %v", err)
 	}
@@ -497,6 +520,24 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 	}
 	if binding.BeforeNativeCoordinate.SourceCheckpointID != "before-native" || binding.BeforeNativeCoordinate.HistoryIndex != 2 || binding.BeforeNativeCoordinate.MessageCount != 2 || binding.AfterNativeCoordinate.SourceCheckpointID != "after-native" || binding.AfterNativeCoordinate.HistoryIndex != 0 || binding.AfterNativeCoordinate.MessageCount != 4 {
 		t.Fatalf("binding did not preserve fresh-runtime native coordinates: %#v", binding)
+	}
+	if binding.BeforeNativeToolLifecycle == nil || binding.AfterNativeToolLifecycle == nil || len(binding.BeforeNativeToolLifecycle.ToolResultIDs) != 0 || len(binding.AfterNativeToolLifecycle.ToolResultIDs) != 1 {
+		t.Fatalf("binding did not preserve durable tool lifecycle evidence: %#v", binding)
+	}
+	if binding.ToolEffectProvenance == nil || binding.ToolEffectProvenance.ToolCallID != "call-1" || binding.ToolEffectProvenance.FirstEffectMonotonicNS != 140 || binding.ToolEffectProvenance.LastEffectMonotonicNS != 150 {
+		t.Fatalf("binding did not preserve exact tool-effect provenance: %#v", binding.ToolEffectProvenance)
+	}
+	withoutResult := manifest
+	withoutResult.NativeCheckpoints = append([]LangGraphNativeCheckpoint(nil), manifest.NativeCheckpoints...)
+	afterLifecycle := manifest.NativeCheckpoints[3].DurableToolLifecycle.Clone()
+	afterLifecycle.ToolResultIDs = nil
+	withoutResult.NativeCheckpoints[3].DurableToolLifecycle = &afterLifecycle
+	withoutResultBinding, err := BindLangGraphNativeFrontierWithLifecycle(stateObjective, candidate, run, "C0..C1", manifestPath, withoutResult, lifecycle)
+	if err != nil {
+		t.Fatalf("BindLangGraphNativeFrontierWithLifecycle without durable result returned error: %v", err)
+	}
+	if withoutResultBinding.ToolEffectProvenance != nil {
+		t.Fatalf("binding without an after-checkpoint durable result must keep provenance unknown: %#v", withoutResultBinding.ToolEffectProvenance)
 	}
 	sourceArtifactDir := t.TempDir()
 	sourceWorkspace := filepath.Join(sourceArtifactDir, "workspace")
@@ -542,6 +583,12 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 	if forkPlan.SourceThreadID != "run-1" || forkPlan.WorkspaceSnapshot.SourceWorkspace != sourceWorkspace || forkPlan.WorkspaceSnapshot.PassiveUnixSocketInode == 0 {
 		t.Fatalf("LangGraph fork plan did not preserve a source workspace snapshot: %#v", forkPlan.WorkspaceSnapshot)
 	}
+	if len(forkPlan.ToolLifecycleByCheckpoint) != 3 || len(forkPlan.ToolLifecycleByCheckpoint["C0"].ToolResultIDs) != 0 || len(forkPlan.ToolLifecycleByCheckpoint["C1"].ToolResultIDs) != 1 || len(forkPlan.ToolLifecycleByCheckpoint["C2"].ToolCalls) != 1 {
+		t.Fatalf("LangGraph fork plan did not preserve durable tool lifecycle evidence: %#v", forkPlan.ToolLifecycleByCheckpoint)
+	}
+	if forkPlan.ToolEffectProvenance == nil || forkPlan.ToolEffectProvenance.ToolCallID != "call-1" {
+		t.Fatalf("LangGraph fork plan did not preserve tool-effect provenance: %#v", forkPlan.ToolEffectProvenance)
+	}
 	headCoordinate, ok := forkPlan.CheckpointCoordinates["C2"]
 	if !ok || headCoordinate.Next == nil {
 		t.Fatalf("terminal LangGraph coordinate must retain an empty next array: %#v", headCoordinate)
@@ -568,6 +615,8 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 		"C0": forkPlan.AgentStateByCheckpoint["C0"],
 		"C1": forkPlan.AgentStateByCheckpoint["C1"],
 	}
+	legacyPlan.ToolLifecycleByCheckpoint = nil
+	legacyPlan.ToolEffectProvenance = nil
 	if err := legacyPlan.ValidateFor(recovery.RecordedPlan{
 		SchemaVersion:        recovery.SchemaVersion,
 		RecordedPlanID:       run.RecordedPlanID,

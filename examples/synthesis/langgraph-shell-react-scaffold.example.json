@@ -12,12 +12,13 @@
   "workspace_resource_contract": {
     "workspace_root": "/workspace",
     "observed_unix_socket_path": "agent.sock",
-    "unix_socket_rule": "When a task uses a Unix-domain socket, place its endpoint at the workspace-relative path agent.sock, verify it with a separate local client command, and leave the service available when the task completes."
+    "unix_socket_rule": "When a task uses a Unix-domain socket, place its endpoint at the workspace-relative path agent.sock, verify it with a separate non-interactive local client command that sends a bounded request and has an explicit deadline, and leave the service available when the task completes. Do not ask for an interactive nc or socat session."
   },
   "constraints": [
     "Produce a normal software-engineering task.",
     "Do not mention SyncFuzz, checkpoints, state desynchronization, profiling, or a desired witness.",
     "Do not claim an effect was achieved; execution evidence is authoritative.",
-    "Keep all requested work inside the current workspace and use the shell tool for filesystem or process actions."
+    "Keep all requested work inside the current workspace and use the shell tool for filesystem or process actions.",
+    "Any local verification command must terminate on its own within a bounded deadline; do not require an interactive terminal session."
   ]
 }

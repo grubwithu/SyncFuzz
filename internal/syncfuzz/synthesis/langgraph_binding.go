@@ -50,6 +50,9 @@ type LangGraphNativeFrontierBinding struct {
 	AfterNativeMonotonicNS    uint64                              `json:"after_native_monotonic_ns"`
 	BeforeNativeCoordinate    LangGraphNativeCheckpointCoordinate `json:"before_native_coordinate"`
 	AfterNativeCoordinate     LangGraphNativeCheckpointCoordinate `json:"after_native_coordinate"`
+	BeforeNativeToolLifecycle *LangGraphDurableToolLifecycle      `json:"before_native_tool_lifecycle,omitempty"`
+	AfterNativeToolLifecycle  *LangGraphDurableToolLifecycle      `json:"after_native_tool_lifecycle,omitempty"`
+	ToolEffectProvenance      *LangGraphToolEffectProvenance      `json:"tool_effect_provenance,omitempty"`
 	ManifestArtifact          string                              `json:"manifest_artifact"`
 }
 
@@ -75,6 +78,24 @@ func (b LangGraphNativeFrontierBinding) Validate() error {
 	if b.BeforeNativeCoordinate.SourceCheckpointID != b.BeforeNativeCheckpointID || b.AfterNativeCoordinate.SourceCheckpointID != b.AfterNativeCheckpointID {
 		return fmt.Errorf("LangGraph native frontier binding coordinate does not match native checkpoint ID")
 	}
+	if b.BeforeNativeToolLifecycle != nil {
+		if err := b.BeforeNativeToolLifecycle.Validate(); err != nil {
+			return fmt.Errorf("before native durable tool lifecycle: %w", err)
+		}
+	}
+	if b.AfterNativeToolLifecycle != nil {
+		if err := b.AfterNativeToolLifecycle.Validate(); err != nil {
+			return fmt.Errorf("after native durable tool lifecycle: %w", err)
+		}
+	}
+	if b.ToolEffectProvenance != nil {
+		if err := b.ToolEffectProvenance.Validate(); err != nil {
+			return fmt.Errorf("LangGraph tool-effect provenance: %w", err)
+		}
+		if b.ToolEffectProvenance.FirstEffectMonotonicNS != b.FirstEffectMonotonicNS || b.ToolEffectProvenance.LastEffectMonotonicNS != b.LastEffectMonotonicNS {
+			return fmt.Errorf("LangGraph tool-effect provenance does not match the binding effect interval")
+		}
+	}
 	return nil
 }
 
@@ -83,6 +104,13 @@ func (b LangGraphNativeFrontierBinding) Validate() error {
 // and the closest one persisted after its last required atom. It rejects an
 // ordinary checkpoint-history listing without monotonic persistence evidence.
 func BindLangGraphNativeFrontier(stateObjective objective.StateObjective, candidate SynthesisCandidate, run objective.ProfileRun, frontierID string, manifestPath string, manifest LangGraphNativeCheckpointManifest) (LangGraphNativeFrontierBinding, error) {
+	return BindLangGraphNativeFrontierWithLifecycle(stateObjective, candidate, run, frontierID, manifestPath, manifest, nil)
+}
+
+// BindLangGraphNativeFrontierWithLifecycle adds optional command-span
+// provenance to the native checkpoint binding. A missing or ambiguous span is
+// represented by a nil provenance field, never by a guessed tool call.
+func BindLangGraphNativeFrontierWithLifecycle(stateObjective objective.StateObjective, candidate SynthesisCandidate, run objective.ProfileRun, frontierID string, manifestPath string, manifest LangGraphNativeCheckpointManifest, lifecycle *LangGraphLifecycleArtifact) (LangGraphNativeFrontierBinding, error) {
 	if err := candidate.ValidateFor(stateObjective); err != nil {
 		return LangGraphNativeFrontierBinding{}, err
 	}
@@ -116,6 +144,18 @@ func BindLangGraphNativeFrontier(stateObjective objective.StateObjective, candid
 	if err != nil {
 		return LangGraphNativeFrontierBinding{}, err
 	}
+	var toolEffectProvenance *LangGraphToolEffectProvenance
+	if lifecycle != nil {
+		toolEffectProvenance, err = lifecycle.ToolEffectProvenance(firstEffect, lastEffect)
+		if err != nil {
+			return LangGraphNativeFrontierBinding{}, err
+		}
+		if toolEffectProvenance != nil && !nativeCheckpointRecordsToolResult(after, *toolEffectProvenance) {
+			// The shell span can still be real, but without a durable result in
+			// the after checkpoint it cannot support a tool/checkpoint relation.
+			toolEffectProvenance = nil
+		}
+	}
 	binding := LangGraphNativeFrontierBinding{
 		SchemaVersion:             LangGraphNativeFrontierBindingSchema,
 		CandidateID:               candidate.CandidateID,
@@ -132,12 +172,46 @@ func BindLangGraphNativeFrontier(stateObjective objective.StateObjective, candid
 		AfterNativeMonotonicNS:    after.PersistedMonotonicNS,
 		BeforeNativeCoordinate:    nativeCheckpointCoordinate(before),
 		AfterNativeCoordinate:     nativeCheckpointCoordinate(after),
+		BeforeNativeToolLifecycle: cloneLangGraphDurableToolLifecycle(before.DurableToolLifecycle),
+		AfterNativeToolLifecycle:  cloneLangGraphDurableToolLifecycle(after.DurableToolLifecycle),
+		ToolEffectProvenance:      toolEffectProvenance,
 		ManifestArtifact:          manifestPath,
 	}
 	if err := binding.Validate(); err != nil {
 		return LangGraphNativeFrontierBinding{}, err
 	}
 	return binding, nil
+}
+
+func nativeCheckpointRecordsToolResult(checkpoint LangGraphNativeCheckpoint, provenance LangGraphToolEffectProvenance) bool {
+	lifecycle := checkpoint.DurableToolLifecycle
+	if lifecycle == nil {
+		return false
+	}
+	hasCall := false
+	for _, call := range lifecycle.ToolCalls {
+		if call.ToolCallID == provenance.ToolCallID && call.ToolName == provenance.ToolName {
+			hasCall = true
+			break
+		}
+	}
+	if !hasCall {
+		return false
+	}
+	for _, resultID := range lifecycle.ToolResultIDs {
+		if resultID == provenance.ToolCallID {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneLangGraphDurableToolLifecycle(source *LangGraphDurableToolLifecycle) *LangGraphDurableToolLifecycle {
+	if source == nil {
+		return nil
+	}
+	clone := source.Clone()
+	return &clone
 }
 
 func nativeCheckpointCoordinate(checkpoint LangGraphNativeCheckpoint) LangGraphNativeCheckpointCoordinate {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/objective"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/recovery"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
@@ -23,6 +24,10 @@ const (
 	LangGraphCandidateExecutionSchema         = "syncfuzz.langgraph-candidate-execution.v1"
 	DefaultLangGraphProfileImage              = "syncfuzz-langgraph:dev"
 )
+
+type LangGraphDurableToolCall = recovery.LangGraphDurableToolCall
+type LangGraphDurableToolLifecycle = recovery.LangGraphDurableToolLifecycle
+type LangGraphToolEffectProvenance = recovery.LangGraphToolEffectProvenance
 
 // LangGraphNativeCheckpointManifest is target-owned evidence for one initial
 // LangGraph runtime. It deliberately names LangGraph checkpoint IDs separately
@@ -45,6 +50,10 @@ type LangGraphNativeCheckpoint struct {
 	MessageCount         int      `json:"message_count"`
 	Next                 []string `json:"next"`
 	PersistedMonotonicNS uint64   `json:"persisted_monotonic_ns,omitempty"`
+	// Nil means this legacy manifest did not record message-lifecycle
+	// provenance. A non-nil empty value proves no complete tool IDs were
+	// durable at this checkpoint.
+	DurableToolLifecycle *LangGraphDurableToolLifecycle `json:"durable_tool_lifecycle,omitempty"`
 }
 
 func ReadLangGraphNativeCheckpointManifest(path string) (LangGraphNativeCheckpointManifest, error) {
@@ -81,6 +90,11 @@ func (m LangGraphNativeCheckpointManifest) Validate() error {
 			return fmt.Errorf("LangGraph native checkpoint manifest repeats checkpoint %q", checkpoint.CheckpointID)
 		}
 		seen[checkpoint.CheckpointID] = struct{}{}
+		if checkpoint.DurableToolLifecycle != nil {
+			if err := checkpoint.DurableToolLifecycle.Validate(); err != nil {
+				return fmt.Errorf("LangGraph native checkpoint %q durable tool lifecycle: %w", checkpoint.CheckpointID, err)
+			}
+		}
 	}
 	return nil
 }

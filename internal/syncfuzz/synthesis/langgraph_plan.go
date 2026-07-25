@@ -3,6 +3,7 @@ package synthesis
 import (
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -51,6 +52,10 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("read LangGraph native manifest for materialization head: %w", err)
 	}
 	headNative, err := langGraphNativeMaterializationHead(manifest, binding, headMonotonicNS)
+	if err != nil {
+		return recovery.LangGraphForkPlan{}, err
+	}
+	toolLifecycleByCheckpoint, err := langGraphForkToolLifecycle(manifest, binding, headCheckpointID, headNative)
 	if err != nil {
 		return recovery.LangGraphForkPlan{}, err
 	}
@@ -106,11 +111,21 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 			binding.AfterProfileCheckpointID:  recovery.StatePresencePresent,
 			headCheckpointID:                  recovery.StatePresencePresent,
 		},
+		ToolLifecycleByCheckpoint: toolLifecycleByCheckpoint,
+		ToolEffectProvenance:      cloneLangGraphToolEffectProvenance(binding.ToolEffectProvenance),
 	}
 	if len(plan.CheckpointCoordinates) != 3 {
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph binding does not preserve before, after, and materialization-head coordinates")
 	}
 	return plan, nil
+}
+
+func cloneLangGraphToolEffectProvenance(source *LangGraphToolEffectProvenance) *recovery.LangGraphToolEffectProvenance {
+	if source == nil {
+		return nil
+	}
+	clone := recovery.LangGraphToolEffectProvenance(*source)
+	return &clone
 }
 
 func langGraphSourceRuntime(run objective.ProfileRun) (recovery.LangGraphSourceRuntime, error) {
@@ -290,4 +305,38 @@ func langGraphNativeMaterializationHead(manifest LangGraphNativeCheckpointManife
 		return LangGraphNativeCheckpoint{}, fmt.Errorf("LangGraph native manifest has no durable materialization head after frontier %q", binding.FrontierID)
 	}
 	return head, nil
+}
+
+// langGraphForkToolLifecycle keeps message-history lifecycle evidence only
+// when every coordinate in the fork plan came from a target that recorded it.
+// That preserves the distinction between an old artifact with no lifecycle
+// ledger and a new checkpoint whose ledger is explicitly empty.
+func langGraphForkToolLifecycle(manifest LangGraphNativeCheckpointManifest, binding LangGraphNativeFrontierBinding, headProfileCheckpointID string, head LangGraphNativeCheckpoint) (map[string]recovery.LangGraphDurableToolLifecycle, error) {
+	var before LangGraphNativeCheckpoint
+	var after LangGraphNativeCheckpoint
+	for _, checkpoint := range manifest.NativeCheckpoints {
+		switch checkpoint.CheckpointID {
+		case binding.BeforeNativeCheckpointID:
+			before = checkpoint
+		case binding.AfterNativeCheckpointID:
+			after = checkpoint
+		}
+	}
+	if before.CheckpointID == "" || after.CheckpointID == "" {
+		return nil, fmt.Errorf("LangGraph fork plan cannot resolve lifecycle checkpoint provenance")
+	}
+	if before.DurableToolLifecycle == nil || after.DurableToolLifecycle == nil || head.DurableToolLifecycle == nil {
+		return nil, nil
+	}
+	if binding.BeforeNativeToolLifecycle != nil && !reflect.DeepEqual(*binding.BeforeNativeToolLifecycle, *before.DurableToolLifecycle) {
+		return nil, fmt.Errorf("LangGraph before checkpoint durable tool lifecycle does not match its native manifest")
+	}
+	if binding.AfterNativeToolLifecycle != nil && !reflect.DeepEqual(*binding.AfterNativeToolLifecycle, *after.DurableToolLifecycle) {
+		return nil, fmt.Errorf("LangGraph after checkpoint durable tool lifecycle does not match its native manifest")
+	}
+	return map[string]recovery.LangGraphDurableToolLifecycle{
+		binding.BeforeProfileCheckpointID: before.DurableToolLifecycle.Clone(),
+		binding.AfterProfileCheckpointID:  after.DurableToolLifecycle.Clone(),
+		headProfileCheckpointID:           head.DurableToolLifecycle.Clone(),
+	}, nil
 }

@@ -97,7 +97,8 @@ Usage:
   syncfuzz profile promote-seed --objective objective.json [--profile-run profile-run.json | --target-run runs/<id> --profile-kind synthesis-candidate --synthesis-candidate candidate.json] --frontier before..after --out state-seed.json
   syncfuzz profile recovery-pair --objective objective.json --seed state-seed.json --passive-observation observation-id --out recovery-pair.json
   syncfuzz profile recovery-set --objective objective.json --seed state-seed.json --passive-observation observation-id [--retention-policy retain-relevant-os-state] --out historical-recovery-set.json
-  syncfuzz recovery execute --seed state-seed.json [--pair recovery-pair.json | --set historical-recovery-set.json] [--out recovery-execution.json] [--timeout 2m]
+  syncfuzz recovery execute --seed state-seed.json [--pair recovery-pair.json | --set historical-recovery-set.json] [--out recovery-execution.json] [--out-relation recovery-relation-report.json] [--timeout 2m]
+  syncfuzz recovery classify-relation --seed state-seed.json --execution recovery-set-execution.json --out recovery-relation-report.json
   syncfuzz recovery fidelity-report --roots runs/<trial-a>,runs/<trial-b> --out fidelity-report.json
   syncfuzz recovery fidelity-batch-report --root runs/<batch> --target-accepted-trials 3 --max-attempts 6 --out fidelity-report.json
   syncfuzz synthesis schedule --objectives objective-a.json,objective-b.json [--coverage-ledger coverage.json] [--limit 0] --out schedule.json
@@ -109,7 +110,7 @@ Usage:
   syncfuzz synthesis statefuzz-batch-report --objective objective.json --root runs/<batch> --out statefuzz-batch-report.json
   syncfuzz synthesis promote --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --out state-seed.json
   syncfuzz synthesis bind-maf-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest maf-workflow-fork-manifest.json --python python3 --runner targets/maf_workflow_checkpoint/run_target.py --prepared-workspace prepared --runtime-root forks --out-plan maf-fork-plan.json --out-profile-run bound-profile-run.json --out-binding native-frontier-binding.json
-  syncfuzz synthesis bind-langgraph-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest langgraph-native-checkpoints.json --out-binding langgraph-native-frontier-binding.json
+  syncfuzz synthesis bind-langgraph-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after [--lifecycle langgraph-lifecycle.json] --manifest langgraph-native-checkpoints.json --out-binding langgraph-native-frontier-binding.json
   syncfuzz synthesis prepare-langgraph-fork --objective objective.json --candidate candidate.json --profile-run profile-run.json --binding langgraph-native-frontier-binding.json --model provider:model --container-image syncfuzz-langgraph:dev --runtime-root recovery-runtimes --passive-unix-socket-path agent.sock --out-plan langgraph-fork-plan.json --out-profile-run bound-profile-run.json
   syncfuzz synthesis release-langgraph-runtime --profile-run profile-run.json
   syncfuzz profile container-scope --container <running-container>
@@ -165,12 +166,14 @@ func profile(args []string) {
 
 func runRecovery(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "syncfuzz recovery requires a subcommand; supported: execute, fidelity-report, fidelity-attempt, fidelity-batch-report")
+		fmt.Fprintln(os.Stderr, "syncfuzz recovery requires a subcommand; supported: execute, classify-relation, fidelity-report, fidelity-attempt, fidelity-batch-report")
 		os.Exit(2)
 	}
 	switch args[0] {
 	case "execute":
 		recoveryExecute(args[1:])
+	case "classify-relation":
+		recoveryClassifyRelation(args[1:])
 	case "fidelity-report":
 		recoveryFidelityReport(args[1:])
 	case "fidelity-attempt":
@@ -290,12 +293,17 @@ func recoveryExecute(args []string) {
 	pairPath := fs.String("pair", "", "fork RecoveryPair JSON path")
 	setPath := fs.String("set", "", "HistoricalRecoverySet JSON path")
 	outPath := fs.String("out", "recovery-execution.json", "recovery execution JSON output path")
+	outRelationPath := fs.String("out-relation", "", "optional recovery relation report output path; requires --set")
 	timeout := fs.Duration("timeout", 2*time.Minute, "maximum time for both fresh fork runtimes")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 	if strings.TrimSpace(*seedPath) == "" || (strings.TrimSpace(*pairPath) == "" && strings.TrimSpace(*setPath) == "") || (strings.TrimSpace(*pairPath) != "" && strings.TrimSpace(*setPath) != "") || *timeout <= 0 {
 		fmt.Fprintln(os.Stderr, "syncfuzz recovery execute requires --seed, exactly one of --pair or --set, and a positive --timeout")
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*outRelationPath) != "" && strings.TrimSpace(*setPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz recovery execute --out-relation requires --set because a relation report needs before, after, and head controls")
 		os.Exit(2)
 	}
 	seed, err := objective.ReadStateSeed(*seedPath)
@@ -329,6 +337,24 @@ func recoveryExecute(args []string) {
 		if err := recovery.WriteForkRecoverySetExecution(*outPath, *execution); err != nil {
 			fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
 			os.Exit(1)
+		}
+		if strings.TrimSpace(*outRelationPath) != "" {
+			causalEvidence, err := recovery.CausalEffectEvidenceForRecordedPlan(plan)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
+				os.Exit(1)
+			}
+			relationReport, err := recovery.BuildRecoveryRelationReportWithCausalEffectEvidence(seed, *execution, &causalEvidence)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
+				os.Exit(1)
+			}
+			if err := recovery.WriteRecoveryRelationReport(*outRelationPath, relationReport); err != nil {
+				fmt.Fprintf(os.Stderr, "syncfuzz recovery execute failed: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("causal_effect_evidence: %s\n", causalEvidence.Status)
+			fmt.Printf("relation_artifact: %s\n", *outRelationPath)
 		}
 		fmt.Printf("recovery_set_id: %s\n", execution.RecoverySetID)
 		fmt.Printf("before_runtime: %s\n", execution.Before.RuntimeInstanceID)
@@ -364,6 +390,61 @@ func recoveryExecute(args []string) {
 	fmt.Printf("before_runtime: %s\n", execution.Before.RuntimeInstanceID)
 	fmt.Printf("after_runtime: %s\n", execution.After.RuntimeInstanceID)
 	fmt.Printf("outcome: %s\n", execution.Classification.Outcome)
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func recoveryClassifyRelation(args []string) {
+	fs := flag.NewFlagSet("recovery classify-relation", flag.ExitOnError)
+	seedPath := fs.String("seed", "", "validated StateSeed JSON path")
+	executionPath := fs.String("execution", "", "ForkRecoverySetExecution JSON path")
+	outPath := fs.String("out", "recovery-relation-report.json", "recovery relation report JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*seedPath) == "" || strings.TrimSpace(*executionPath) == "" || strings.TrimSpace(*outPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz recovery classify-relation requires --seed, --execution, and --out")
+		os.Exit(2)
+	}
+	seed, err := objective.ReadStateSeed(*seedPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery classify-relation failed: %v\n", err)
+		os.Exit(1)
+	}
+	execution, err := recovery.ReadForkRecoverySetExecution(*executionPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery classify-relation failed: %v\n", err)
+		os.Exit(1)
+	}
+	plan := recovery.RecordedPlan{
+		SchemaVersion:         recovery.SchemaVersion,
+		RecordedPlanID:        seed.RecordedPlanID,
+		AdapterID:             seed.AdapterID,
+		TargetID:              seed.TargetID,
+		ExecutionArtifact:     seed.RecordedPlanArtifact,
+		PassiveObservationID:  execution.Before.PassiveObservationID,
+		MaterializationHeadID: execution.MaterializationHead.HeadID,
+		RetentionPolicy:       execution.RetentionPolicy,
+	}
+	causalEvidence, err := recovery.CausalEffectEvidenceForRecordedPlan(plan)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery classify-relation failed: %v\n", err)
+		os.Exit(1)
+	}
+	report, err := recovery.BuildRecoveryRelationReportWithCausalEffectEvidence(seed, execution, &causalEvidence)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery classify-relation failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := recovery.WriteRecoveryRelationReport(*outPath, report); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz recovery classify-relation failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("causal_effect_evidence: %s\n", causalEvidence.Status)
+	for _, control := range report.Controls {
+		fmt.Printf("%s_relation: %s\n", control.Name, control.Relation.Class)
+		fmt.Printf("%s_evidence: %s\n", control.Name, control.Evidence.Status)
+	}
+	fmt.Printf("contract_status: %s\n", report.Contract.Status)
 	fmt.Printf("artifact: %s\n", *outPath)
 }
 
@@ -898,6 +979,7 @@ func synthesisBindLangGraphFrontier(args []string) {
 	profileRunPath := fs.String("profile-run", "", "completed LangGraph synthesis ProfileRun JSON path")
 	frontierID := fs.String("frontier", "", "validated profiling frontier ID")
 	manifestPath := fs.String("manifest", "", "timestamped LangGraph native checkpoint manifest JSON path")
+	lifecyclePath := fs.String("lifecycle", "", "optional LangGraph lifecycle artifact; inferred from the recorded target workspace when available")
 	outBinding := fs.String("out-binding", "langgraph-native-frontier-binding.json", "LangGraph native frontier binding JSON output path")
 	outBeforeCoordinate := fs.String("out-before-coordinate", "", "optional fresh-runtime structural coordinate for the native checkpoint before the frontier")
 	outAfterCoordinate := fs.String("out-after-coordinate", "", "optional fresh-runtime structural coordinate for the native checkpoint after the frontier")
@@ -936,7 +1018,35 @@ func synthesisBindLangGraphFrontier(args []string) {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
 		os.Exit(1)
 	}
-	binding, err := synthesis.BindLangGraphNativeFrontier(stateObjective, candidate, profileRun, *frontierID, resolvedManifestPath, manifest)
+	var lifecycle *synthesis.LangGraphLifecycleArtifact
+	resolvedLifecyclePath := strings.TrimSpace(*lifecyclePath)
+	lifecycleExplicit := resolvedLifecyclePath != ""
+	if resolvedLifecyclePath == "" {
+		resolvedLifecyclePath, err = synthesis.InferLangGraphLifecycleArtifactPath(profileRun)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if _, statErr := os.Stat(resolvedLifecyclePath); statErr == nil {
+		value, readErr := synthesis.ReadLangGraphLifecycleArtifact(resolvedLifecyclePath)
+		if readErr != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", readErr)
+			os.Exit(1)
+		}
+		if value.ThreadID != manifest.ThreadID {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: lifecycle thread %q does not match native manifest thread %q\n", value.ThreadID, manifest.ThreadID)
+			os.Exit(1)
+		}
+		lifecycle = &value
+	} else if os.IsNotExist(statErr) && lifecycleExplicit {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: LangGraph lifecycle artifact %s does not exist\n", resolvedLifecyclePath)
+		os.Exit(1)
+	} else if !os.IsNotExist(statErr) {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: stat LangGraph lifecycle artifact %s: %v\n", resolvedLifecyclePath, statErr)
+		os.Exit(1)
+	}
+	binding, err := synthesis.BindLangGraphNativeFrontierWithLifecycle(stateObjective, candidate, profileRun, *frontierID, resolvedManifestPath, manifest, lifecycle)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
 		os.Exit(1)
@@ -961,6 +1071,11 @@ func synthesisBindLangGraphFrontier(args []string) {
 	fmt.Printf("before_native_checkpoint: %s\n", binding.BeforeNativeCheckpointID)
 	fmt.Printf("after_native_checkpoint: %s\n", binding.AfterNativeCheckpointID)
 	fmt.Printf("effect_window_monotonic_ns: %d..%d\n", binding.FirstEffectMonotonicNS, binding.LastEffectMonotonicNS)
+	if binding.ToolEffectProvenance == nil {
+		fmt.Println("tool_effect_provenance: unknown")
+	} else {
+		fmt.Printf("tool_effect_provenance: %s (%s)\n", binding.ToolEffectProvenance.ToolCallID, binding.ToolEffectProvenance.ToolName)
+	}
 	fmt.Printf("binding_artifact: %s\n", *outBinding)
 	if strings.TrimSpace(*outBeforeCoordinate) != "" {
 		fmt.Printf("before_coordinate_artifact: %s\n", *outBeforeCoordinate)

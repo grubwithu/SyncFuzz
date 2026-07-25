@@ -508,6 +508,30 @@ consistent < inconclusive < missing < residual < reconstruction < duplicate
 
 这套分类不是最终的自动 contract synthesis。它只提供可审计的 Agent/OS differential evidence；Oracle/Contract 自动化是后续独立工作，不能替代 effect validation 或 frontier selection。
 
+当前实现已开始将这两个层次拆成独立 artifact。`recovery-set-execution.json`
+继续保留 legacy aggregate outcome，供已有 calibration、fidelity 与兼容工具读取；
+`recovery-relation-report.json` 则独立写出每个 before/after/head control 的
+`evidence.status`、`logical_phase`、OS presence/origin/multiplicity、relation
+class 和 contract status。完整测量的
+`uncommitted-original-residual` 是可供后续 relation coverage 使用的发现；
+它的 `contract.status` 仍为 `not-evaluated`，不能被报告为漏洞。probe 不足时
+relation class 为 `unknown`，这与“relation 明确但框架 contract 未声明”不同。
+
+LangGraph target 现为每个新 native checkpoint 写入
+`durable_tool_lifecycle`，其中仅包含完整的 tool-call ID/name 与 tool-result
+ID；native binding 和 frozen fork plan 将其一并保存。缺失 lifecycle snapshot
+表示 legacy artifact，显式空 snapshot 表示该 checkpoint 的持久消息历史没有
+完整 tool identity。新 target 还为每个 lifecycle event 写入
+`CLOCK_MONOTONIC`：只有唯一完成的 shell-command span 完整包含 linked eBPF
+effect window，且 after native checkpoint 持久化同一 call/result 时，binding
+才记录 `tool_effect_provenance`。旧 artifact、缺 span timestamp、缺 durable
+result 或多个匹配 span 都明确是 unknown。`recovery execute --out-relation` 与
+`recovery classify-relation` 将 immutable fork plan 的这一结果复制为
+`causal_effect_evidence`（`proven` 或 `unknown`），为后续 relation-novelty
+提供输入。这一关联不是 Oracle，也不改变当前 relation classifier；projection
+仍只证明 `effect-not-committed` 或 `effect-committed`，不得将 checkpoint
+重新命名为 `PRE_CALL`、`CALL_DURABLE` 或 `RESULT_DURABLE`。
+
 ## 10. 关键 artifact 清单与审计路径
 
 `runs/` 是生成物目录，按项目纪律不会提交到 Git。汇报或复查此运行时应保留该目录。审计可按下面的顺序打开：
@@ -522,9 +546,9 @@ consistent < inconclusive < missing < residual < reconstruction < duplicate
 | normalized frontier | `checkpoint-effect-map.json` | persistent delta、evidence links、frontier score。 |
 | profile identity | `profile-run.json` | candidate/profile/native runtime/plan 的关联。 |
 | seed | `state-seed.json` | 已验证 atoms、frontier、资源 IDs。 |
-| native binding | `langgraph-native-frontier-binding.json` | effect window 与 exact native checkpoint 的时间关系。 |
-| frozen plan | `langgraph-fork-plan.json` | task/model/image/probe/two coordinates，且无 credential；head / retention 尚未显式化。 |
-| pair | `recovery-pair.json` | 当前 before / after compatibility subset；尚无 `Q_head`。 |
+| native binding | `langgraph-native-frontier-binding.json` | effect window 与 exact native checkpoint 的时间关系，以及 before/after 的 durable tool lifecycle snapshot。 |
+| frozen plan | `langgraph-fork-plan.json` | task/model/image/probe、before/after/head coordinates、retention 和 lifecycle snapshots，且无 credential。 |
+| recovery set | `recovery-set.json` | `Q_before` / `Q_after` / `Q_head` 与 materialization head contract。 |
 | before evidence | `recovery-runtimes/...3094571268/langgraph-recovery-observation.json` | 新 runtime、unique coordinate resolution、lstat metadata。 |
 | after evidence | `recovery-runtimes/...1228889475/langgraph-recovery-observation.json` | 同上。 |
 | final result | `fork-pair-execution.json` | 两个 observation 与 deterministic classification。 |
