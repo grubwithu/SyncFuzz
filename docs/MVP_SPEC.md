@@ -160,6 +160,40 @@ Oracle. The workspace-file probe currently supports only the full passive mode,
 so it is a second-family implementation and is not yet part of the listener
 fidelity batch.
 
+Generated workspace-file candidates use a separate bounded LangGraph scaffold
+that permits only regular files and directories. It forbids Unix sockets,
+FIFOs, symlinks, device nodes, and background services, because an unmodelled
+special workspace node cannot be safely cloned into a recovery runtime. This
+is target-resource conditioning before execution, not a content-based success
+Oracle; `LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE` selects this scaffold by
+default in the StateFuzz Make target.
+
+At recovery preparation, the selected resource is converted into the versioned
+`LangGraphRetainedResourceContract` persisted in the fork plan. The same
+contract drives a `LangGraphWorkspaceTopology` inventory, snapshot exclusion,
+and recovery bind mount. A workspace with a second socket, FIFO, device node,
+or symlink writes `workspace-topology.json` and becomes the structured
+StateFuzz outcome `rejected-resource-topology`; it is not collapsed into an
+executor failure. This checks cloneability of the observed resource topology,
+not task prose, file contents, or an expected final output.
+
+The retained container lease additionally records Docker's immutable image ID.
+`execute-langgraph` and `prepare-langgraph-fork` query
+`run_target.py --runtime-contract` inside the selected image, which reports the
+runner protocol plus the durable-checkpoint, exact-restore, and passive-observer
+capabilities. Preparation persists that response in the fork plan only when it
+matches the profiled source lease; every recovery query repeats it by immutable
+image ID and launches that same ID, so a mutable tag cannot change the runner.
+An incompatible runner contract is rejected. Existing profiles without an image
+ID cannot satisfy this new contract and must be profiled again.
+
+Because `handle/open` also describes target-wrapper artifact writes, the
+workspace-file binding receives the scaffold-owned workspace-relative path via
+`bind-langgraph-frontier --workspace-file-path`. It selects only exact
+canonical-path links for that retained file before deriving the native checkpoint
+window. This is evidence scoping from the target resource contract, not a
+content-based Oracle or a prompt-specific expected-result check.
+
 Update, 2026-07-24: the LangGraph listener path now requires
 `execute-langgraph --retain-runtime`. Its V3 fork plan records the immutable
 source container lease plus eBPF-linked kernel socket ID and holder FD.

@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -97,6 +98,69 @@ func TestLangGraphWorkspaceFileSnapshotClonesWithoutCopyingRetainedFile(t *testi
 	}
 }
 
+func TestLangGraphWorkspaceTopologyReportsUnmodelledSocketForFileContract(t *testing.T) {
+	source := t.TempDir()
+	for _, artifact := range []string{"target-task.json", "langgraph-checkpoints/storage.pkl", "agent-result.txt"} {
+		path := filepath.Join(source, artifact)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("create source artifact directory: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(artifact+"\n"), 0o644); err != nil {
+			t.Fatalf("write source artifact: %v", err)
+		}
+	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(source, "agent.sock"), Net: "unix"})
+	if err != nil {
+		t.Skipf("Unix sockets are unavailable in this test sandbox: %v", err)
+	}
+	defer listener.Close()
+
+	contract, err := NewLangGraphRetainedResourceContract(LangGraphRetainedWorkspaceFile, "agent-result.txt")
+	if err != nil {
+		t.Fatalf("NewLangGraphRetainedResourceContract: %v", err)
+	}
+	_, topology, err := CaptureLangGraphWorkspaceSnapshotForContract(source, contract)
+	var topologyError *LangGraphWorkspaceTopologyError
+	if !errors.As(err, &topologyError) {
+		t.Fatalf("expected a structured topology error, got topology=%#v err=%v", topology, err)
+	}
+	if len(topology.UnexpectedNodes) != 1 || topology.UnexpectedNodes[0].WorkspaceRelativePath != "agent.sock" || topology.UnexpectedNodes[0].Kind != "unix-socket" {
+		t.Fatalf("unexpected workspace topology inventory: %#v", topology)
+	}
+	if !reflect.DeepEqual(topologyError.Topology, topology) {
+		t.Fatalf("topology error must preserve the captured inventory: %#v", topologyError)
+	}
+}
+
+func TestParseLangGraphRuntimeContractRequiresRecoveryCapabilities(t *testing.T) {
+	imageID := "sha256:" + strings.Repeat("a", 64)
+	contract, err := ParseLangGraphRuntimeContract([]byte(`{
+  "schema_version":"syncfuzz.langgraph-runtime-contract.v1",
+  "target_id":"langgraph-shell-react",
+  "runner_protocol":"syncfuzz.langgraph-runner.v1",
+  "capabilities":[
+    "passive-workspace-file-observer-v1",
+    "exact-checkpoint-restore-v1",
+    "durable-disk-checkpoints-v1",
+    "passive-unix-socket-observer-v1"
+  ]
+}`), imageID)
+	if err != nil {
+		t.Fatalf("ParseLangGraphRuntimeContract: %v", err)
+	}
+	if contract.ImageID != imageID || len(contract.Capabilities) != 4 || contract.Capabilities[0] != "durable-disk-checkpoints-v1" {
+		t.Fatalf("runtime contract was not canonicalized: %#v", contract)
+	}
+	if _, err := ParseLangGraphRuntimeContract([]byte(`{
+  "schema_version":"syncfuzz.langgraph-runtime-contract.v1",
+  "target_id":"langgraph-shell-react",
+  "runner_protocol":"syncfuzz.langgraph-runner.v1",
+  "capabilities":["durable-disk-checkpoints-v1"]
+}`), imageID); err == nil {
+		t.Fatal("expected incomplete runtime capability set to be rejected")
+	}
+}
+
 func TestLangGraphWorkspaceSnapshotRejectsSymlinks(t *testing.T) {
 	source := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(source, "langgraph-checkpoints"), 0o755); err != nil {
@@ -162,6 +226,21 @@ func TestLangGraphRecoveryDockerArgsUseExactCheckpointIDAndSourceNamespaces(t *t
 	}
 	if !hasArgumentPair(args, "--passive-unix-socket-probe-mode", "full") || !hasArgumentPair(args, "--passive-unix-socket-expected-id", "socket:123") {
 		t.Fatalf("full recovery invocation must carry the recorded passive probe identity: %#v", args)
+	}
+}
+
+func TestLangGraphRecoveryDockerArgsPinsVerifiedRuntimeImage(t *testing.T) {
+	imageID := "sha256:" + strings.Repeat("a", 64)
+	plan := LangGraphForkPlan{
+		ContainerImage: "syncfuzz-langgraph:mutable",
+		RuntimeContract: LangGraphRuntimeContract{
+			SchemaVersion: LangGraphRuntimeContractSchema,
+			ImageID:       imageID,
+		},
+	}
+	args := langGraphRecoveryDockerArgs(plan, "/recovery/workspace", "runtime-1", 10001, 10001, "native-checkpoint-1", nil)
+	if !hasArgument(args, imageID) || hasArgument(args, plan.ContainerImage) {
+		t.Fatalf("recovery invocation must use the verified immutable image ID: %#v", args)
 	}
 }
 

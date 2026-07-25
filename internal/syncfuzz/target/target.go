@@ -280,11 +280,12 @@ type TargetProfilingAnalysisResult struct {
 // target run. ContainerID prevents a later container with the same name from
 // being mistaken for the profiled OS state.
 type TargetRuntimeLease struct {
-	SchemaVersion  string `json:"schema_version"`
-	Environment    string `json:"environment"`
-	ContainerName  string `json:"container_name"`
-	ContainerID    string `json:"container_id"`
-	ContainerImage string `json:"container_image"`
+	SchemaVersion    string `json:"schema_version"`
+	Environment      string `json:"environment"`
+	ContainerName    string `json:"container_name"`
+	ContainerID      string `json:"container_id"`
+	ContainerImage   string `json:"container_image"`
+	ContainerImageID string `json:"container_image_id,omitempty"`
 }
 
 const TargetRuntimeLeaseSchema = "syncfuzz.target-runtime-lease.v1"
@@ -292,6 +293,9 @@ const TargetRuntimeLeaseSchema = "syncfuzz.target-runtime-lease.v1"
 func (l TargetRuntimeLease) Validate() error {
 	if l.SchemaVersion != TargetRuntimeLeaseSchema || l.Environment != "container" || strings.TrimSpace(l.ContainerName) == "" || strings.TrimSpace(l.ContainerID) == "" || strings.TrimSpace(l.ContainerImage) == "" {
 		return fmt.Errorf("target runtime lease is incomplete")
+	}
+	if l.ContainerImageID != "" && !strings.HasPrefix(l.ContainerImageID, "sha256:") {
+		return fmt.Errorf("target runtime lease has an invalid container image ID")
 	}
 	return nil
 }
@@ -995,20 +999,21 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 }
 
 func inspectTargetRuntimeLease(ctx context.Context, containerName string, containerImage string) (TargetRuntimeLease, error) {
-	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Id}} {{.State.Running}} {{.Config.Image}}", containerName).CombinedOutput()
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Id}} {{.State.Running}} {{.Config.Image}} {{.Image}}", containerName).CombinedOutput()
 	if err != nil {
 		return TargetRuntimeLease{}, fmt.Errorf("inspect retained target runtime %q: %w: %s", containerName, err, strings.TrimSpace(string(output)))
 	}
 	fields := strings.Fields(string(output))
-	if len(fields) != 3 || fields[0] == "" || fields[1] != "true" || fields[2] != containerImage {
+	if len(fields) != 4 || fields[0] == "" || fields[1] != "true" || fields[2] != containerImage || !strings.HasPrefix(fields[3], "sha256:") {
 		return TargetRuntimeLease{}, fmt.Errorf("retained target runtime %q is not the expected running image", containerName)
 	}
 	lease := TargetRuntimeLease{
-		SchemaVersion:  TargetRuntimeLeaseSchema,
-		Environment:    "container",
-		ContainerName:  containerName,
-		ContainerID:    fields[0],
-		ContainerImage: containerImage,
+		SchemaVersion:    TargetRuntimeLeaseSchema,
+		Environment:      "container",
+		ContainerName:    containerName,
+		ContainerID:      fields[0],
+		ContainerImage:   containerImage,
+		ContainerImageID: fields[3],
 	}
 	return lease, lease.Validate()
 }

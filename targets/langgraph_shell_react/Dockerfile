@@ -3,6 +3,8 @@
 # on the host and filters only the container cgroup.
 FROM python:3.11-slim
 
+LABEL org.syncfuzz.langgraph.runtime-contract="syncfuzz.langgraph-runtime-contract.v1"
+
 WORKDIR /opt/syncfuzz-langgraph
 
 RUN apt-get update \

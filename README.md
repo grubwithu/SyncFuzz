@@ -165,8 +165,12 @@ scheduler assigns the candidate ID, and every synthesis ProfileRun/StateSeed
 must carry that ID before it can be retained. There is no built-in LLM
 generator: [the MAF scaffold example](examples/synthesis/maf-workflow-scaffold.example.json)
 defines the context a separately configured generator may read.
-The corresponding [LangGraph scaffold](examples/synthesis/langgraph-shell-react-scaffold.example.json)
-is used by the isolated real-candidate execution path.
+The corresponding [Unix-listener LangGraph scaffold](examples/synthesis/langgraph-shell-react-scaffold.example.json)
+and [regular-workspace-file scaffold](examples/synthesis/langgraph-shell-react-workspace-file-scaffold.example.json)
+are selected by the isolated real-candidate execution path according to its
+retained resource. The file scaffold permits only regular workspace files and
+directories, preventing an unrelated socket or other special node from making
+the recovery snapshot ambiguous.
 The example objective set also includes
 [`handle.workspace-file.survival`](examples/objectives/workspace-file-survival.example.json),
 which exercises the retained regular-workspace-file observer. Its recovery
@@ -237,15 +241,31 @@ caller explicitly selects a generator implementation with
 `examples/synthesis/openai_compatible_generator.py` is an opt-in
 OpenAI-compatible adapter. It reads the target-owned scaffold identified in
 the bounded request so generated tasks observe its stable workspace-resource
-contract; a manually supplied task is never treated as generated coverage. The target profiles the generated
+contract; `LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE` automatically selects
+the regular-file-only scaffold, while callers may override it with
+`LANGGRAPH_STATEFUZZ_SCAFFOLD`. A manually supplied task is never treated as generated coverage. The target profiles the generated
 candidate, writes `evaluation.json`, and only promotes a validated candidate to
 a StateSeed. To repair a rejected candidate, pass that evaluation artifact to
 the next attempt through `LANGGRAPH_STATEFUZZ_FEEDBACK=<root>/evaluation.json`;
 only bounded atom-level observation feedback is reintroduced.
+Before recovery preparation, the target turns the selected retained resource
+into a versioned `LangGraphRetainedResourceContract` and inventories the source
+workspace. The contract permits one retained socket or one retained regular
+file; any additional socket, FIFO, device, or symlink is emitted in
+`workspace-topology.json` and rejected before cloning. This audits execution
+topology only: it does not read file contents or judge whether the Agent's task
+succeeded.
+The profiled lease also records the immutable Docker image ID. The host queries
+`run_target.py --runtime-contract` inside that exact image before preparation,
+persists the runner protocol and required recovery capabilities in the fork
+plan, and repeats the query by immutable image ID before recovery. A later tag
+move cannot change the image that executes a recovery query; an incompatible
+runner contract is rejected.
 Each generated trial also writes `statefuzz-attempt.json`. It distinguishes an
 accepted recovery run from `rejected-evaluation`, `rejected-source-baseline`,
-and an actual execution failure, so an invalid listener-holder baseline remains
-part of the experimental denominator without being misreported as a crash.
+`rejected-resource-topology`, and an actual execution failure, so an invalid
+source workspace remains part of the experimental denominator without being
+misreported as a crash.
 Each `LANGGRAPH_SYNTHESIS_ROOT` is single-use; the target refuses an existing
 root so candidate, profile, and recovery artifacts cannot be mixed across
 provider invocations.

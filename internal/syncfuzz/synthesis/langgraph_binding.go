@@ -3,6 +3,7 @@ package synthesis
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/objective"
@@ -53,7 +54,17 @@ type LangGraphNativeFrontierBinding struct {
 	BeforeNativeToolLifecycle *LangGraphDurableToolLifecycle      `json:"before_native_tool_lifecycle,omitempty"`
 	AfterNativeToolLifecycle  *LangGraphDurableToolLifecycle      `json:"after_native_tool_lifecycle,omitempty"`
 	ToolEffectProvenance      *LangGraphToolEffectProvenance      `json:"tool_effect_provenance,omitempty"`
+	ObservedWorkspaceFilePath string                              `json:"observed_workspace_file_path,omitempty"`
+	ObjectiveEffectIDs        []string                            `json:"objective_effect_ids,omitempty"`
 	ManifestArtifact          string                              `json:"manifest_artifact"`
+}
+
+// LangGraphNativeFrontierBindingConfig scopes a broad effect atom to an
+// adapter-owned observable resource when the objective grammar alone cannot
+// distinguish it from target wrapper activity. It is evidence selection, not
+// a task-success Oracle: the path comes from the scaffold resource contract.
+type LangGraphNativeFrontierBindingConfig struct {
+	ObservedWorkspaceFilePath string
 }
 
 func (b LangGraphNativeFrontierBinding) Validate() error {
@@ -96,6 +107,25 @@ func (b LangGraphNativeFrontierBinding) Validate() error {
 			return fmt.Errorf("LangGraph tool-effect provenance does not match the binding effect interval")
 		}
 	}
+	if strings.TrimSpace(b.ObservedWorkspaceFilePath) != "" {
+		if _, err := langGraphWorkspaceCanonicalPath(b.ObservedWorkspaceFilePath); err != nil {
+			return fmt.Errorf("LangGraph native frontier binding workspace file path: %w", err)
+		}
+		if len(b.ObjectiveEffectIDs) == 0 {
+			return fmt.Errorf("LangGraph native frontier binding has no scoped objective effects")
+		}
+	}
+	seenEffects := make(map[string]struct{}, len(b.ObjectiveEffectIDs))
+	for _, effectID := range b.ObjectiveEffectIDs {
+		effectID = strings.TrimSpace(effectID)
+		if effectID == "" {
+			return fmt.Errorf("LangGraph native frontier binding has an empty objective effect ID")
+		}
+		if _, exists := seenEffects[effectID]; exists {
+			return fmt.Errorf("LangGraph native frontier binding repeats objective effect %q", effectID)
+		}
+		seenEffects[effectID] = struct{}{}
+	}
 	return nil
 }
 
@@ -104,13 +134,21 @@ func (b LangGraphNativeFrontierBinding) Validate() error {
 // and the closest one persisted after its last required atom. It rejects an
 // ordinary checkpoint-history listing without monotonic persistence evidence.
 func BindLangGraphNativeFrontier(stateObjective objective.StateObjective, candidate SynthesisCandidate, run objective.ProfileRun, frontierID string, manifestPath string, manifest LangGraphNativeCheckpointManifest) (LangGraphNativeFrontierBinding, error) {
-	return BindLangGraphNativeFrontierWithLifecycle(stateObjective, candidate, run, frontierID, manifestPath, manifest, nil)
+	return BindLangGraphNativeFrontierWithLifecycleAndConfig(stateObjective, candidate, run, frontierID, manifestPath, manifest, nil, LangGraphNativeFrontierBindingConfig{})
 }
 
 // BindLangGraphNativeFrontierWithLifecycle adds optional command-span
 // provenance to the native checkpoint binding. A missing or ambiguous span is
 // represented by a nil provenance field, never by a guessed tool call.
 func BindLangGraphNativeFrontierWithLifecycle(stateObjective objective.StateObjective, candidate SynthesisCandidate, run objective.ProfileRun, frontierID string, manifestPath string, manifest LangGraphNativeCheckpointManifest, lifecycle *LangGraphLifecycleArtifact) (LangGraphNativeFrontierBinding, error) {
+	return BindLangGraphNativeFrontierWithLifecycleAndConfig(stateObjective, candidate, run, frontierID, manifestPath, manifest, lifecycle, LangGraphNativeFrontierBindingConfig{})
+}
+
+// BindLangGraphNativeFrontierWithLifecycleAndConfig adds a target-owned
+// resource scope to lifecycle-aware native binding. The scope prevents a
+// generic atom such as handle/open from absorbing wrapper artifact writes in
+// the same controller frontier.
+func BindLangGraphNativeFrontierWithLifecycleAndConfig(stateObjective objective.StateObjective, candidate SynthesisCandidate, run objective.ProfileRun, frontierID string, manifestPath string, manifest LangGraphNativeCheckpointManifest, lifecycle *LangGraphLifecycleArtifact, config LangGraphNativeFrontierBindingConfig) (LangGraphNativeFrontierBinding, error) {
 	if err := candidate.ValidateFor(stateObjective); err != nil {
 		return LangGraphNativeFrontierBinding{}, err
 	}
@@ -132,11 +170,14 @@ func BindLangGraphNativeFrontierWithLifecycle(stateObjective objective.StateObje
 	if strings.TrimSpace(manifestPath) == "" {
 		return LangGraphNativeFrontierBinding{}, fmt.Errorf("LangGraph native binding requires a manifest artifact path")
 	}
+	if err := config.ValidateFor(stateObjective); err != nil {
+		return LangGraphNativeFrontierBinding{}, err
+	}
 	frontier, ok := profileFrontier(run, frontierID)
 	if !ok || !frontier.IsFrontier || !frontier.PersistentDelta.Changed() || len(frontier.EvidenceLinks) == 0 || frontier.StartMonotonicNS == 0 || frontier.EndMonotonicNS <= frontier.StartMonotonicNS {
 		return LangGraphNativeFrontierBinding{}, fmt.Errorf("profile run has no timestamped validated persistent frontier %q", frontierID)
 	}
-	firstEffect, lastEffect, err := linkedObjectiveEffectWindow(frontier, stateObjective)
+	firstEffect, lastEffect, objectiveEffectIDs, err := linkedObjectiveEffectWindow(frontier, stateObjective, config)
 	if err != nil {
 		return LangGraphNativeFrontierBinding{}, err
 	}
@@ -175,12 +216,28 @@ func BindLangGraphNativeFrontierWithLifecycle(stateObjective objective.StateObje
 		BeforeNativeToolLifecycle: cloneLangGraphDurableToolLifecycle(before.DurableToolLifecycle),
 		AfterNativeToolLifecycle:  cloneLangGraphDurableToolLifecycle(after.DurableToolLifecycle),
 		ToolEffectProvenance:      toolEffectProvenance,
+		ObservedWorkspaceFilePath: strings.TrimSpace(config.ObservedWorkspaceFilePath),
+		ObjectiveEffectIDs:        objectiveEffectIDs,
 		ManifestArtifact:          manifestPath,
 	}
 	if err := binding.Validate(); err != nil {
 		return LangGraphNativeFrontierBinding{}, err
 	}
 	return binding, nil
+}
+
+func (c LangGraphNativeFrontierBindingConfig) ValidateFor(stateObjective objective.StateObjective) error {
+	path := strings.TrimSpace(c.ObservedWorkspaceFilePath)
+	if path == "" {
+		return nil
+	}
+	if len(stateObjective.Effects) != 1 || stateObjective.Effects[0].Family != profiling.StateFamilyHandle || stateObjective.Effects[0].Operation != "open" {
+		return fmt.Errorf("LangGraph workspace file scope requires a single handle/open objective")
+	}
+	if _, err := langGraphWorkspaceCanonicalPath(path); err != nil {
+		return fmt.Errorf("LangGraph workspace file scope: %w", err)
+	}
+	return nil
 }
 
 func nativeCheckpointRecordsToolResult(checkpoint LangGraphNativeCheckpoint, provenance LangGraphToolEffectProvenance) bool {
@@ -228,24 +285,50 @@ func nativeCheckpointCoordinate(checkpoint LangGraphNativeCheckpoint) LangGraphN
 	}
 }
 
-func linkedObjectiveEffectWindow(frontier profiling.CheckpointInterval, stateObjective objective.StateObjective) (uint64, uint64, error) {
+func linkedObjectiveEffectWindow(frontier profiling.CheckpointInterval, stateObjective objective.StateObjective, config LangGraphNativeFrontierBindingConfig) (uint64, uint64, []string, error) {
 	linked := make(map[string]struct{}, len(frontier.EvidenceLinks))
+	linkedWorkspaceFileEffects := make(map[string]struct{})
+	workspaceFilePath := ""
+	if strings.TrimSpace(config.ObservedWorkspaceFilePath) != "" {
+		var err error
+		workspaceFilePath, err = langGraphWorkspaceCanonicalPath(config.ObservedWorkspaceFilePath)
+		if err != nil {
+			return 0, 0, nil, err
+		}
+	}
+	effectsByID := make(map[string]profiling.NormalizedEffect, len(frontier.Effects))
+	for _, effect := range frontier.Effects {
+		effectsByID[effect.EffectID] = effect
+	}
 	for _, link := range frontier.EvidenceLinks {
 		linked[link.EffectID] = struct{}{}
+		if workspaceFilePath == "" || link.Relation != profiling.EvidenceLinkExactCanonicalPath {
+			continue
+		}
+		effect, ok := effectsByID[link.EffectID]
+		if ok && effect.Resource.CanonicalPath == workspaceFilePath {
+			linkedWorkspaceFileEffects[link.EffectID] = struct{}{}
+		}
 	}
 	found := make(map[string]bool, len(stateObjective.Effects))
+	objectiveEffectIDs := make([]string, 0)
 	var first uint64
 	var last uint64
 	for _, effect := range frontier.Effects {
 		if _, ok := linked[effect.EffectID]; !ok {
 			continue
 		}
+		if workspaceFilePath != "" {
+			if _, ok := linkedWorkspaceFileEffects[effect.EffectID]; !ok {
+				continue
+			}
+		}
 		for _, atom := range stateObjective.CanonicalEffects() {
 			if effect.Family != atom.Family || effect.Operation != atom.Operation {
 				continue
 			}
 			if effect.MonotonicNS == 0 {
-				return 0, 0, fmt.Errorf("validated objective effect %q has no monotonic timestamp", effect.EffectID)
+				return 0, 0, nil, fmt.Errorf("validated objective effect %q has no monotonic timestamp", effect.EffectID)
 			}
 			key := string(atom.Family) + "\x00" + atom.Operation
 			found[key] = true
@@ -255,18 +338,21 @@ func linkedObjectiveEffectWindow(frontier profiling.CheckpointInterval, stateObj
 			if effect.MonotonicNS > last {
 				last = effect.MonotonicNS
 			}
+			objectiveEffectIDs = append(objectiveEffectIDs, effect.EffectID)
+			break
 		}
 	}
 	for _, atom := range stateObjective.CanonicalEffects() {
 		key := string(atom.Family) + "\x00" + atom.Operation
 		if !found[key] {
-			return 0, 0, fmt.Errorf("frontier %q has no linked objective effect %s/%s", frontier.FrontierID, atom.Family, atom.Operation)
+			return 0, 0, nil, fmt.Errorf("frontier %q has no linked objective effect %s/%s", frontier.FrontierID, atom.Family, atom.Operation)
 		}
 	}
 	if first <= frontier.StartMonotonicNS || last > frontier.EndMonotonicNS {
-		return 0, 0, fmt.Errorf("linked objective effect window does not lie inside frontier %q", frontier.FrontierID)
+		return 0, 0, nil, fmt.Errorf("linked objective effect window does not lie inside frontier %q", frontier.FrontierID)
 	}
-	return first, last, nil
+	sort.Strings(objectiveEffectIDs)
+	return first, last, objectiveEffectIDs, nil
 }
 
 func nativeCheckpointsAroundEffect(manifest LangGraphNativeCheckpointManifest, frontier profiling.CheckpointInterval, firstEffect uint64, lastEffect uint64) (LangGraphNativeCheckpoint, LangGraphNativeCheckpoint, error) {

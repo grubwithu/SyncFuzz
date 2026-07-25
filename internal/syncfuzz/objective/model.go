@@ -93,11 +93,12 @@ const (
 // profiled container's live OS state after the profiling command returned.
 // It carries a Docker identity rather than credentials or host paths.
 type RetainedRuntime struct {
-	SchemaVersion  string `json:"schema_version"`
-	Environment    string `json:"environment"`
-	ContainerName  string `json:"container_name"`
-	ContainerID    string `json:"container_id"`
-	ContainerImage string `json:"container_image"`
+	SchemaVersion    string `json:"schema_version"`
+	Environment      string `json:"environment"`
+	ContainerName    string `json:"container_name"`
+	ContainerID      string `json:"container_id"`
+	ContainerImage   string `json:"container_image"`
+	ContainerImageID string `json:"container_image_id,omitempty"`
 }
 
 const RetainedRuntimeSchema = "syncfuzz.target-runtime-lease.v1"
@@ -105,6 +106,9 @@ const RetainedRuntimeSchema = "syncfuzz.target-runtime-lease.v1"
 func (r RetainedRuntime) Validate() error {
 	if r.SchemaVersion != RetainedRuntimeSchema || r.Environment != "container" || strings.TrimSpace(r.ContainerName) == "" || strings.TrimSpace(r.ContainerID) == "" || strings.TrimSpace(r.ContainerImage) == "" {
 		return fmt.Errorf("retained runtime is incomplete")
+	}
+	if r.ContainerImageID != "" && !strings.HasPrefix(r.ContainerImageID, "sha256:") {
+		return fmt.Errorf("retained runtime has an invalid container image ID")
 	}
 	return nil
 }

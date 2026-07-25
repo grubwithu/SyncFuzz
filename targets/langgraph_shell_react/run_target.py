@@ -271,6 +271,11 @@ def parse_args() -> argparse.Namespace:
         help="Fail if the agent returns without an observed shell tool message.",
     )
     parser.add_argument(
+        "--runtime-contract",
+        action="store_true",
+        help="Print the runner compatibility contract and exit without initializing a model.",
+    )
+    parser.add_argument(
         "--internal-phase",
         choices=("full", "initial", "resume"),
         default="full",
@@ -282,6 +287,20 @@ def parse_args() -> argparse.Namespace:
 def env_bool(name: str) -> bool:
     value = os.environ.get(name, "").strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def runtime_contract() -> dict[str, Any]:
+    return {
+        "schema_version": "syncfuzz.langgraph-runtime-contract.v1",
+        "target_id": "langgraph-shell-react",
+        "runner_protocol": "syncfuzz.langgraph-runner.v1",
+        "capabilities": [
+            "durable-disk-checkpoints-v1",
+            "exact-checkpoint-restore-v1",
+            "passive-unix-socket-observer-v1",
+            "passive-workspace-file-observer-v1",
+        ],
+    }
 
 
 def import_langchain_runtime() -> tuple[Any, Any, Any, Any, Any, Any, Any, Any]:
@@ -2774,6 +2793,9 @@ def write_json(path: Path, value: Any) -> None:
 
 def main() -> int:
     args = parse_args()
+    if args.runtime_contract:
+        print(json.dumps(runtime_contract(), sort_keys=True, separators=(",", ":")))
+        return 0
     if (
         args.internal_phase == "full"
         and args.process_mode == "split-process"

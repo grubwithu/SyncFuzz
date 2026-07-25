@@ -84,9 +84,12 @@ profile records `persisted_monotonic_ns` for each native checkpoint; use that
 evidence to produce a binding only when it brackets the linked effect window:
 
 `synthesis/langgraph-shell-react-scaffold.example.json` is the bounded
-generator context for that route. It describes only the target-owned project
-surface and prohibitions; it does not prescribe a testcase, an expected
-effect, or a recovery query.
+generator context for the Unix-listener route. The regular-workspace-file
+route instead uses
+`synthesis/langgraph-shell-react-workspace-file-scaffold.example.json`, which
+permits only regular files and directories and excludes sockets, other special
+files, and background services. Neither scaffold prescribes a testcase, an
+expected effect, or a recovery query.
 
 For an opt-in OpenAI-compatible task generator, first make sure `.env` defines
 `OPENAI_API_KEY` and `LANGCHAIN_MODEL=openai:<model>`. The adapter uses
@@ -99,6 +102,22 @@ recovery controls.
 make synthesis-langgraph-statefuzz-attempt \
   LANGGRAPH_SYNTHESIS_OBJECTIVE=examples/objectives/unix-listener-survival.example.json \
   LANGGRAPH_SYNTHESIS_ROOT=runs/langgraph-statefuzz/attempt-000 \
+  LANGGRAPH_STATEFUZZ_GENERATOR_ID=openai-compatible-generator-v2 \
+  LANGGRAPH_STATEFUZZ_GENERATOR_COMMAND='python3 examples/synthesis/openai_compatible_generator.py' \
+  LANGGRAPH_STATEFUZZ_ATTEMPT=0 \
+  LANGGRAPH_V3_PROFILE_TIMEOUT=5m
+```
+
+The first regular-workspace-file family uses the same external generator and
+recovery chain, but selects the metadata-only passive file observer and its
+regular-file-only scaffold. It never uses file contents as a success condition:
+
+```bash
+make synthesis-langgraph-statefuzz-attempt \
+  LANGGRAPH_SYNTHESIS_OBJECTIVE=examples/objectives/workspace-file-survival.example.json \
+  LANGGRAPH_SYNTHESIS_ROOT=runs/langgraph-workspace-file/attempt-000 \
+  LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE=agent-result.txt \
+  LANGGRAPH_STATEFUZZ_SCAFFOLD=examples/synthesis/langgraph-shell-react-workspace-file-scaffold.example.json \
   LANGGRAPH_STATEFUZZ_GENERATOR_ID=openai-compatible-generator-v2 \
   LANGGRAPH_STATEFUZZ_GENERATOR_COMMAND='python3 examples/synthesis/openai_compatible_generator.py' \
   LANGGRAPH_STATEFUZZ_ATTEMPT=0 \

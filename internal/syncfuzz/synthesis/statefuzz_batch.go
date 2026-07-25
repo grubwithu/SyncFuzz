@@ -17,11 +17,12 @@ const StateFuzzBatchReportSchema = "syncfuzz.statefuzz-batch-report.v1"
 type StateFuzzBatchEntryStatus string
 
 const (
-	StateFuzzBatchAccepted               StateFuzzBatchEntryStatus = "accepted"
-	StateFuzzBatchRejectedEvaluation     StateFuzzBatchEntryStatus = "rejected-evaluation"
-	StateFuzzBatchRejectedSourceBaseline StateFuzzBatchEntryStatus = "rejected-source-baseline"
-	StateFuzzBatchExecutionFailed        StateFuzzBatchEntryStatus = "execution-failed"
-	StateFuzzBatchInvalidArtifactRoot    StateFuzzBatchEntryStatus = "invalid-artifact-root"
+	StateFuzzBatchAccepted                 StateFuzzBatchEntryStatus = "accepted"
+	StateFuzzBatchRejectedEvaluation       StateFuzzBatchEntryStatus = "rejected-evaluation"
+	StateFuzzBatchRejectedSourceBaseline   StateFuzzBatchEntryStatus = "rejected-source-baseline"
+	StateFuzzBatchRejectedResourceTopology StateFuzzBatchEntryStatus = "rejected-resource-topology"
+	StateFuzzBatchExecutionFailed          StateFuzzBatchEntryStatus = "execution-failed"
+	StateFuzzBatchInvalidArtifactRoot      StateFuzzBatchEntryStatus = "invalid-artifact-root"
 )
 
 // StateFuzzBatchEntry is one artifact-root audit result. Invalid roots remain
@@ -42,17 +43,18 @@ type StateFuzzBatchEntry struct {
 // StateFuzzBatchReport aggregates generated-candidate attempts without
 // turning rejected or structurally invalid roots into positive recovery data.
 type StateFuzzBatchReport struct {
-	SchemaVersion               string                `json:"schema_version"`
-	ObjectiveID                 string                `json:"objective_id"`
-	BatchRoot                   string                `json:"batch_root"`
-	AttemptCount                int                   `json:"attempt_count"`
-	AcceptedCount               int                   `json:"accepted_count"`
-	RejectedEvaluationCount     int                   `json:"rejected_evaluation_count"`
-	RejectedSourceBaselineCount int                   `json:"rejected_source_baseline_count"`
-	ExecutionFailureCount       int                   `json:"execution_failure_count"`
-	InvalidArtifactRootCount    int                   `json:"invalid_artifact_root_count"`
-	RecoveryOutcomeCounts       map[string]int        `json:"recovery_outcome_counts"`
-	Attempts                    []StateFuzzBatchEntry `json:"attempts"`
+	SchemaVersion                 string                `json:"schema_version"`
+	ObjectiveID                   string                `json:"objective_id"`
+	BatchRoot                     string                `json:"batch_root"`
+	AttemptCount                  int                   `json:"attempt_count"`
+	AcceptedCount                 int                   `json:"accepted_count"`
+	RejectedEvaluationCount       int                   `json:"rejected_evaluation_count"`
+	RejectedSourceBaselineCount   int                   `json:"rejected_source_baseline_count"`
+	RejectedResourceTopologyCount int                   `json:"rejected_resource_topology_count"`
+	ExecutionFailureCount         int                   `json:"execution_failure_count"`
+	InvalidArtifactRootCount      int                   `json:"invalid_artifact_root_count"`
+	RecoveryOutcomeCounts         map[string]int        `json:"recovery_outcome_counts"`
+	Attempts                      []StateFuzzBatchEntry `json:"attempts"`
 }
 
 // BuildStateFuzzBatchReport scans attempt-* roots and validates every link
@@ -99,6 +101,8 @@ func BuildStateFuzzBatchReport(stateObjective objective.StateObjective, root str
 			report.RejectedEvaluationCount++
 		case StateFuzzBatchRejectedSourceBaseline:
 			report.RejectedSourceBaselineCount++
+		case StateFuzzBatchRejectedResourceTopology:
+			report.RejectedResourceTopologyCount++
 		case StateFuzzBatchExecutionFailed:
 			report.ExecutionFailureCount++
 		case StateFuzzBatchInvalidArtifactRoot:
@@ -118,6 +122,7 @@ func (r StateFuzzBatchReport) Validate() error {
 	accepted := 0
 	rejectedEvaluation := 0
 	rejectedSourceBaseline := 0
+	rejectedResourceTopology := 0
 	executionFailures := 0
 	invalidRoots := 0
 	outcomes := make(map[string]int)
@@ -142,6 +147,11 @@ func (r StateFuzzBatchReport) Validate() error {
 				return fmt.Errorf("source-baseline-rejected StateFuzz batch attempt %q lacks a reason", attempt.ArtifactRoot)
 			}
 			rejectedSourceBaseline++
+		case StateFuzzBatchRejectedResourceTopology:
+			if strings.TrimSpace(attempt.Reason) == "" {
+				return fmt.Errorf("resource-topology-rejected StateFuzz batch attempt %q lacks a reason", attempt.ArtifactRoot)
+			}
+			rejectedResourceTopology++
 		case StateFuzzBatchExecutionFailed:
 			if strings.TrimSpace(attempt.Reason) == "" {
 				return fmt.Errorf("failed StateFuzz batch attempt %q lacks a reason", attempt.ArtifactRoot)
@@ -156,7 +166,7 @@ func (r StateFuzzBatchReport) Validate() error {
 			return fmt.Errorf("unsupported StateFuzz batch attempt status %q", attempt.Status)
 		}
 	}
-	if r.AttemptCount != len(r.Attempts) || r.AcceptedCount != accepted || r.RejectedEvaluationCount != rejectedEvaluation || r.RejectedSourceBaselineCount != rejectedSourceBaseline || r.ExecutionFailureCount != executionFailures || r.InvalidArtifactRootCount != invalidRoots || !reflect.DeepEqual(r.RecoveryOutcomeCounts, outcomes) {
+	if r.AttemptCount != len(r.Attempts) || r.AcceptedCount != accepted || r.RejectedEvaluationCount != rejectedEvaluation || r.RejectedSourceBaselineCount != rejectedSourceBaseline || r.RejectedResourceTopologyCount != rejectedResourceTopology || r.ExecutionFailureCount != executionFailures || r.InvalidArtifactRootCount != invalidRoots || !reflect.DeepEqual(r.RecoveryOutcomeCounts, outcomes) {
 		return fmt.Errorf("StateFuzz batch report aggregates do not match attempt entries")
 	}
 	return nil
@@ -217,6 +227,13 @@ func auditStateFuzzRoot(stateObjective objective.StateObjective, root string) St
 				return invalidStateFuzzRoot(entry, "source-baseline-rejection-has-inconsistent-recovery-artifacts")
 			}
 			entry.Status = StateFuzzBatchRejectedSourceBaseline
+			entry.Reason = metadata.Reason
+			return entry
+		case StateFuzzAttemptRejectedResourceTopology:
+			if !evaluation.EligibleForRetention || stateFuzzRecoveryArtifactsPresent(root) {
+				return invalidStateFuzzRoot(entry, "resource-topology-rejection-has-inconsistent-recovery-artifacts")
+			}
+			entry.Status = StateFuzzBatchRejectedResourceTopology
 			entry.Reason = metadata.Reason
 			return entry
 		case StateFuzzAttemptAccepted:

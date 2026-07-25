@@ -19,53 +19,69 @@ const langGraphCheckpointStoreRelativePath = "langgraph-checkpoints"
 // dereferencing links or accepting unmodelled special files. This keeps a
 // recovery clone from following task-controlled paths outside its workspace.
 func CaptureLangGraphWorkspaceSnapshot(sourceWorkspace, passiveUnixSocketPath string) (LangGraphWorkspaceSnapshot, error) {
-	return captureLangGraphWorkspaceSnapshot(sourceWorkspace, passiveUnixSocketPath, "", false)
+	contract, err := NewLangGraphRetainedResourceContract(LangGraphRetainedUnixSocket, passiveUnixSocketPath)
+	if err != nil {
+		return LangGraphWorkspaceSnapshot{}, err
+	}
+	snapshot, _, err := CaptureLangGraphWorkspaceSnapshotForContract(sourceWorkspace, contract)
+	return snapshot, err
 }
 
 // CaptureLangGraphWorkspaceFileSnapshot freezes one regular workspace file as
 // a retained source node. CloneTo excludes this file and recovery bind-mounts
 // it read-only, preserving filesystem identity instead of copying it.
 func CaptureLangGraphWorkspaceFileSnapshot(sourceWorkspace, passiveWorkspaceFilePath string) (LangGraphWorkspaceSnapshot, error) {
-	return captureLangGraphWorkspaceSnapshot(sourceWorkspace, "", passiveWorkspaceFilePath, true)
-}
-
-func captureLangGraphWorkspaceSnapshot(sourceWorkspace, passiveUnixSocketPath, passiveWorkspaceFilePath string, expectRegularFile bool) (LangGraphWorkspaceSnapshot, error) {
-	workspace, err := filepath.Abs(strings.TrimSpace(sourceWorkspace))
-	if err != nil {
-		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("resolve LangGraph source workspace: %w", err)
-	}
-	passivePath := passiveUnixSocketPath
-	if expectRegularFile {
-		passivePath = passiveWorkspaceFilePath
-	}
-	if strings.TrimSpace(passivePath) == "" || filepath.IsAbs(passivePath) {
-		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("LangGraph snapshot requires a workspace-relative passive retained resource path")
-	}
-	resourcePath, err := workspaceChild(workspace, passivePath)
+	contract, err := NewLangGraphRetainedResourceContract(LangGraphRetainedWorkspaceFile, passiveWorkspaceFilePath)
 	if err != nil {
 		return LangGraphWorkspaceSnapshot{}, err
+	}
+	snapshot, _, err := CaptureLangGraphWorkspaceSnapshotForContract(sourceWorkspace, contract)
+	return snapshot, err
+}
+
+// CaptureLangGraphWorkspaceSnapshotForContract records a source workspace and
+// its topology in one pass before recovery begins. The topology is returned on
+// a contract violation so callers can persist a structured rejection artifact.
+func CaptureLangGraphWorkspaceSnapshotForContract(sourceWorkspace string, contract LangGraphRetainedResourceContract) (LangGraphWorkspaceSnapshot, LangGraphWorkspaceTopology, error) {
+	workspace, err := filepath.Abs(strings.TrimSpace(sourceWorkspace))
+	if err != nil {
+		return LangGraphWorkspaceSnapshot{}, LangGraphWorkspaceTopology{}, fmt.Errorf("resolve LangGraph source workspace: %w", err)
+	}
+	if err := contract.Validate(); err != nil {
+		return LangGraphWorkspaceSnapshot{}, LangGraphWorkspaceTopology{}, err
+	}
+	resourcePath, err := workspaceChild(workspace, contract.WorkspaceRelativePath)
+	if err != nil {
+		return LangGraphWorkspaceSnapshot{}, LangGraphWorkspaceTopology{}, err
 	}
 	resourceInfo, err := os.Lstat(resourcePath)
 	if err != nil {
-		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("lstat retained LangGraph resource %s: %w", resourcePath, err)
+		return LangGraphWorkspaceSnapshot{}, LangGraphWorkspaceTopology{}, fmt.Errorf("lstat retained LangGraph resource %s: %w", resourcePath, err)
 	}
-	if expectRegularFile && !resourceInfo.Mode().IsRegular() {
-		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("retained LangGraph resource %s is not a regular workspace file", resourcePath)
+	if contract.Kind == LangGraphRetainedWorkspaceFile && !resourceInfo.Mode().IsRegular() {
+		return LangGraphWorkspaceSnapshot{}, LangGraphWorkspaceTopology{}, fmt.Errorf("retained LangGraph resource %s is not a regular workspace file", resourcePath)
 	}
-	if !expectRegularFile && resourceInfo.Mode()&os.ModeSocket == 0 {
-		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("retained LangGraph endpoint %s is not a Unix socket", resourcePath)
+	if contract.Kind == LangGraphRetainedUnixSocket && resourceInfo.Mode()&os.ModeSocket == 0 {
+		return LangGraphWorkspaceSnapshot{}, LangGraphWorkspaceTopology{}, fmt.Errorf("retained LangGraph endpoint %s is not a Unix socket", resourcePath)
+	}
+	topology, err := InspectLangGraphWorkspaceTopology(workspace, contract)
+	if err != nil {
+		return LangGraphWorkspaceSnapshot{}, LangGraphWorkspaceTopology{}, err
+	}
+	if err := topology.ValidateForRecovery(); err != nil {
+		return LangGraphWorkspaceSnapshot{}, topology, err
 	}
 	stat, ok := resourceInfo.Sys().(*syscall.Stat_t)
 	if !ok || stat.Ino == 0 {
-		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("retained LangGraph resource %s lacks inode metadata", resourcePath)
+		return LangGraphWorkspaceSnapshot{}, topology, fmt.Errorf("retained LangGraph resource %s lacks inode metadata", resourcePath)
 	}
-	workspaceDigest, err := digestWorkspaceTree(workspace, passivePath)
+	workspaceDigest, err := digestWorkspaceTree(workspace, contract.WorkspaceRelativePath)
 	if err != nil {
-		return LangGraphWorkspaceSnapshot{}, err
+		return LangGraphWorkspaceSnapshot{}, topology, err
 	}
 	checkpointDigest, err := digestWorkspaceTree(filepath.Join(workspace, langGraphCheckpointStoreRelativePath), "")
 	if err != nil {
-		return LangGraphWorkspaceSnapshot{}, fmt.Errorf("digest LangGraph checkpoint store: %w", err)
+		return LangGraphWorkspaceSnapshot{}, topology, fmt.Errorf("digest LangGraph checkpoint store: %w", err)
 	}
 	snapshot := LangGraphWorkspaceSnapshot{
 		SourceWorkspace:             workspace,
@@ -73,18 +89,107 @@ func captureLangGraphWorkspaceSnapshot(sourceWorkspace, passiveUnixSocketPath, p
 		CheckpointStoreRelativePath: langGraphCheckpointStoreRelativePath,
 		CheckpointStoreSHA256:       checkpointDigest,
 	}
-	if expectRegularFile {
-		snapshot.PassiveWorkspaceFilePath = filepath.Clean(passiveWorkspaceFilePath)
+	if contract.Kind == LangGraphRetainedWorkspaceFile {
+		snapshot.PassiveWorkspaceFilePath = contract.WorkspaceRelativePath
 		snapshot.PassiveWorkspaceFileDevice = uint64(stat.Dev)
 		snapshot.PassiveWorkspaceFileInode = uint64(stat.Ino)
 		snapshot.PassiveWorkspaceFileMode = uint32(resourceInfo.Mode().Perm())
 	} else {
-		snapshot.PassiveUnixSocketPath = filepath.Clean(passiveUnixSocketPath)
+		snapshot.PassiveUnixSocketPath = contract.WorkspaceRelativePath
 		snapshot.PassiveUnixSocketDevice = uint64(stat.Dev)
 		snapshot.PassiveUnixSocketInode = uint64(stat.Ino)
 		snapshot.PassiveUnixSocketMode = uint32(resourceInfo.Mode().Perm())
 	}
-	return snapshot, nil
+	return snapshot, topology, nil
+}
+
+// InspectLangGraphWorkspaceTopology enumerates only source nodes that cannot
+// be copied safely by the recovery clone. The configured retained resource is
+// the sole permitted special node, when it is a Unix socket.
+func InspectLangGraphWorkspaceTopology(sourceWorkspace string, contract LangGraphRetainedResourceContract) (LangGraphWorkspaceTopology, error) {
+	workspace, err := filepath.Abs(strings.TrimSpace(sourceWorkspace))
+	if err != nil {
+		return LangGraphWorkspaceTopology{}, fmt.Errorf("resolve LangGraph source workspace: %w", err)
+	}
+	if err := contract.Validate(); err != nil {
+		return LangGraphWorkspaceTopology{}, err
+	}
+	rootInfo, err := os.Lstat(workspace)
+	if err != nil {
+		return LangGraphWorkspaceTopology{}, err
+	}
+	if !rootInfo.IsDir() {
+		return LangGraphWorkspaceTopology{}, fmt.Errorf("LangGraph workspace %s is not a directory", workspace)
+	}
+	resourcePath, err := workspaceChild(workspace, contract.WorkspaceRelativePath)
+	if err != nil {
+		return LangGraphWorkspaceTopology{}, err
+	}
+	resourceInfo, err := os.Lstat(resourcePath)
+	if err != nil {
+		return LangGraphWorkspaceTopology{}, fmt.Errorf("lstat retained LangGraph resource %s: %w", resourcePath, err)
+	}
+	if contract.Kind == LangGraphRetainedUnixSocket && resourceInfo.Mode()&os.ModeSocket == 0 {
+		return LangGraphWorkspaceTopology{}, fmt.Errorf("retained LangGraph endpoint %s is not a Unix socket", resourcePath)
+	}
+	if contract.Kind == LangGraphRetainedWorkspaceFile && !resourceInfo.Mode().IsRegular() {
+		return LangGraphWorkspaceTopology{}, fmt.Errorf("retained LangGraph resource %s is not a regular workspace file", resourcePath)
+	}
+	topology := LangGraphWorkspaceTopology{
+		SchemaVersion:    LangGraphWorkspaceTopologySchema,
+		SourceWorkspace:  workspace,
+		ResourceContract: contract,
+		UnexpectedNodes:  make([]LangGraphWorkspaceTopologyNode, 0),
+	}
+	err = filepath.WalkDir(workspace, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relativePath, err := filepath.Rel(workspace, path)
+		if err != nil {
+			return err
+		}
+		if relativePath == "." || relativePath == contract.WorkspaceRelativePath {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			topology.UnexpectedNodes = append(topology.UnexpectedNodes, LangGraphWorkspaceTopologyNode{WorkspaceRelativePath: relativePath, Kind: "symlink"})
+			return nil
+		}
+		if !info.IsDir() && !info.Mode().IsRegular() {
+			topology.UnexpectedNodes = append(topology.UnexpectedNodes, LangGraphWorkspaceTopologyNode{WorkspaceRelativePath: relativePath, Kind: langGraphWorkspaceNodeKind(info.Mode())})
+		}
+		return nil
+	})
+	if err != nil {
+		return LangGraphWorkspaceTopology{}, err
+	}
+	sort.Slice(topology.UnexpectedNodes, func(left, right int) bool {
+		return topology.UnexpectedNodes[left].WorkspaceRelativePath < topology.UnexpectedNodes[right].WorkspaceRelativePath
+	})
+	if err := topology.Validate(); err != nil {
+		return LangGraphWorkspaceTopology{}, err
+	}
+	return topology, nil
+}
+
+func langGraphWorkspaceNodeKind(mode fs.FileMode) string {
+	switch {
+	case mode&os.ModeSocket != 0:
+		return "unix-socket"
+	case mode&os.ModeNamedPipe != 0:
+		return "fifo"
+	case mode&os.ModeDevice != 0 && mode&os.ModeCharDevice != 0:
+		return "character-device"
+	case mode&os.ModeDevice != 0:
+		return "block-device"
+	default:
+		return "special-file"
+	}
 }
 
 // VerifySource asserts that the profiled workspace still represents exactly

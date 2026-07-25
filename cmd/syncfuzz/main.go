@@ -111,7 +111,7 @@ Usage:
   syncfuzz synthesis statefuzz-batch-report --objective objective.json --root runs/<batch> --out statefuzz-batch-report.json
   syncfuzz synthesis promote --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --out state-seed.json
   syncfuzz synthesis bind-maf-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest maf-workflow-fork-manifest.json --python python3 --runner targets/maf_workflow_checkpoint/run_target.py --prepared-workspace prepared --runtime-root forks --out-plan maf-fork-plan.json --out-profile-run bound-profile-run.json --out-binding native-frontier-binding.json
-  syncfuzz synthesis bind-langgraph-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after [--lifecycle langgraph-lifecycle.json] --manifest langgraph-native-checkpoints.json --out-binding langgraph-native-frontier-binding.json
+  syncfuzz synthesis bind-langgraph-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after [--lifecycle langgraph-lifecycle.json] [--workspace-file-path agent-result.txt] --manifest langgraph-native-checkpoints.json --out-binding langgraph-native-frontier-binding.json
   syncfuzz synthesis prepare-langgraph-fork --objective objective.json --candidate candidate.json --profile-run profile-run.json --binding langgraph-native-frontier-binding.json --model provider:model --container-image syncfuzz-langgraph:dev --runtime-root recovery-runtimes [--passive-unix-socket-path agent.sock | --passive-workspace-file-path agent-result.txt] --out-plan langgraph-fork-plan.json --out-profile-run bound-profile-run.json
   syncfuzz synthesis release-langgraph-runtime --profile-run profile-run.json
   syncfuzz profile container-scope --container <running-container>
@@ -679,7 +679,7 @@ func synthesisStateFuzzAttemptStatus(args []string) {
 	evaluationPath := fs.String("evaluation", "", "CandidateEvaluation JSON path")
 	attemptIndex := fs.Int("attempt", -1, "non-negative StateFuzz attempt index")
 	artifactRoot := fs.String("artifact-root", "", "artifact directory for this attempt")
-	status := fs.String("status", "", "accepted, rejected-evaluation, rejected-source-baseline, or execution-failed")
+	status := fs.String("status", "", "accepted, rejected-evaluation, rejected-source-baseline, rejected-resource-topology, or execution-failed")
 	reason := fs.String("reason", "", "structured outcome reason for a rejection or failure")
 	outPath := fs.String("out", "statefuzz-attempt.json", "StateFuzzAttempt JSON output path")
 	if err := fs.Parse(args); err != nil {
@@ -776,6 +776,7 @@ func synthesisStateFuzzBatchReport(args []string) {
 	fmt.Printf("accepted: %d\n", report.AcceptedCount)
 	fmt.Printf("rejected_evaluation: %d\n", report.RejectedEvaluationCount)
 	fmt.Printf("rejected_source_baseline: %d\n", report.RejectedSourceBaselineCount)
+	fmt.Printf("rejected_resource_topology: %d\n", report.RejectedResourceTopologyCount)
 	fmt.Printf("execution_failures: %d\n", report.ExecutionFailureCount)
 	fmt.Printf("invalid_artifact_roots: %d\n", report.InvalidArtifactRootCount)
 	fmt.Printf("artifact: %s\n", *outPath)
@@ -999,6 +1000,7 @@ func synthesisBindLangGraphFrontier(args []string) {
 	frontierID := fs.String("frontier", "", "validated profiling frontier ID")
 	manifestPath := fs.String("manifest", "", "timestamped LangGraph native checkpoint manifest JSON path")
 	lifecyclePath := fs.String("lifecycle", "", "optional LangGraph lifecycle artifact; inferred from the recorded target workspace when available")
+	workspaceFilePath := fs.String("workspace-file-path", "", "optional workspace-relative regular file that scopes handle/open evidence to the scaffold resource contract")
 	outBinding := fs.String("out-binding", "langgraph-native-frontier-binding.json", "LangGraph native frontier binding JSON output path")
 	outBeforeCoordinate := fs.String("out-before-coordinate", "", "optional fresh-runtime structural coordinate for the native checkpoint before the frontier")
 	outAfterCoordinate := fs.String("out-after-coordinate", "", "optional fresh-runtime structural coordinate for the native checkpoint after the frontier")
@@ -1065,7 +1067,7 @@ func synthesisBindLangGraphFrontier(args []string) {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: stat LangGraph lifecycle artifact %s: %v\n", resolvedLifecyclePath, statErr)
 		os.Exit(1)
 	}
-	binding, err := synthesis.BindLangGraphNativeFrontierWithLifecycle(stateObjective, candidate, profileRun, *frontierID, resolvedManifestPath, manifest, lifecycle)
+	binding, err := synthesis.BindLangGraphNativeFrontierWithLifecycleAndConfig(stateObjective, candidate, profileRun, *frontierID, resolvedManifestPath, manifest, lifecycle, synthesis.LangGraphNativeFrontierBindingConfig{ObservedWorkspaceFilePath: *workspaceFilePath})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis bind-langgraph-frontier failed: %v\n", err)
 		os.Exit(1)
@@ -1113,17 +1115,33 @@ func synthesisPrepareLangGraphFork(args []string) {
 	model := fs.String("model", "", "LangChain model ID fixed for the recovery plan")
 	containerImage := fs.String("container-image", synthesis.DefaultLangGraphProfileImage, "isolated LangGraph recovery container image")
 	runtimeRoot := fs.String("runtime-root", "", "host directory for independent LangGraph recovery workspaces")
+	retainedResourceKind := fs.String("retained-resource-kind", "", "retained resource kind: unix-socket-listener or workspace-regular-file")
+	retainedResourcePath := fs.String("retained-resource-path", "", "workspace-relative retained resource path")
 	passiveUnixSocketPath := fs.String("passive-unix-socket-path", "", "workspace-relative Unix endpoint observed without connecting")
 	passiveWorkspaceFilePath := fs.String("passive-workspace-file-path", "", "workspace-relative regular file retained as the exact passive observation node")
 	passiveProbeMode := fs.String("passive-probe-mode", string(recovery.LangGraphPassiveProbeFull), "passive Unix listener probe mode: full or pruned")
 	outPlan := fs.String("out-plan", "langgraph-fork-plan.json", "LangGraph recorded fork plan JSON output path")
 	outProfileRun := fs.String("out-profile-run", "bound-profile-run.json", "ProfileRun updated to use the LangGraph fork plan")
+	outWorkspaceTopology := fs.String("out-workspace-topology", "", "optional LangGraph workspace topology JSON artifact, written even for a topology rejection")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*profileRunPath) == "" || strings.TrimSpace(*bindingPath) == "" || strings.TrimSpace(*model) == "" || strings.TrimSpace(*containerImage) == "" || strings.TrimSpace(*runtimeRoot) == "" || (strings.TrimSpace(*passiveUnixSocketPath) == "" && strings.TrimSpace(*passiveWorkspaceFilePath) == "") || (strings.TrimSpace(*passiveUnixSocketPath) != "" && strings.TrimSpace(*passiveWorkspaceFilePath) != "") {
-		fmt.Fprintln(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork requires --objective, --candidate, --profile-run, --binding, --model, --container-image, --runtime-root, and exactly one passive resource path")
+	hasContractKind := strings.TrimSpace(*retainedResourceKind) != ""
+	hasContractPath := strings.TrimSpace(*retainedResourcePath) != ""
+	hasLegacySocket := strings.TrimSpace(*passiveUnixSocketPath) != ""
+	hasLegacyWorkspaceFile := strings.TrimSpace(*passiveWorkspaceFilePath) != ""
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*candidatePath) == "" || strings.TrimSpace(*profileRunPath) == "" || strings.TrimSpace(*bindingPath) == "" || strings.TrimSpace(*model) == "" || strings.TrimSpace(*containerImage) == "" || strings.TrimSpace(*runtimeRoot) == "" || hasContractKind != hasContractPath || (hasContractKind && (hasLegacySocket || hasLegacyWorkspaceFile)) || (!hasContractKind && (hasLegacySocket == hasLegacyWorkspaceFile)) {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork requires --objective, --candidate, --profile-run, --binding, --model, --container-image, --runtime-root, and either --retained-resource-kind with --retained-resource-path or exactly one legacy passive resource path")
 		os.Exit(2)
+	}
+	var resourceContract recovery.LangGraphRetainedResourceContract
+	if hasContractKind {
+		contract, err := recovery.NewLangGraphRetainedResourceContract(recovery.LangGraphRetainedResourceKind(strings.TrimSpace(*retainedResourceKind)), *retainedResourcePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
+			os.Exit(1)
+		}
+		resourceContract = contract
 	}
 	stateObjective, err := objective.ReadStateObjective(*objectivePath)
 	if err != nil {
@@ -1145,10 +1163,34 @@ func synthesisPrepareLangGraphFork(args []string) {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
 		os.Exit(1)
 	}
-	plan, err := synthesis.PrepareLangGraphForkPlan(stateObjective, candidate, profileRun, binding, synthesis.LangGraphForkPlanConfig{Model: *model, ContainerImage: *containerImage, RuntimeRoot: *runtimeRoot, PassiveUnixSocketPath: *passiveUnixSocketPath, PassiveWorkspaceFilePath: *passiveWorkspaceFilePath, PassiveProbeMode: recovery.LangGraphPassiveProbeMode(*passiveProbeMode)})
+	runtimeContract, err := recovery.VerifyLangGraphRuntime(context.Background(), *containerImage)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
 		os.Exit(1)
+	}
+	plan, err := synthesis.PrepareLangGraphForkPlan(stateObjective, candidate, profileRun, binding, synthesis.LangGraphForkPlanConfig{Model: *model, ContainerImage: *containerImage, RuntimeRoot: *runtimeRoot, RuntimeContract: runtimeContract, ResourceContract: resourceContract, PassiveUnixSocketPath: *passiveUnixSocketPath, PassiveWorkspaceFilePath: *passiveWorkspaceFilePath, PassiveProbeMode: recovery.LangGraphPassiveProbeMode(*passiveProbeMode)})
+	if err != nil {
+		var topologyError *recovery.LangGraphWorkspaceTopologyError
+		if strings.TrimSpace(*outWorkspaceTopology) != "" && errors.As(err, &topologyError) {
+			if writeErr := recovery.WriteLangGraphWorkspaceTopology(*outWorkspaceTopology, topologyError.Topology); writeErr != nil {
+				fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: write workspace topology: %v\n", writeErr)
+				os.Exit(1)
+			}
+			fmt.Printf("workspace_topology_artifact: %s\n", *outWorkspaceTopology)
+		}
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
+		os.Exit(1)
+	}
+	if strings.TrimSpace(*outWorkspaceTopology) != "" {
+		if plan.WorkspaceTopology == nil {
+			fmt.Fprintln(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: prepared plan has no workspace topology inventory")
+			os.Exit(1)
+		}
+		if err := recovery.WriteLangGraphWorkspaceTopology(*outWorkspaceTopology, *plan.WorkspaceTopology); err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: write workspace topology: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("workspace_topology_artifact: %s\n", *outWorkspaceTopology)
 	}
 	if err := recovery.WriteLangGraphForkPlan(*outPlan, plan); err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)

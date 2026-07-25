@@ -90,6 +90,15 @@ func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecut
 	if err := verifyLangGraphSourceRuntime(ctx, forkPlan.SourceRuntime); err != nil {
 		return RecoveryObservation{}, err
 	}
+	if forkPlan.RuntimeContract.SchemaVersion != "" {
+		actualContract, err := VerifyLangGraphRuntime(ctx, forkPlan.RuntimeContract.ImageID)
+		if err != nil {
+			return RecoveryObservation{}, err
+		}
+		if !actualContract.Matches(forkPlan.RuntimeContract) {
+			return RecoveryObservation{}, fmt.Errorf("LangGraph recovery image no longer matches the profiled runtime contract")
+		}
+	}
 	runtimeRoot, err := filepath.Abs(forkPlan.RuntimeRoot)
 	if err != nil {
 		return RecoveryObservation{}, fmt.Errorf("resolve LangGraph runtime root: %w", err)
@@ -218,13 +227,20 @@ func langGraphRecoveryDockerArgs(plan LangGraphForkPlan, workspace, runtimeID st
 			args = append(args, "-e", key+"="+value)
 		}
 	}
-	command := []string{plan.ContainerImage, "python3", "/opt/syncfuzz-langgraph/run_target.py", "--workspace", "/workspace", "--prompt-file", "/workspace/target-prompt.txt", "--task-file", "/workspace/target-task.json", "--thread-id", plan.SourceThreadID, "--execution-policy", "host", "--checkpoint-backend", "disk", "--internal-phase", "resume", "--checkpoint-id", checkpointID, "--passive-fork-observe", "--runtime-instance-id", runtimeID, "--recovery-observation-artifact", "/workspace/langgraph-recovery-observation.json"}
+	command := []string{langGraphRecoveryContainerImage(plan), "python3", "/opt/syncfuzz-langgraph/run_target.py", "--workspace", "/workspace", "--prompt-file", "/workspace/target-prompt.txt", "--task-file", "/workspace/target-task.json", "--thread-id", plan.SourceThreadID, "--execution-policy", "host", "--checkpoint-backend", "disk", "--internal-phase", "resume", "--checkpoint-id", checkpointID, "--passive-fork-observe", "--runtime-instance-id", runtimeID, "--recovery-observation-artifact", "/workspace/langgraph-recovery-observation.json"}
 	if plan.PassiveUnixSocketPath != "" {
 		command = append(command, "--passive-unix-socket-path", plan.PassiveUnixSocketPath, "--passive-unix-socket-probe-mode", string(plan.PassiveProbeMode.Effective()), "--passive-unix-socket-expected-id", plan.UnixSocketProbe.SocketID, "--passive-unix-socket-expected-holder-pid", strconv.FormatUint(uint64(plan.UnixSocketProbe.HolderPID), 10), "--passive-unix-socket-expected-holder-fd", strconv.Itoa(plan.UnixSocketProbe.HolderFD))
 	} else {
 		command = append(command, "--passive-workspace-file-path", plan.PassiveWorkspaceFilePath, "--passive-workspace-file-expected-device", strconv.FormatUint(plan.WorkspaceSnapshot.PassiveWorkspaceFileDevice, 10), "--passive-workspace-file-expected-inode", strconv.FormatUint(plan.WorkspaceSnapshot.PassiveWorkspaceFileInode, 10))
 	}
 	return append(args, command...)
+}
+
+func langGraphRecoveryContainerImage(plan LangGraphForkPlan) string {
+	if plan.RuntimeContract.SchemaVersion != "" {
+		return plan.RuntimeContract.ImageID
+	}
+	return plan.ContainerImage
 }
 
 func langGraphProviderEnvironment() map[string]string {
@@ -310,12 +326,12 @@ func matchesUnixSocketIdentity(observation langGraphPassiveSocketMetadata, probe
 }
 
 func verifyLangGraphSourceRuntime(ctx context.Context, runtime LangGraphSourceRuntime) error {
-	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Id}} {{.State.Running}} {{.Config.Image}}", runtime.ContainerName).CombinedOutput()
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Id}} {{.State.Running}} {{.Config.Image}} {{.Image}}", runtime.ContainerName).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("inspect retained LangGraph source runtime %q: %w: %s", runtime.ContainerName, err, strings.TrimSpace(string(output)))
 	}
 	fields := strings.Fields(string(output))
-	if len(fields) != 3 || fields[0] != runtime.ContainerID || fields[1] != "true" || fields[2] != runtime.ContainerImage {
+	if len(fields) != 4 || fields[0] != runtime.ContainerID || fields[1] != "true" || fields[2] != runtime.ContainerImage || (runtime.ContainerImageID != "" && fields[3] != runtime.ContainerImageID) {
 		return fmt.Errorf("retained LangGraph source runtime %q no longer matches its recorded lease", runtime.ContainerName)
 	}
 	return nil

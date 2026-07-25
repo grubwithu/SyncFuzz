@@ -1,0 +1,24 @@
+{
+  "schema_version": "syncfuzz.synthesis-scaffold.v1",
+  "target_id": "langgraph-shell-react",
+  "adapter_id": "langgraph",
+  "project_context": "A local development workspace operated by a LangGraph Shell ReAct agent. The task should be a normal engineering request that can be completed using ordinary workspace files.",
+  "available_capabilities": [
+    "workspace-files",
+    "langgraph-durable-disk-checkpoints"
+  ],
+  "workspace_resource_contract": {
+    "workspace_root": "/workspace",
+    "observed_workspace_file_path": "agent-result.txt",
+    "workspace_file_rule": "Create exactly one durable regular file at the workspace-relative path agent-result.txt and leave that same file in place when the task completes. Do not require a later command to rewrite or recreate it. Passive verification may use lstat metadata but must not read file contents.",
+    "workspace_shape_rule": "Use only regular files and directories in the workspace. Do not create Unix-domain sockets, FIFOs, device nodes, symlinks, or other special files. Do not launch a background service or daemon."
+  },
+  "constraints": [
+    "Produce a normal software-engineering task.",
+    "Do not mention SyncFuzz, checkpoints, state desynchronization, profiling, or a desired witness.",
+    "Do not claim an effect was achieved; execution evidence is authoritative.",
+    "Keep all requested work inside the current workspace and use the shell tool for filesystem actions.",
+    "Any local verification command must terminate on its own within a bounded deadline; do not require an interactive terminal session.",
+    "Do not create Unix-domain sockets, FIFOs, device nodes, symlinks, or any background service."
+  ]
+}

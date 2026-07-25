@@ -119,18 +119,22 @@ type LangGraphExecutionConfig struct {
 // profiled LangGraph run. It is not a StateSeed: a candidate still has to
 // satisfy EvaluateProfile and PromoteStateSeed before entering the corpus.
 type LangGraphCandidateExecution struct {
-	SchemaVersion                    string               `json:"schema_version"`
-	CandidateID                      string               `json:"candidate_id"`
-	TargetRunID                      string               `json:"target_run_id"`
-	TargetRunArtifact                string               `json:"target_run_artifact"`
-	NativeCheckpointManifestArtifact string               `json:"native_checkpoint_manifest_artifact"`
-	NativeCheckpointRunID            string               `json:"native_checkpoint_run_id"`
-	ProfileRun                       objective.ProfileRun `json:"profile_run"`
+	SchemaVersion                    string                            `json:"schema_version"`
+	CandidateID                      string                            `json:"candidate_id"`
+	TargetRunID                      string                            `json:"target_run_id"`
+	TargetRunArtifact                string                            `json:"target_run_artifact"`
+	NativeCheckpointManifestArtifact string                            `json:"native_checkpoint_manifest_artifact"`
+	NativeCheckpointRunID            string                            `json:"native_checkpoint_run_id"`
+	RuntimeContract                  recovery.LangGraphRuntimeContract `json:"runtime_contract"`
+	ProfileRun                       objective.ProfileRun              `json:"profile_run"`
 }
 
 func (e LangGraphCandidateExecution) ValidateFor(stateObjective objective.StateObjective, candidate SynthesisCandidate) error {
 	if e.SchemaVersion != LangGraphCandidateExecutionSchema || e.CandidateID != candidate.CandidateID || strings.TrimSpace(e.TargetRunID) == "" || strings.TrimSpace(e.TargetRunArtifact) == "" || strings.TrimSpace(e.NativeCheckpointManifestArtifact) == "" || strings.TrimSpace(e.NativeCheckpointRunID) == "" {
 		return fmt.Errorf("LangGraph candidate execution lacks scheduler or runtime provenance")
+	}
+	if err := e.RuntimeContract.Validate(); err != nil {
+		return err
 	}
 	if err := candidate.ValidateFor(stateObjective); err != nil {
 		return err
@@ -140,6 +144,9 @@ func (e LangGraphCandidateExecution) ValidateFor(stateObjective objective.StateO
 	}
 	if e.ProfileRun.SynthesisCandidateID != candidate.CandidateID || e.ProfileRun.TargetID != candidate.TargetID || e.ProfileRun.AdapterID != candidate.AdapterID || e.ProfileRun.NativeCheckpointRunID != e.NativeCheckpointRunID {
 		return fmt.Errorf("LangGraph candidate execution profile provenance does not match its candidate")
+	}
+	if e.ProfileRun.RetainedRuntime == nil || e.ProfileRun.RetainedRuntime.ContainerImageID != e.RuntimeContract.ImageID {
+		return fmt.Errorf("LangGraph candidate execution profile did not retain the verified runtime image")
 	}
 	return nil
 }
@@ -211,6 +218,10 @@ func ExecuteLangGraphCandidate(ctx context.Context, stateObjective objective.Sta
 	if err != nil {
 		return LangGraphCandidateExecution{}, err
 	}
+	runtimeContract, err := recovery.VerifyLangGraphRuntime(ctx, opts.ContainerImage)
+	if err != nil {
+		return LangGraphCandidateExecution{}, err
+	}
 	result, err := target.RunTarget(ctx, opts)
 	if err != nil {
 		return LangGraphCandidateExecution{}, err
@@ -235,6 +246,12 @@ func ExecuteLangGraphCandidate(ctx context.Context, stateObjective objective.Sta
 		return LangGraphCandidateExecution{}, err
 	}
 	profileRun.NativeCheckpointRunID = manifest.InitialRuntimeInstanceID
+	if profileRun.RetainedRuntime == nil || profileRun.RetainedRuntime.ContainerImageID != runtimeContract.ImageID {
+		if cleanupErr := ReleaseLangGraphRuntime(ctx, profileRun); cleanupErr != nil {
+			return LangGraphCandidateExecution{}, fmt.Errorf("LangGraph retained source runtime does not match the verified image contract; cleanup failed: %w", cleanupErr)
+		}
+		return LangGraphCandidateExecution{}, fmt.Errorf("LangGraph retained source runtime does not match the verified image contract")
+	}
 	execution := LangGraphCandidateExecution{
 		SchemaVersion:                    LangGraphCandidateExecutionSchema,
 		CandidateID:                      candidate.CandidateID,
@@ -242,6 +259,7 @@ func ExecuteLangGraphCandidate(ctx context.Context, stateObjective objective.Sta
 		TargetRunArtifact:                filepath.Join(result.ArtifactDir, target.TargetResultArtifact),
 		NativeCheckpointManifestArtifact: manifestPath,
 		NativeCheckpointRunID:            manifest.InitialRuntimeInstanceID,
+		RuntimeContract:                  runtimeContract,
 		ProfileRun:                       profileRun,
 	}
 	if err := execution.ValidateFor(stateObjective, candidate); err != nil {
@@ -292,6 +310,9 @@ func WriteLangGraphCandidateExecution(path string, execution LangGraphCandidateE
 	if execution.SchemaVersion != LangGraphCandidateExecutionSchema {
 		return fmt.Errorf("unsupported LangGraph candidate execution schema %q", execution.SchemaVersion)
 	}
+	if err := execution.RuntimeContract.Validate(); err != nil {
+		return err
+	}
 	return writeJSON(path, execution)
 }
 
@@ -306,12 +327,12 @@ func ReleaseLangGraphRuntime(ctx context.Context, run objective.ProfileRun) erro
 		return err
 	}
 	lease := run.RetainedRuntime
-	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Id}} {{.Config.Image}}", lease.ContainerID).CombinedOutput()
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Id}} {{.Config.Image}} {{.Image}}", lease.ContainerID).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("inspect retained LangGraph runtime %q: %w: %s", lease.ContainerID, err, strings.TrimSpace(string(output)))
 	}
 	fields := strings.Fields(string(output))
-	if len(fields) != 2 || fields[0] != lease.ContainerID || fields[1] != lease.ContainerImage {
+	if len(fields) != 3 || fields[0] != lease.ContainerID || fields[1] != lease.ContainerImage || (lease.ContainerImageID != "" && fields[2] != lease.ContainerImageID) {
 		return fmt.Errorf("retained LangGraph runtime %q no longer matches its recorded lease", lease.ContainerID)
 	}
 	output, err = exec.CommandContext(ctx, "docker", "rm", "-f", lease.ContainerID).CombinedOutput()

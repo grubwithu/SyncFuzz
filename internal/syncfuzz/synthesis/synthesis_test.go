@@ -17,6 +17,46 @@ import (
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
+func TestLangGraphWorkspaceFileScaffoldExcludesSpecialResources(t *testing.T) {
+	scaffoldPath := filepath.Join("..", "..", "..", "examples", "synthesis", "langgraph-shell-react-workspace-file-scaffold.example.json")
+	content, err := os.ReadFile(scaffoldPath)
+	if err != nil {
+		t.Fatalf("read workspace-file scaffold: %v", err)
+	}
+	var scaffold struct {
+		AvailableCapabilities     []string `json:"available_capabilities"`
+		WorkspaceResourceContract struct {
+			ObservedWorkspaceFilePath string `json:"observed_workspace_file_path"`
+			WorkspaceShapeRule        string `json:"workspace_shape_rule"`
+		} `json:"workspace_resource_contract"`
+		Constraints []string `json:"constraints"`
+	}
+	if err := json.Unmarshal(content, &scaffold); err != nil {
+		t.Fatalf("decode workspace-file scaffold: %v", err)
+	}
+	if scaffold.WorkspaceResourceContract.ObservedWorkspaceFilePath != "agent-result.txt" {
+		t.Fatalf("workspace-file scaffold must bind agent-result.txt, got %#v", scaffold.WorkspaceResourceContract)
+	}
+	if containsString(scaffold.AvailableCapabilities, "unix-domain-sockets") || containsString(scaffold.AvailableCapabilities, "local-processes") {
+		t.Fatalf("workspace-file scaffold must not expose socket/service capabilities: %#v", scaffold.AvailableCapabilities)
+	}
+	rules := strings.ToLower(scaffold.WorkspaceResourceContract.WorkspaceShapeRule + " " + strings.Join(scaffold.Constraints, " "))
+	for _, required := range []string{"unix-domain sockets", "special files", "background service"} {
+		if !strings.Contains(rules, required) {
+			t.Fatalf("workspace-file scaffold must forbid %q: %q", required, rules)
+		}
+	}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func TestScheduleObjectivesPrioritizesUncoveredAtoms(t *testing.T) {
 	ipc := testObjective("ipc.listen", profiling.StateFamilyIPC, "listen")
 	handle := testObjective("handle.dup", profiling.StateFamilyHandle, "dup")
@@ -199,6 +239,11 @@ func TestStateFuzzAttemptValidatesOutcomeEvidence(t *testing.T) {
 	if err := attempt.Validate(); err != nil {
 		t.Fatalf("source-baseline rejection should validate: %v", err)
 	}
+	attempt.Status = StateFuzzAttemptRejectedResourceTopology
+	attempt.Reason = "unmodelled-special-workspace-node"
+	if err := attempt.Validate(); err != nil {
+		t.Fatalf("resource-topology rejection should validate: %v", err)
+	}
 	attempt.Status = StateFuzzAttemptRejectedEvaluation
 	if err := attempt.Validate(); err == nil {
 		t.Fatal("expected eligible evaluation rejection to fail validation")
@@ -330,11 +375,29 @@ func TestBuildStateFuzzBatchReportKeepsLegacyRejectionsAndMixedRoots(t *testing.
 		t.Fatalf("WriteStateFuzzAttempt failure attempt: %v", err)
 	}
 
+	// attempt-005 is an eligible candidate whose source workspace cannot be
+	// represented by the retained-resource contract, not an executor crash.
+	topologyCandidate, topologyRun, _ := writeAttempt(5, true)
+	topologyRoot := filepath.Join(root, "attempt-005")
+	eligible := true
+	if err := WriteStateFuzzAttempt(filepath.Join(topologyRoot, "statefuzz-attempt.json"), StateFuzzAttempt{
+		SchemaVersion:        StateFuzzAttemptSchema,
+		Attempt:              5,
+		ArtifactRoot:         topologyRoot,
+		CandidateID:          topologyCandidate.CandidateID,
+		ProfileRunID:         topologyRun.ProfileRunID,
+		EligibleForRetention: &eligible,
+		Status:               StateFuzzAttemptRejectedResourceTopology,
+		Reason:               "unmodelled-special-workspace-node",
+	}); err != nil {
+		t.Fatalf("WriteStateFuzzAttempt topology rejection: %v", err)
+	}
+
 	report, err := BuildStateFuzzBatchReport(stateObjective, root)
 	if err != nil {
 		t.Fatalf("BuildStateFuzzBatchReport: %v", err)
 	}
-	if report.AttemptCount != 5 || report.AcceptedCount != 1 || report.RejectedEvaluationCount != 1 || report.ExecutionFailureCount != 1 || report.InvalidArtifactRootCount != 2 || report.RecoveryOutcomeCounts["residual"] != 1 {
+	if report.AttemptCount != 6 || report.AcceptedCount != 1 || report.RejectedEvaluationCount != 1 || report.RejectedResourceTopologyCount != 1 || report.ExecutionFailureCount != 1 || report.InvalidArtifactRootCount != 2 || report.RecoveryOutcomeCounts["residual"] != 1 {
 		t.Fatalf("unexpected StateFuzz batch report: %#v", report)
 	}
 	if report.Attempts[2].Status != StateFuzzBatchInvalidArtifactRoot || report.Attempts[2].Reason != "candidate-profile-seed-lineage-mismatch" {
@@ -666,6 +729,44 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 	if forkPlan.SourceThreadID != "run-1" || forkPlan.WorkspaceSnapshot.SourceWorkspace != sourceWorkspace || forkPlan.WorkspaceSnapshot.PassiveUnixSocketInode == 0 {
 		t.Fatalf("LangGraph fork plan did not preserve a source workspace snapshot: %#v", forkPlan.WorkspaceSnapshot)
 	}
+	if forkPlan.ResourceContract.Kind != recovery.LangGraphRetainedUnixSocket || forkPlan.ResourceContract.WorkspaceRelativePath != "agent.sock" || forkPlan.WorkspaceTopology == nil || len(forkPlan.WorkspaceTopology.UnexpectedNodes) != 0 {
+		t.Fatalf("LangGraph fork plan did not preserve the clean resource topology contract: %#v", forkPlan)
+	}
+	forkPlan.RuntimeContract = recovery.LangGraphRuntimeContract{
+		SchemaVersion:  recovery.LangGraphRuntimeContractSchema,
+		TargetID:       recovery.LangGraphRuntimeTargetID,
+		RunnerProtocol: recovery.LangGraphRunnerProtocol,
+		Capabilities: []string{
+			"durable-disk-checkpoints-v1",
+			"exact-checkpoint-restore-v1",
+			"passive-unix-socket-observer-v1",
+			"passive-workspace-file-observer-v1",
+		},
+		ImageID: "sha256:" + strings.Repeat("a", 64),
+	}
+	forkPlan.SourceRuntime.ContainerImageID = forkPlan.RuntimeContract.ImageID
+	if err := forkPlan.ValidateFor(recovery.RecordedPlan{
+		SchemaVersion:        recovery.SchemaVersion,
+		RecordedPlanID:       run.RecordedPlanID,
+		AdapterID:            recovery.LangGraphForkAdapterID,
+		TargetID:             run.TargetID,
+		ExecutionArtifact:    "runs/langgraph-fork-plan.json",
+		PassiveObservationID: "unix-socket-listener-holder-v1:agent.sock",
+	}); err != nil {
+		t.Fatalf("LangGraph fork plan with matching runtime contract should validate: %v", err)
+	}
+	forkPlan.SourceRuntime.ContainerImageID = "sha256:" + strings.Repeat("b", 64)
+	if err := forkPlan.ValidateFor(recovery.RecordedPlan{
+		SchemaVersion:        recovery.SchemaVersion,
+		RecordedPlanID:       run.RecordedPlanID,
+		AdapterID:            recovery.LangGraphForkAdapterID,
+		TargetID:             run.TargetID,
+		ExecutionArtifact:    "runs/langgraph-fork-plan.json",
+		PassiveObservationID: "unix-socket-listener-holder-v1:agent.sock",
+	}); err == nil {
+		t.Fatal("expected a fork plan with a mismatched runtime image to be rejected")
+	}
+	forkPlan.SourceRuntime.ContainerImageID = forkPlan.RuntimeContract.ImageID
 	if len(forkPlan.ToolLifecycleByCheckpoint) != 3 || len(forkPlan.ToolLifecycleByCheckpoint["C0"].ToolResultIDs) != 0 || len(forkPlan.ToolLifecycleByCheckpoint["C1"].ToolResultIDs) != 1 || len(forkPlan.ToolLifecycleByCheckpoint["C2"].ToolCalls) != 1 {
 		t.Fatalf("LangGraph fork plan did not preserve durable tool lifecycle evidence: %#v", forkPlan.ToolLifecycleByCheckpoint)
 	}
@@ -718,6 +819,67 @@ func TestBindLangGraphNativeFrontierUsesEffectBracketingNativeCheckpoints(t *tes
 	manifest.NativeCheckpoints[1].PersistedMonotonicNS = 0
 	if _, err := BindLangGraphNativeFrontier(stateObjective, candidate, run, "C0..C1", "runs/run-1/langgraph-native-checkpoints.json", manifest); err == nil {
 		t.Fatal("expected native binding without a timestamped before checkpoint to be rejected")
+	}
+}
+
+func TestBindLangGraphNativeFrontierScopesHandleOpenToWorkspaceFile(t *testing.T) {
+	stateObjective := objective.StateObjective{
+		SchemaVersion:    objective.SchemaVersion,
+		ObjectiveID:      "handle.workspace-file.survival",
+		Effects:          []objective.EffectAtom{{Family: profiling.StateFamilyHandle, Operation: "open"}},
+		Lifetime:         "survive-tool-return",
+		ResourceRelation: "fixed-path-workspace-file",
+		Persistence:      "across-checkpoint",
+	}
+	request, err := NewGeneratorRequest(stateObjective, LangGraphSynthesisTargetID, LangGraphSynthesisAdapterID, "scaffolds/langgraph", 0, nil)
+	if err != nil {
+		t.Fatalf("NewGeneratorRequest returned error: %v", err)
+	}
+	candidate, err := NewCandidate(request, "test-generator", GeneratorResponse{Task: "Create the requested workspace result file."})
+	if err != nil {
+		t.Fatalf("NewCandidate returned error: %v", err)
+	}
+	run := profileForCandidate(stateObjective, candidate)
+	run.NativeCheckpointRunID = "langgraph-native-runtime:run-1"
+	frontier := &run.CheckpointMap.Intervals[0]
+	frontier.StartMonotonicNS = 100
+	frontier.EndMonotonicNS = 200
+	frontier.Effects = []profiling.NormalizedEffect{
+		{EffectID: "target-open", MonotonicNS: 140, Family: profiling.StateFamilyHandle, Operation: "open", Resource: profiling.ResourceRef{Family: profiling.StateFamilyHandle, CanonicalPath: "/workspace/agent-result.txt"}, PersistencePotential: true},
+		{EffectID: "wrapper-open", MonotonicNS: 195, Family: profiling.StateFamilyHandle, Operation: "open", Resource: profiling.ResourceRef{Family: profiling.StateFamilyHandle, CanonicalPath: "/workspace/langgraph-run-summary.json"}, PersistencePotential: true},
+	}
+	frontier.PersistentDelta = profiling.StateDelta{Added: []profiling.PersistentResource{
+		{Observed: true, Resource: profiling.ResourceRef{ResourceID: "workspace:agent-result.txt", Family: profiling.StateFamilyNamespace, Kind: "workspace-file", CanonicalPath: "/workspace/agent-result.txt"}},
+		{Observed: true, Resource: profiling.ResourceRef{ResourceID: "workspace:langgraph-run-summary.json", Family: profiling.StateFamilyNamespace, Kind: "workspace-file", CanonicalPath: "/workspace/langgraph-run-summary.json"}},
+	}}
+	frontier.EvidenceLinks = []profiling.EvidenceLink{
+		{LinkID: "target-open-link", EffectID: "target-open", ResourceID: "workspace:agent-result.txt", Relation: profiling.EvidenceLinkExactCanonicalPath},
+		{LinkID: "wrapper-open-link", EffectID: "wrapper-open", ResourceID: "workspace:langgraph-run-summary.json", Relation: profiling.EvidenceLinkExactCanonicalPath},
+	}
+	run.CheckpointSummaries[1].Resources = append([]profiling.PersistentResource{}, frontier.PersistentDelta.Added...)
+	run.CheckpointSummaries[2].Resources = append([]profiling.PersistentResource{}, frontier.PersistentDelta.Added...)
+	manifest := LangGraphNativeCheckpointManifest{
+		SchemaVersion:            LangGraphNativeCheckpointManifestSchema,
+		InitialRuntimeInstanceID: "langgraph-native-runtime:run-1",
+		ThreadID:                 "run-1",
+		CheckpointBackend:        "disk",
+		Durable:                  true,
+		ClockDomain:              "CLOCK_MONOTONIC",
+		CheckpointDir:            "/workspace/langgraph-checkpoints",
+		NativeCheckpoints: []LangGraphNativeCheckpoint{
+			{CheckpointID: "before-native", HistoryIndex: 1, MessageCount: 1, PersistedMonotonicNS: 130, DurableToolLifecycle: &LangGraphDurableToolLifecycle{}},
+			{CheckpointID: "after-native", HistoryIndex: 0, MessageCount: 2, PersistedMonotonicNS: 170, DurableToolLifecycle: &LangGraphDurableToolLifecycle{}},
+		},
+	}
+	if _, err := BindLangGraphNativeFrontier(stateObjective, candidate, run, "C0..C1", "manifest.json", manifest); err == nil {
+		t.Fatal("expected unscoped handle/open binding to include the later wrapper artifact and fail bracketing")
+	}
+	binding, err := BindLangGraphNativeFrontierWithLifecycleAndConfig(stateObjective, candidate, run, "C0..C1", "manifest.json", manifest, nil, LangGraphNativeFrontierBindingConfig{ObservedWorkspaceFilePath: "agent-result.txt"})
+	if err != nil {
+		t.Fatalf("BindLangGraphNativeFrontierWithLifecycleAndConfig returned error: %v", err)
+	}
+	if binding.FirstEffectMonotonicNS != 140 || binding.LastEffectMonotonicNS != 140 || binding.ObservedWorkspaceFilePath != "agent-result.txt" || len(binding.ObjectiveEffectIDs) != 1 || binding.ObjectiveEffectIDs[0] != "target-open" {
+		t.Fatalf("workspace file binding did not retain the scoped target effect: %#v", binding)
 	}
 }
 

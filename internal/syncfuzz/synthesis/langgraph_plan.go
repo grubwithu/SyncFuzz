@@ -13,12 +13,38 @@ import (
 )
 
 type LangGraphForkPlanConfig struct {
-	Model                    string
-	ContainerImage           string
-	RuntimeRoot              string
+	Model            string
+	ContainerImage   string
+	RuntimeRoot      string
+	RuntimeContract  recovery.LangGraphRuntimeContract
+	ResourceContract recovery.LangGraphRetainedResourceContract
+	// PassiveUnixSocketPath and PassiveWorkspaceFilePath are compatibility
+	// inputs for older callers. New callers must provide ResourceContract.
 	PassiveUnixSocketPath    string
 	PassiveWorkspaceFilePath string
 	PassiveProbeMode         recovery.LangGraphPassiveProbeMode
+}
+
+func (c LangGraphForkPlanConfig) RetainedResourceContract() (recovery.LangGraphRetainedResourceContract, error) {
+	hasContract := strings.TrimSpace(c.ResourceContract.SchemaVersion) != ""
+	hasSocket := strings.TrimSpace(c.PassiveUnixSocketPath) != ""
+	hasWorkspaceFile := strings.TrimSpace(c.PassiveWorkspaceFilePath) != ""
+	if hasContract {
+		if hasSocket || hasWorkspaceFile {
+			return recovery.LangGraphRetainedResourceContract{}, fmt.Errorf("LangGraph fork plan must not mix a retained resource contract with legacy passive resource paths")
+		}
+		if err := c.ResourceContract.Validate(); err != nil {
+			return recovery.LangGraphRetainedResourceContract{}, err
+		}
+		return c.ResourceContract, nil
+	}
+	if hasSocket == hasWorkspaceFile {
+		return recovery.LangGraphRetainedResourceContract{}, fmt.Errorf("LangGraph fork plan requires exactly one passive Unix socket or workspace file path")
+	}
+	if hasSocket {
+		return recovery.NewLangGraphRetainedResourceContract(recovery.LangGraphRetainedUnixSocket, c.PassiveUnixSocketPath)
+	}
+	return recovery.NewLangGraphRetainedResourceContract(recovery.LangGraphRetainedWorkspaceFile, c.PassiveWorkspaceFilePath)
 }
 
 // PrepareLangGraphForkPlan turns a timestamp-validated native binding into an
@@ -40,11 +66,11 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 	if strings.TrimSpace(config.Model) == "" || strings.TrimSpace(config.ContainerImage) == "" || strings.TrimSpace(config.RuntimeRoot) == "" {
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph fork plan requires model, container image, and runtime root")
 	}
-	hasSocket := strings.TrimSpace(config.PassiveUnixSocketPath) != ""
-	hasWorkspaceFile := strings.TrimSpace(config.PassiveWorkspaceFilePath) != ""
-	if hasSocket == hasWorkspaceFile {
-		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph fork plan requires exactly one passive Unix socket or workspace file path")
+	resourceContract, err := config.RetainedResourceContract()
+	if err != nil {
+		return recovery.LangGraphForkPlan{}, err
 	}
+	hasSocket := resourceContract.Kind == recovery.LangGraphRetainedUnixSocket
 	probeMode := config.PassiveProbeMode.Effective()
 	if !probeMode.Valid() {
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph fork plan has unsupported passive probe mode %q", config.PassiveProbeMode)
@@ -77,22 +103,31 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 	if err != nil {
 		return recovery.LangGraphForkPlan{}, err
 	}
+	if config.RuntimeContract.SchemaVersion != "" {
+		if err := config.RuntimeContract.Validate(); err != nil {
+			return recovery.LangGraphForkPlan{}, err
+		}
+		if sourceRuntime.ContainerImageID == "" || sourceRuntime.ContainerImageID != config.RuntimeContract.ImageID {
+			return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph prepared runtime contract does not match the profiled source image")
+		}
+	}
 	var (
 		snapshot             recovery.LangGraphWorkspaceSnapshot
+		workspaceTopology    recovery.LangGraphWorkspaceTopology
 		socketProbe          recovery.LangGraphUnixSocketProbe
 		workspaceFileProbe   *recovery.LangGraphWorkspaceFileProbe
 		passiveObservationID string
 	)
+	snapshot, workspaceTopology, err = recovery.CaptureLangGraphWorkspaceSnapshotForContract(sourceWorkspace, resourceContract)
+	if err != nil {
+		return recovery.LangGraphForkPlan{}, fmt.Errorf("capture LangGraph recovery source snapshot: %w", err)
+	}
 	if hasSocket {
-		snapshot, err = recovery.CaptureLangGraphWorkspaceSnapshot(sourceWorkspace, strings.TrimSpace(config.PassiveUnixSocketPath))
-		if err != nil {
-			return recovery.LangGraphForkPlan{}, fmt.Errorf("capture LangGraph recovery source snapshot: %w", err)
-		}
 		socketProbe, err = langGraphUnixSocketProbe(run, binding, headCheckpointID)
 		if err != nil {
 			return recovery.LangGraphForkPlan{}, err
 		}
-		passiveObservationID = "unix-socket-listener-holder-v1:" + strings.TrimSpace(config.PassiveUnixSocketPath)
+		passiveObservationID = "unix-socket-listener-holder-v1:" + resourceContract.WorkspaceRelativePath
 	} else {
 		if probeMode != recovery.LangGraphPassiveProbeFull {
 			return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph workspace file recovery supports only the full passive probe")
@@ -100,15 +135,14 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		if len(stateObjective.Effects) != 1 || stateObjective.Effects[0].Family != profiling.StateFamilyHandle || stateObjective.Effects[0].Operation != "open" {
 			return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph workspace file recovery requires a single handle/open objective")
 		}
-		snapshot, err = recovery.CaptureLangGraphWorkspaceFileSnapshot(sourceWorkspace, strings.TrimSpace(config.PassiveWorkspaceFilePath))
-		if err != nil {
-			return recovery.LangGraphForkPlan{}, fmt.Errorf("capture LangGraph recovery source snapshot: %w", err)
+		if strings.TrimSpace(binding.ObservedWorkspaceFilePath) != resourceContract.WorkspaceRelativePath {
+			return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph workspace file recovery path does not match the native frontier binding")
 		}
-		workspaceFileProbe, err = langGraphWorkspaceFileProbe(run, binding, headCheckpointID, strings.TrimSpace(config.PassiveWorkspaceFilePath))
+		workspaceFileProbe, err = langGraphWorkspaceFileProbe(run, binding, headCheckpointID, resourceContract.WorkspaceRelativePath)
 		if err != nil {
 			return recovery.LangGraphForkPlan{}, err
 		}
-		passiveObservationID = "workspace-file-identity-v1:" + strings.TrimSpace(config.PassiveWorkspaceFilePath)
+		passiveObservationID = "workspace-file-identity-v1:" + resourceContract.WorkspaceRelativePath
 	}
 	plan := recovery.LangGraphForkPlan{
 		SchemaVersion:                   recovery.LangGraphForkPlanSchema,
@@ -119,9 +153,10 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		Task:                            candidate.Task,
 		Model:                           strings.TrimSpace(config.Model),
 		ContainerImage:                  strings.TrimSpace(config.ContainerImage),
+		RuntimeContract:                 config.RuntimeContract,
 		RuntimeRoot:                     runtimeRoot,
-		PassiveUnixSocketPath:           strings.TrimSpace(config.PassiveUnixSocketPath),
-		PassiveWorkspaceFilePath:        strings.TrimSpace(config.PassiveWorkspaceFilePath),
+		ResourceContract:                resourceContract,
+		WorkspaceTopology:               &workspaceTopology,
 		PassiveProbeMode:                probeMode,
 		PassiveObservationID:            passiveObservationID,
 		MaterializationHeadID:           "materialization-head:" + run.ProfileRunID + ":" + headCheckpointID,
@@ -146,6 +181,11 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		},
 		ToolLifecycleByCheckpoint: toolLifecycleByCheckpoint,
 		ToolEffectProvenance:      cloneLangGraphToolEffectProvenance(binding.ToolEffectProvenance),
+	}
+	if hasSocket {
+		plan.PassiveUnixSocketPath = resourceContract.WorkspaceRelativePath
+	} else {
+		plan.PassiveWorkspaceFilePath = resourceContract.WorkspaceRelativePath
 	}
 	if len(plan.CheckpointCoordinates) != 3 {
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph binding does not preserve before, after, and materialization-head coordinates")
@@ -184,8 +224,17 @@ func langGraphWorkspaceFileProbe(run objective.ProfileRun, binding LangGraphNati
 		return nil, fmt.Errorf("LangGraph materialization head does not prove exactly one retained workspace file at %q", canonicalPath)
 	}
 	linked := make(map[string]struct{})
+	boundObjectiveEffects := make(map[string]struct{}, len(binding.ObjectiveEffectIDs))
+	for _, effectID := range binding.ObjectiveEffectIDs {
+		boundObjectiveEffects[effectID] = struct{}{}
+	}
 	for _, link := range frontier.EvidenceLinks {
 		if link.Relation == profiling.EvidenceLinkExactCanonicalPath && link.ResourceID == resourceIDs[0] {
+			if len(boundObjectiveEffects) != 0 {
+				if _, ok := boundObjectiveEffects[link.EffectID]; !ok {
+					continue
+				}
+			}
 			linked[link.EffectID] = struct{}{}
 		}
 	}
@@ -233,11 +282,12 @@ func langGraphSourceRuntime(run objective.ProfileRun) (recovery.LangGraphSourceR
 		return recovery.LangGraphSourceRuntime{}, err
 	}
 	return recovery.LangGraphSourceRuntime{
-		SchemaVersion:  run.RetainedRuntime.SchemaVersion,
-		Environment:    run.RetainedRuntime.Environment,
-		ContainerName:  run.RetainedRuntime.ContainerName,
-		ContainerID:    run.RetainedRuntime.ContainerID,
-		ContainerImage: run.RetainedRuntime.ContainerImage,
+		SchemaVersion:    run.RetainedRuntime.SchemaVersion,
+		Environment:      run.RetainedRuntime.Environment,
+		ContainerName:    run.RetainedRuntime.ContainerName,
+		ContainerID:      run.RetainedRuntime.ContainerID,
+		ContainerImage:   run.RetainedRuntime.ContainerImage,
+		ContainerImageID: run.RetainedRuntime.ContainerImageID,
 	}, nil
 }
 

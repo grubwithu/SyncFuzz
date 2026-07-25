@@ -14,6 +14,8 @@ const (
 	LangGraphNativeCoordinateSchema   = "syncfuzz.langgraph-native-coordinate.v1"
 	LangGraphUnixSocketProbeSchema    = "syncfuzz.langgraph-unix-socket-probe.v1"
 	LangGraphWorkspaceFileProbeSchema = "syncfuzz.langgraph-workspace-file-probe.v1"
+	LangGraphResourceContractSchema   = "syncfuzz.langgraph-retained-resource-contract.v1"
+	LangGraphWorkspaceTopologySchema  = "syncfuzz.langgraph-workspace-topology.v1"
 )
 
 // LangGraphPassiveProbeMode controls how a recovery container establishes
@@ -35,6 +37,116 @@ func (m LangGraphPassiveProbeMode) Effective() LangGraphPassiveProbeMode {
 
 func (m LangGraphPassiveProbeMode) Valid() bool {
 	return m == LangGraphPassiveProbeFull || m == LangGraphPassiveProbePruned
+}
+
+// LangGraphRetainedResourceKind identifies the one source-workspace node that
+// recovery may retain outside its clone. It is an execution-topology contract,
+// not a task-success Oracle.
+type LangGraphRetainedResourceKind string
+
+const (
+	LangGraphRetainedUnixSocket    LangGraphRetainedResourceKind = "unix-socket-listener"
+	LangGraphRetainedWorkspaceFile LangGraphRetainedResourceKind = "workspace-regular-file"
+)
+
+// LangGraphRetainedResourceContract is the target-owned resource boundary
+// shared by binding, snapshotting, and recovery. New plans persist it so the
+// observed workspace topology is no longer inferred from Make variables.
+type LangGraphRetainedResourceContract struct {
+	SchemaVersion         string                        `json:"schema_version"`
+	Kind                  LangGraphRetainedResourceKind `json:"kind"`
+	WorkspaceRelativePath string                        `json:"workspace_relative_path"`
+}
+
+func NewLangGraphRetainedResourceContract(kind LangGraphRetainedResourceKind, workspaceRelativePath string) (LangGraphRetainedResourceContract, error) {
+	contract := LangGraphRetainedResourceContract{
+		SchemaVersion:         LangGraphResourceContractSchema,
+		Kind:                  kind,
+		WorkspaceRelativePath: filepath.Clean(strings.TrimSpace(workspaceRelativePath)),
+	}
+	if err := contract.Validate(); err != nil {
+		return LangGraphRetainedResourceContract{}, err
+	}
+	return contract, nil
+}
+
+func (c LangGraphRetainedResourceContract) Validate() error {
+	if c.SchemaVersion != LangGraphResourceContractSchema || (c.Kind != LangGraphRetainedUnixSocket && c.Kind != LangGraphRetainedWorkspaceFile) || strings.TrimSpace(c.WorkspaceRelativePath) == "" || filepath.IsAbs(c.WorkspaceRelativePath) {
+		return fmt.Errorf("LangGraph retained resource contract is incomplete")
+	}
+	if _, err := workspaceChild("/workspace", c.WorkspaceRelativePath); err != nil {
+		return fmt.Errorf("LangGraph retained resource contract path: %w", err)
+	}
+	return nil
+}
+
+// LangGraphWorkspaceTopology is a deterministic inventory of nodes which a
+// recovery clone cannot safely reproduce. A clean inventory proves that the
+// contract's single retained node is the only special workspace resource.
+type LangGraphWorkspaceTopology struct {
+	SchemaVersion    string                            `json:"schema_version"`
+	SourceWorkspace  string                            `json:"source_workspace"`
+	ResourceContract LangGraphRetainedResourceContract `json:"resource_contract"`
+	UnexpectedNodes  []LangGraphWorkspaceTopologyNode  `json:"unexpected_nodes,omitempty"`
+}
+
+type LangGraphWorkspaceTopologyNode struct {
+	WorkspaceRelativePath string `json:"workspace_relative_path"`
+	Kind                  string `json:"kind"`
+}
+
+func (t LangGraphWorkspaceTopology) Validate() error {
+	if t.SchemaVersion != LangGraphWorkspaceTopologySchema || strings.TrimSpace(t.SourceWorkspace) == "" || !filepath.IsAbs(t.SourceWorkspace) {
+		return fmt.Errorf("LangGraph workspace topology is incomplete")
+	}
+	if err := t.ResourceContract.Validate(); err != nil {
+		return err
+	}
+	previousPath := ""
+	for _, node := range t.UnexpectedNodes {
+		if strings.TrimSpace(node.WorkspaceRelativePath) == "" || strings.TrimSpace(node.Kind) == "" {
+			return fmt.Errorf("LangGraph workspace topology has an incomplete unexpected node")
+		}
+		if _, err := workspaceChild(t.SourceWorkspace, node.WorkspaceRelativePath); err != nil {
+			return fmt.Errorf("LangGraph workspace topology unexpected node: %w", err)
+		}
+		if previousPath != "" && node.WorkspaceRelativePath <= previousPath {
+			return fmt.Errorf("LangGraph workspace topology unexpected nodes are not strictly ordered")
+		}
+		previousPath = node.WorkspaceRelativePath
+	}
+	return nil
+}
+
+func (t LangGraphWorkspaceTopology) ValidateForRecovery() error {
+	if err := t.Validate(); err != nil {
+		return err
+	}
+	if len(t.UnexpectedNodes) != 0 {
+		return &LangGraphWorkspaceTopologyError{Topology: t}
+	}
+	return nil
+}
+
+// LangGraphWorkspaceTopologyError preserves an inspectable inventory for a
+// generated candidate that creates an unmodelled workspace node.
+type LangGraphWorkspaceTopologyError struct {
+	Topology LangGraphWorkspaceTopology
+}
+
+func (e *LangGraphWorkspaceTopologyError) Error() string {
+	if len(e.Topology.UnexpectedNodes) == 0 {
+		return "LangGraph workspace topology violates retained-resource contract"
+	}
+	first := e.Topology.UnexpectedNodes[0]
+	return fmt.Sprintf("LangGraph workspace topology violates retained-resource contract %s at %q: unexpected %s", e.Topology.ResourceContract.Kind, first.WorkspaceRelativePath, first.Kind)
+}
+
+func WriteLangGraphWorkspaceTopology(path string, topology LangGraphWorkspaceTopology) error {
+	if err := topology.Validate(); err != nil {
+		return err
+	}
+	return writeRecoveryJSON(path, topology)
 }
 
 // LangGraphNativeCheckpointCoordinate records source-checkpoint provenance.
@@ -133,16 +245,20 @@ func (p LangGraphToolEffectProvenance) Validate() error {
 // network and PID namespaces hold the retained OS effect. The immutable ID
 // prevents a replacement container with the same name from supplying state.
 type LangGraphSourceRuntime struct {
-	SchemaVersion  string `json:"schema_version"`
-	Environment    string `json:"environment"`
-	ContainerName  string `json:"container_name"`
-	ContainerID    string `json:"container_id"`
-	ContainerImage string `json:"container_image"`
+	SchemaVersion    string `json:"schema_version"`
+	Environment      string `json:"environment"`
+	ContainerName    string `json:"container_name"`
+	ContainerID      string `json:"container_id"`
+	ContainerImage   string `json:"container_image"`
+	ContainerImageID string `json:"container_image_id,omitempty"`
 }
 
 func (r LangGraphSourceRuntime) Validate() error {
 	if r.SchemaVersion != "syncfuzz.target-runtime-lease.v1" || r.Environment != "container" || strings.TrimSpace(r.ContainerName) == "" || strings.TrimSpace(r.ContainerID) == "" || strings.TrimSpace(r.ContainerImage) == "" {
 		return fmt.Errorf("LangGraph source runtime is incomplete")
+	}
+	if r.ContainerImageID != "" && !strings.HasPrefix(r.ContainerImageID, "sha256:") {
+		return fmt.Errorf("LangGraph source runtime has an invalid container image ID")
 	}
 	return nil
 }
@@ -267,6 +383,7 @@ type LangGraphForkPlan struct {
 	Task                            string                                         `json:"task"`
 	Model                           string                                         `json:"model"`
 	ContainerImage                  string                                         `json:"container_image"`
+	RuntimeContract                 LangGraphRuntimeContract                       `json:"runtime_contract,omitempty"`
 	RuntimeRoot                     string                                         `json:"runtime_root"`
 	PassiveUnixSocketPath           string                                         `json:"passive_unix_socket_path"`
 	PassiveWorkspaceFilePath        string                                         `json:"passive_workspace_file_path,omitempty"`
@@ -276,6 +393,8 @@ type LangGraphForkPlan struct {
 	MaterializationHeadCheckpointID string                                         `json:"materialization_head_checkpoint_id"`
 	SourceThreadID                  string                                         `json:"source_thread_id"`
 	SourceRuntime                   LangGraphSourceRuntime                         `json:"source_runtime"`
+	ResourceContract                LangGraphRetainedResourceContract              `json:"resource_contract,omitempty"`
+	WorkspaceTopology               *LangGraphWorkspaceTopology                    `json:"workspace_topology,omitempty"`
 	WorkspaceSnapshot               LangGraphWorkspaceSnapshot                     `json:"workspace_snapshot"`
 	UnixSocketProbe                 LangGraphUnixSocketProbe                       `json:"unix_socket_probe"`
 	WorkspaceFileProbe              *LangGraphWorkspaceFileProbe                   `json:"workspace_file_probe,omitempty"`
@@ -300,11 +419,42 @@ func (p LangGraphForkPlan) ValidateFor(plan RecordedPlan) error {
 	if !p.PassiveProbeMode.Effective().Valid() {
 		return fmt.Errorf("LangGraph fork plan has unsupported passive probe mode %q", p.PassiveProbeMode)
 	}
+	if p.ResourceContract.SchemaVersion != "" {
+		if err := p.ResourceContract.Validate(); err != nil {
+			return err
+		}
+		expectedKind := LangGraphRetainedUnixSocket
+		expectedPath := p.PassiveUnixSocketPath
+		if hasWorkspaceFile {
+			expectedKind = LangGraphRetainedWorkspaceFile
+			expectedPath = p.PassiveWorkspaceFilePath
+		}
+		if p.ResourceContract.Kind != expectedKind || p.ResourceContract.WorkspaceRelativePath != filepath.Clean(expectedPath) {
+			return fmt.Errorf("LangGraph retained resource contract does not match the fork plan passive resource")
+		}
+		if p.WorkspaceTopology == nil {
+			return fmt.Errorf("LangGraph fork plan has no workspace topology inventory")
+		}
+		if p.WorkspaceTopology.SourceWorkspace != p.WorkspaceSnapshot.SourceWorkspace || p.WorkspaceTopology.ResourceContract != p.ResourceContract {
+			return fmt.Errorf("LangGraph workspace topology does not match the fork plan resource contract")
+		}
+		if err := p.WorkspaceTopology.ValidateForRecovery(); err != nil {
+			return err
+		}
+	}
 	if err := p.SourceRuntime.Validate(); err != nil {
 		return err
 	}
 	if p.SourceRuntime.ContainerImage != p.ContainerImage {
 		return fmt.Errorf("LangGraph source runtime image does not match the fork plan")
+	}
+	if p.RuntimeContract.SchemaVersion != "" {
+		if err := p.RuntimeContract.Validate(); err != nil {
+			return err
+		}
+		if p.SourceRuntime.ContainerImageID == "" || p.SourceRuntime.ContainerImageID != p.RuntimeContract.ImageID {
+			return fmt.Errorf("LangGraph runtime contract image does not match the retained source runtime")
+		}
 	}
 	if err := p.WorkspaceSnapshot.Validate(); err != nil {
 		return err

@@ -33,6 +33,14 @@
 > 该路径已完成单元测试和 artifact contract，但尚未完成真实 generated-candidate
 > live run，因此不应与上面的 listener calibration 混为已有实验结果。
 
+> 代码增量：新的 LangGraph profile 同时记录 source container 的 immutable image
+> ID。host 在 profile/prepare 和每次 recovery 前，于 image 内执行
+> `run_target.py --runtime-contract`；该自描述 contract 固定 runner protocol、durable
+> disk checkpoint、exact restore 与两类 passive observer capability。fork plan 只接受
+> 与 source lease 相同的 image ID，recovery 也只会 launch 该 immutable ID；tag
+> 被 retag 不能改变 runner，contract 改变则 fail closed。旧 profile 不含 image ID，
+> 不能冒充满足此新 contract。
+
 本文以目前唯一一条已完整跑通的 LangGraph 路径为主线，解释 SyncFuzz v2 到底在做什么、每一个 artifact 代表什么、已经证明了什么，以及还没有证明什么。它是明天汇报当前开发进度的技术底稿，而不是论文实验结果表。
 
 ## 1. 一句话结论
@@ -566,7 +574,7 @@ command hash 或 contract status，也不将 relation 结论升级为 guided gen
 | profile identity | `profile-run.json` | candidate/profile/native runtime/plan 的关联。 |
 | seed | `state-seed.json` | 已验证 atoms、frontier、资源 IDs。 |
 | native binding | `langgraph-native-frontier-binding.json` | effect window 与 exact native checkpoint 的时间关系，以及 before/after 的 durable tool lifecycle snapshot。 |
-| frozen plan | `langgraph-fork-plan.json` | task/model/image/probe、before/after/head coordinates、retention 和 lifecycle snapshots，且无 credential。 |
+| frozen plan | `langgraph-fork-plan.json` | task/model/image、immutable image ID、runner capability contract、probe、before/after/head coordinates、retention 和 lifecycle snapshots，且无 credential。 |
 | recovery set | `recovery-set.json` | `Q_before` / `Q_after` / `Q_head` 与 materialization head contract。 |
 | before evidence | `recovery-runtimes/...3094571268/langgraph-recovery-observation.json` | 新 runtime、unique coordinate resolution、lstat metadata。 |
 | after evidence | `recovery-runtimes/...1228889475/langgraph-recovery-observation.json` | 同上。 |
@@ -592,7 +600,8 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 8. **query 内保留 residue。**同一 query 的 initial 与 fresh-resume process 留在同一 container/workspace，以便构造 `<A_C,O_H^(q)>`，检查 logical recovery 没有回滚的 OS state。
 9. **被动观察不改状态。**`lstat` 既不建连也不调用 Agent follow-up。
 10. **credential 不落盘。**plan / pair / profile artifact 不包含 API key；运行时从环境传递。
-11. **不确定就拒绝分类。**coordinate 非唯一、binding 不成立、runtime 未重建、probe 无法解释 multiplicity，均 fail closed。
+11. **image contract 必须一致。**source lease、准备期与恢复期的 image ID、runner protocol 和 recovery capability set 必须完全相同。
+12. **不确定就拒绝分类。**coordinate 非唯一、binding 不成立、runtime 未重建、probe 无法解释 multiplicity，均 fail closed。
 
 ## 12. 这条闭环已经证明什么
 
@@ -785,6 +794,43 @@ endpoint convention as the LangGraph target. Use it by setting
 and record a stable adapter version in `LANGGRAPH_STATEFUZZ_GENERATOR_ID`. The
 adapter reads the target-owned scaffold named by the bounded request; for this
 target it declares `agent.sock` as the workspace-local observable Unix endpoint.
+
+The next live experiment should use the regular-workspace-file family. It
+selects `agent-result.txt` as the retained metadata node and a distinct
+regular-file-only scaffold. The scaffold still leaves task wording to the
+external generator, but excludes Unix sockets, every other special workspace
+file, and background services so the recovery snapshot has no unmodelled node:
+
+```bash
+make synthesis-langgraph-statefuzz-attempt \
+  LANGGRAPH_SYNTHESIS_OBJECTIVE=examples/objectives/workspace-file-survival.example.json \
+  LANGGRAPH_SYNTHESIS_ROOT=runs/langgraph-workspace-file/attempt-000 \
+  LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE=agent-result.txt \
+  LANGGRAPH_STATEFUZZ_SCAFFOLD=examples/synthesis/langgraph-shell-react-workspace-file-scaffold.example.json \
+  LANGGRAPH_STATEFUZZ_GENERATOR_ID=openai-compatible-generator-v2 \
+  LANGGRAPH_STATEFUZZ_GENERATOR_COMMAND='python3 examples/synthesis/openai_compatible_generator.py' \
+  LANGGRAPH_STATEFUZZ_ATTEMPT=0 \
+  LANGGRAPH_V3_PROFILE_TIMEOUT=5m
+```
+
+This run needs eBPF/Docker privileges and invokes the configured provider. The
+V3 Make target rebuilds `syncfuzz-langgraph:dev` from the checked-out wrapper
+before profiling, so the recovery container cannot use stale argument support.
+It is eligible to produce a StateSeed only if the generated task supplies exact
+`handle/open` frontier evidence and the before/after/head controls complete.
+The calibration command forwards `agent-result.txt` to native binding as a
+resource scope, so unrelated wrapper `open` effects cannot widen the checkpoint
+window; the scope still does not inspect file contents.
+
+Fork preparation then persists a `LangGraphRetainedResourceContract` and
+`LangGraphWorkspaceTopology` in the recorded plan. The contract is shared by
+snapshotting and recovery: it permits the declared retained file but rejects
+any second special workspace node instead of trying to copy or silently ignore
+it. Even a rejected preparation writes `workspace-topology.json`, which records
+the offending path and node kind. StateFuzz classifies that as
+`rejected-resource-topology`, separate from a source-baseline rejection or an
+executor failure; it remains denominator data and is not task-content Oracle
+feedback.
 
 The attempt writes `candidate.json`, `profile-run.json`, and `evaluation.json`.
 If evidence is insufficient, it prints `candidate_status: rejected; recovery

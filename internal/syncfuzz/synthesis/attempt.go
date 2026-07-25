@@ -10,10 +10,11 @@ const StateFuzzAttemptSchema = "syncfuzz.statefuzz-attempt.v1"
 type StateFuzzAttemptStatus string
 
 const (
-	StateFuzzAttemptAccepted               StateFuzzAttemptStatus = "accepted"
-	StateFuzzAttemptRejectedEvaluation     StateFuzzAttemptStatus = "rejected-evaluation"
-	StateFuzzAttemptRejectedSourceBaseline StateFuzzAttemptStatus = "rejected-source-baseline"
-	StateFuzzAttemptExecutionFailed        StateFuzzAttemptStatus = "execution-failed"
+	StateFuzzAttemptAccepted                 StateFuzzAttemptStatus = "accepted"
+	StateFuzzAttemptRejectedEvaluation       StateFuzzAttemptStatus = "rejected-evaluation"
+	StateFuzzAttemptRejectedSourceBaseline   StateFuzzAttemptStatus = "rejected-source-baseline"
+	StateFuzzAttemptRejectedResourceTopology StateFuzzAttemptStatus = "rejected-resource-topology"
+	StateFuzzAttemptExecutionFailed          StateFuzzAttemptStatus = "execution-failed"
 )
 
 // StateFuzzAttempt records the denominator for one generated-candidate trial.
@@ -46,9 +47,9 @@ func (a StateFuzzAttempt) Validate() error {
 		if strings.TrimSpace(a.ProfileRunID) == "" || a.EligibleForRetention == nil || *a.EligibleForRetention || strings.TrimSpace(a.Reason) == "" {
 			return fmt.Errorf("evaluation-rejected StateFuzz attempt requires an ineligible profile run and reason")
 		}
-	case StateFuzzAttemptRejectedSourceBaseline:
+	case StateFuzzAttemptRejectedSourceBaseline, StateFuzzAttemptRejectedResourceTopology:
 		if strings.TrimSpace(a.ProfileRunID) == "" || a.EligibleForRetention == nil || !*a.EligibleForRetention || strings.TrimSpace(a.Reason) == "" {
-			return fmt.Errorf("source-baseline-rejected StateFuzz attempt requires an eligible profile run and reason")
+			return fmt.Errorf("source-baseline or topology-rejected StateFuzz attempt requires an eligible profile run and reason")
 		}
 	case StateFuzzAttemptExecutionFailed:
 		if strings.TrimSpace(a.Reason) == "" {
@@ -60,7 +61,7 @@ func (a StateFuzzAttempt) Validate() error {
 
 func (s StateFuzzAttemptStatus) Valid() bool {
 	switch s {
-	case StateFuzzAttemptAccepted, StateFuzzAttemptRejectedEvaluation, StateFuzzAttemptRejectedSourceBaseline, StateFuzzAttemptExecutionFailed:
+	case StateFuzzAttemptAccepted, StateFuzzAttemptRejectedEvaluation, StateFuzzAttemptRejectedSourceBaseline, StateFuzzAttemptRejectedResourceTopology, StateFuzzAttemptExecutionFailed:
 		return true
 	default:
 		return false
