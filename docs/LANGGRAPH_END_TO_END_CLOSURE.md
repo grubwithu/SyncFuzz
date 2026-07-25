@@ -532,6 +532,14 @@ result 或多个匹配 span 都明确是 unknown。`recovery execute --out-relat
 仍只证明 `effect-not-committed` 或 `effect-committed`，不得将 checkpoint
 重新命名为 `PRE_CALL`、`CALL_DURABLE` 或 `RESULT_DURABLE`。
 
+`recovery relation-novelty` 已把 complete before/after/head reports 投影到
+独立的 `RelationNoveltyLedger`。其 key 是 canonical effect scope、adapter、
+causal evidence status、已证明的 tool name 与三个 normalized relation
+signature；task、tool-call ID、shell session、command hash 与 contract status
+都不参与 key。fidelity batch 只读取 `full/` reports：重复 profile 会增加
+confidence record，但相同 semantic tuple 只计一次 novelty。该 ledger 暂未接入
+objective scheduler，因此不应将它误报为已实现的 guided generation。
+
 ## 10. 关键 artifact 清单与审计路径
 
 `runs/` 是生成物目录，按项目纪律不会提交到 Git。汇报或复查此运行时应保留该目录。审计可按下面的顺序打开：

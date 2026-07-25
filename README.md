@@ -142,6 +142,15 @@ relation signature, phase, or contract status: they remain
 `effect-not-committed` / `effect-committed`, not `PRE_CALL`, `CALL_DURABLE`, or
 `RESULT_DURABLE`.
 
+`recovery relation-novelty` converts only complete before/after/head reports
+into a durable `RelationNoveltyLedger`. Its tuple contains canonical objective
+effects, adapter, causal-evidence status, proven tool name, and the three
+normalized relation signatures. It deliberately excludes task text, tool-call
+IDs, shell sessions, command hashes, and contract status. `--fidelity-batch`
+loads each accepted `attempt-*/full/recovery-relation-report.json`, so repeated
+profiles add confidence records while the same semantic tuple is counted once.
+The ledger is not yet connected to objective scheduling.
+
 V2.4a adds `synthesis schedule`, `synthesis generate`, `synthesis evaluate`,
 and `synthesis promote`. Scheduling uses only objective atoms and the V2
 coverage ledger; a generator reads a bounded JSON request through

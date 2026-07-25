@@ -99,6 +99,7 @@ Usage:
   syncfuzz profile recovery-set --objective objective.json --seed state-seed.json --passive-observation observation-id [--retention-policy retain-relevant-os-state] --out historical-recovery-set.json
   syncfuzz recovery execute --seed state-seed.json [--pair recovery-pair.json | --set historical-recovery-set.json] [--out recovery-execution.json] [--out-relation recovery-relation-report.json] [--timeout 2m]
   syncfuzz recovery classify-relation --seed state-seed.json --execution recovery-set-execution.json --out recovery-relation-report.json
+  syncfuzz recovery relation-novelty [--reports report-a.json,report-b.json | --fidelity-batch runs/<batch>] [--ledger relation-novelty-ledger.json] --out relation-novelty-ledger.json
   syncfuzz recovery fidelity-report --roots runs/<trial-a>,runs/<trial-b> --out fidelity-report.json
   syncfuzz recovery fidelity-batch-report --root runs/<batch> --target-accepted-trials 3 --max-attempts 6 --out fidelity-report.json
   syncfuzz synthesis schedule --objectives objective-a.json,objective-b.json [--coverage-ledger coverage.json] [--limit 0] --out schedule.json
@@ -166,7 +167,7 @@ func profile(args []string) {
 
 func runRecovery(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "syncfuzz recovery requires a subcommand; supported: execute, classify-relation, fidelity-report, fidelity-attempt, fidelity-batch-report")
+		fmt.Fprintln(os.Stderr, "syncfuzz recovery requires a subcommand; supported: execute, classify-relation, relation-novelty, fidelity-report, fidelity-attempt, fidelity-batch-report")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -174,6 +175,8 @@ func runRecovery(args []string) {
 		recoveryExecute(args[1:])
 	case "classify-relation":
 		recoveryClassifyRelation(args[1:])
+	case "relation-novelty":
+		recoveryRelationNovelty(args[1:])
 	case "fidelity-report":
 		recoveryFidelityReport(args[1:])
 	case "fidelity-attempt":

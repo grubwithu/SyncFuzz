@@ -55,6 +55,15 @@ field. Its current `seed_resource_ids` are the StateSeed's validated frontier
 scope, not yet a per-effect ResourceGraph edge set; exact effect/resource graph
 coverage remains future adapter work.
 
+`recovery relation-novelty` now projects reports with complete
+before/after/head evidence into a separate `RelationNoveltyLedger`. A tuple is
+the canonical effect scope, adapter ID, causal evidence status, proven tool
+name, and all three normalized relation signatures. It intentionally excludes
+candidate task text, tool-call/session IDs, command hashes, and contract status;
+independent profiles with the same tuple improve confidence but do not inflate
+novelty. The ledger is an offline coverage artifact at this stage, not yet an
+input to `synthesis schedule`.
+
 ## V2.1a Profiling Evidence
 
 `syncfuzz profile analyze` is the offline, deterministic half of the new profiling pipeline. It consumes a target-produced checkpoint catalog, collector-produced raw-event JSONL, and probe-produced checkpoint state summaries. It writes normalized OS effects and a checkpoint-effect map; an interval becomes a frontier only when both event evidence and a confirmed persistent state delta are present.
