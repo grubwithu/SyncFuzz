@@ -217,6 +217,8 @@ func recoveryFidelityReport(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("paired_trials: %d\n", report.Comparison.PairedTrials)
+	fmt.Printf("causal_effect_evidence_proven_trials: %d\n", report.Comparison.CausalEvidenceProvenTrials)
+	fmt.Printf("causal_effect_evidence_unknown_trials: %d\n", report.Comparison.CausalEvidenceUnknownTrials)
 	fmt.Printf("full_mean_probe_duration_ns: %d\n", report.Full.Metrics.MeanDurationNS)
 	fmt.Printf("pruned_mean_probe_duration_ns: %d\n", report.Pruned.Metrics.MeanDurationNS)
 	fmt.Printf("artifact: %s\n", *outPath)
@@ -283,6 +285,10 @@ func recoveryFidelityBatchReport(args []string) {
 	fmt.Printf("accepted_trials: %d\n", report.AcceptedTrialCount)
 	fmt.Printf("rejected_source_baselines: %d\n", report.RejectedSourceBaselineCount)
 	fmt.Printf("execution_failures: %d\n", report.ExecutionFailureCount)
+	if report.Fidelity != nil {
+		fmt.Printf("causal_effect_evidence_proven_trials: %d\n", report.Fidelity.Comparison.CausalEvidenceProvenTrials)
+		fmt.Printf("causal_effect_evidence_unknown_trials: %d\n", report.Fidelity.Comparison.CausalEvidenceUnknownTrials)
+	}
 	fmt.Printf("complete: %t\n", report.Complete)
 	fmt.Printf("artifact: %s\n", *outPath)
 }

@@ -122,26 +122,30 @@ type ProbeFidelityComparisonSummary struct {
 	FinalOutcomeMatches             int `json:"final_outcome_matches"`
 	FullMultiplicityProofs          int `json:"full_multiplicity_proofs"`
 	PrunedMultiplicityUnknownTrials int `json:"pruned_multiplicity_unknown_trials"`
+	CausalEvidenceProvenTrials      int `json:"causal_effect_evidence_proven_trials"`
+	CausalEvidenceUnknownTrials     int `json:"causal_effect_evidence_unknown_trials"`
 }
 
 // LangGraphProbeFidelityTrial records the immutable source identity used to
 // establish that a full/pruned comparison is a valid pair. The per-mode
 // aggregate is reported above; per-trial data remains available for auditing.
 type LangGraphProbeFidelityTrial struct {
-	ArtifactRoot               string `json:"artifact_root"`
-	RecordedPlanID             string `json:"recorded_plan_id"`
-	SourceRuntimeID            string `json:"source_runtime_id"`
-	WorkspaceSnapshotSHA256    string `json:"workspace_snapshot_sha256"`
-	CheckpointStoreSHA256      string `json:"checkpoint_store_sha256"`
-	SourceThreadID             string `json:"source_thread_id"`
-	BeforeNativeCheckpointID   string `json:"before_native_checkpoint_id"`
-	AfterNativeCheckpointID    string `json:"after_native_checkpoint_id"`
-	HeadNativeCheckpointID     string `json:"head_native_checkpoint_id"`
-	FullOutcome                string `json:"full_outcome"`
-	PrunedOutcome              string `json:"pruned_outcome"`
-	ExactLayerStateOriginMatch bool   `json:"exact_layer_state_origin_match"`
-	FullMultiplicityProven     bool   `json:"full_multiplicity_proven"`
-	PrunedMultiplicityUnknown  bool   `json:"pruned_multiplicity_unknown"`
+	ArtifactRoot               string                     `json:"artifact_root"`
+	RecordedPlanID             string                     `json:"recorded_plan_id"`
+	SourceRuntimeID            string                     `json:"source_runtime_id"`
+	WorkspaceSnapshotSHA256    string                     `json:"workspace_snapshot_sha256"`
+	CheckpointStoreSHA256      string                     `json:"checkpoint_store_sha256"`
+	SourceThreadID             string                     `json:"source_thread_id"`
+	BeforeNativeCheckpointID   string                     `json:"before_native_checkpoint_id"`
+	AfterNativeCheckpointID    string                     `json:"after_native_checkpoint_id"`
+	HeadNativeCheckpointID     string                     `json:"head_native_checkpoint_id"`
+	FullOutcome                string                     `json:"full_outcome"`
+	PrunedOutcome              string                     `json:"pruned_outcome"`
+	ExactLayerStateOriginMatch bool                       `json:"exact_layer_state_origin_match"`
+	FullMultiplicityProven     bool                       `json:"full_multiplicity_proven"`
+	PrunedMultiplicityUnknown  bool                       `json:"pruned_multiplicity_unknown"`
+	CausalEffectEvidenceStatus CausalEffectEvidenceStatus `json:"causal_effect_evidence_status"`
+	CausalToolName             string                     `json:"causal_tool_name,omitempty"`
 }
 
 // LangGraphProbeFidelityReport is evidence for probe-cost comparisons, not a
@@ -220,6 +224,14 @@ func BuildLangGraphProbeFidelityReport(inputs []LangGraphProbeFidelityTrialInput
 		}
 		if trial.PrunedMultiplicityUnknown {
 			report.Comparison.PrunedMultiplicityUnknownTrials++
+		}
+		switch trial.CausalEffectEvidenceStatus {
+		case CausalEffectEvidenceProven:
+			report.Comparison.CausalEvidenceProvenTrials++
+		case CausalEffectEvidenceUnknown:
+			report.Comparison.CausalEvidenceUnknownTrials++
+		default:
+			return LangGraphProbeFidelityReport{}, fmt.Errorf("LangGraph probe fidelity trial %q has unsupported causal effect evidence status %q", trial.ArtifactRoot, trial.CausalEffectEvidenceStatus)
 		}
 	}
 	finalizeMetricSummary(&report.Full.Metrics)
@@ -309,6 +321,10 @@ func buildLangGraphProbeFidelityTrial(input LangGraphProbeFidelityTrialInput) (L
 	if !sameRecoverySetCoordinates(input.FullExecution, input.PrunedExecution) {
 		return LangGraphProbeFidelityTrial{}, nil, nil, fmt.Errorf("LangGraph full/pruned recovery executions do not share exact checkpoint coordinates")
 	}
+	causalStatus, causalToolName, err := pairedLangGraphCausalEvidence(input.FullPlan, input.PrunedPlan)
+	if err != nil {
+		return LangGraphProbeFidelityTrial{}, nil, nil, fmt.Errorf("LangGraph probe fidelity trial %q causal evidence: %w", input.ArtifactRoot, err)
+	}
 	before, after, head := input.FullExecution.Before, input.FullExecution.After, input.FullExecution.Head
 	return LangGraphProbeFidelityTrial{
 		ArtifactRoot:               input.ArtifactRoot,
@@ -325,6 +341,8 @@ func buildLangGraphProbeFidelityTrial(input LangGraphProbeFidelityTrialInput) (L
 		ExactLayerStateOriginMatch: sameLayerStateOrigin(input.FullExecution, input.PrunedExecution),
 		FullMultiplicityProven:     allMultiplicity(input.FullExecution, EffectMultiplicitySingle),
 		PrunedMultiplicityUnknown:  allMultiplicity(input.PrunedExecution, EffectMultiplicityUnknown),
+		CausalEffectEvidenceStatus: causalStatus,
+		CausalToolName:             causalToolName,
 	}, fullMetrics, prunedMetrics, nil
 }
 
@@ -345,6 +363,19 @@ func validateLangGraphProbeFidelityPlans(full, pruned LangGraphForkPlan) error {
 		return fmt.Errorf("paired plans do not share source runtime, snapshot, listener identity, or checkpoint mapping")
 	}
 	return nil
+}
+
+func pairedLangGraphCausalEvidence(full, pruned LangGraphForkPlan) (CausalEffectEvidenceStatus, string, error) {
+	if !reflect.DeepEqual(full.ToolEffectProvenance, pruned.ToolEffectProvenance) {
+		return "", "", fmt.Errorf("paired plans do not share exact tool-effect provenance")
+	}
+	if full.ToolEffectProvenance == nil {
+		return CausalEffectEvidenceUnknown, "", nil
+	}
+	if err := full.ToolEffectProvenance.Validate(); err != nil {
+		return "", "", err
+	}
+	return CausalEffectEvidenceProven, full.ToolEffectProvenance.ToolName, nil
 }
 
 func validateFidelityExecution(execution ForkRecoverySetExecution, plan LangGraphForkPlan, mode LangGraphPassiveProbeMode) ([]PassiveProbeMetrics, error) {

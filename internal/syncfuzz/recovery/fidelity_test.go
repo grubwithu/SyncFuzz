@@ -26,12 +26,53 @@ func TestBuildLangGraphProbeFidelityReportAggregatesPairedTrials(t *testing.T) {
 	if report.Full.RecoverySetOutcomes["residual"] != 1 || report.Pruned.RecoverySetOutcomes["inconclusive"] != 1 {
 		t.Fatalf("unexpected mode outcomes: full=%#v pruned=%#v", report.Full.RecoverySetOutcomes, report.Pruned.RecoverySetOutcomes)
 	}
-	if report.Comparison.PairedTrials != 1 || report.Comparison.ExactLayerStateOriginMatches != 1 || report.Comparison.FinalOutcomeMatches != 0 || report.Comparison.FullMultiplicityProofs != 1 || report.Comparison.PrunedMultiplicityUnknownTrials != 1 {
+	if report.Comparison.PairedTrials != 1 || report.Comparison.ExactLayerStateOriginMatches != 1 || report.Comparison.FinalOutcomeMatches != 0 || report.Comparison.FullMultiplicityProofs != 1 || report.Comparison.PrunedMultiplicityUnknownTrials != 1 || report.Comparison.CausalEvidenceProvenTrials != 0 || report.Comparison.CausalEvidenceUnknownTrials != 1 {
 		t.Fatalf("unexpected comparison summary: %#v", report.Comparison)
 	}
 	trial := report.Trials[0]
-	if !trial.ExactLayerStateOriginMatch || !trial.FullMultiplicityProven || !trial.PrunedMultiplicityUnknown || trial.FullOutcome != "residual" || trial.PrunedOutcome != "inconclusive" {
+	if !trial.ExactLayerStateOriginMatch || !trial.FullMultiplicityProven || !trial.PrunedMultiplicityUnknown || trial.CausalEffectEvidenceStatus != CausalEffectEvidenceUnknown || trial.FullOutcome != "residual" || trial.PrunedOutcome != "inconclusive" {
 		t.Fatalf("unexpected trial result: %#v", trial)
+	}
+}
+
+func TestBuildLangGraphProbeFidelityReportCountsProvenCausalEvidence(t *testing.T) {
+	input := testLangGraphProbeFidelityInput("runs/fidelity/trial-causal")
+	proof := &LangGraphToolEffectProvenance{
+		ToolCallID:                 "call-1",
+		ToolName:                   "shell",
+		ShellSessionID:             "shell-1",
+		CommandSHA256:              strings.Repeat("a", 64),
+		CommandStartedMonotonicNS:  100,
+		CommandFinishedMonotonicNS: 300,
+		FirstEffectMonotonicNS:     150,
+		LastEffectMonotonicNS:      160,
+	}
+	input.FullPlan.ToolEffectProvenance = proof
+	proofCopy := *proof
+	input.PrunedPlan.ToolEffectProvenance = &proofCopy
+	report, err := BuildLangGraphProbeFidelityReport([]LangGraphProbeFidelityTrialInput{input})
+	if err != nil {
+		t.Fatalf("BuildLangGraphProbeFidelityReport returned error: %v", err)
+	}
+	if report.Comparison.CausalEvidenceProvenTrials != 1 || report.Comparison.CausalEvidenceUnknownTrials != 0 || report.Trials[0].CausalEffectEvidenceStatus != CausalEffectEvidenceProven || report.Trials[0].CausalToolName != "shell" {
+		t.Fatalf("unexpected causal fidelity summary: report=%#v trial=%#v", report.Comparison, report.Trials[0])
+	}
+}
+
+func TestBuildLangGraphProbeFidelityReportRejectsMismatchedCausalEvidence(t *testing.T) {
+	input := testLangGraphProbeFidelityInput("runs/fidelity/trial-causal-mismatch")
+	input.FullPlan.ToolEffectProvenance = &LangGraphToolEffectProvenance{
+		ToolCallID:                 "call-1",
+		ToolName:                   "shell",
+		ShellSessionID:             "shell-1",
+		CommandSHA256:              strings.Repeat("a", 64),
+		CommandStartedMonotonicNS:  100,
+		CommandFinishedMonotonicNS: 300,
+		FirstEffectMonotonicNS:     150,
+		LastEffectMonotonicNS:      160,
+	}
+	if _, err := BuildLangGraphProbeFidelityReport([]LangGraphProbeFidelityTrialInput{input}); err == nil || !strings.Contains(err.Error(), "tool-effect provenance") {
+		t.Fatalf("expected mismatched causal evidence to be rejected, got %v", err)
 	}
 }
 

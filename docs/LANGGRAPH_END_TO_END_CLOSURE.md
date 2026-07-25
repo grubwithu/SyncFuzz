@@ -721,9 +721,12 @@ Finally, `recovery fidelity-batch-report` emits `<root>/fidelity-report.json`.
 It records all attempt counts and reasons as the experimental denominator, then
 adds the accepted-pair fidelity aggregate: exact layer/OS-origin agreement,
 full multiplicity proofs, pruned `unknown` multiplicity, final-outcome matches,
-and post-query probe cost. If the attempt budget is exhausted, the incomplete
-report is still written and the Make target exits non-zero. It is probe-fidelity
-evidence, not a vulnerability verdict or a coverage result.
+post-query probe cost, and counts of `proven` versus `unknown` causal-effect
+evidence. Full/pruned plans must contain identical causal proof; the aggregate
+does not treat tool-call IDs or command hashes as novelty keys. If the attempt
+budget is exhausted, the incomplete report is still written and the Make target
+exits non-zero. It is probe-fidelity evidence, not a vulnerability verdict or a
+coverage result.
 
 `LANGGRAPH_V3_PROFILE_TIMEOUT` applies only to the provider-facing candidate
 profile. Keep `TARGET_TIMEOUT` as the independent recovery-query ceiling. A

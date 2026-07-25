@@ -205,8 +205,10 @@ under independent source leases and writes `fidelity-report.json`. Its
 `execution-failed`, with failed logs retained beside it. The report preserves
 all attempts as the denominator while aggregating only accepted pairs that
 share a recorded plan, source runtime identity, workspace/checkpoint snapshot,
-listener identity, and exact native coordinates. An exhausted batch writes its
-incomplete report before returning non-zero.
+listener identity, exact native coordinates, and identical causal-effect
+evidence. It separately counts accepted trials with `proven` versus `unknown`
+causal evidence, without aggregating per-run tool-call IDs or command hashes.
+An exhausted batch writes its incomplete report before returning non-zero.
 
 The next StateFuzz step is `make synthesis-langgraph-statefuzz-attempt`. The
 caller explicitly selects a generator implementation with

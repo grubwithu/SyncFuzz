@@ -155,9 +155,11 @@ wrapper repeats independent same-source pairs and writes `fidelity-report.json`;
 is retained as `accepted`, `rejected-source-baseline`, or `execution-failed` in
 the report denominator; only accepted pairs are aggregated. The report rejects
 any pair whose recorded plan, retained source identity, workspace/checkpoint
-snapshot, listener identity, or native coordinates differ. Pruned samples can
-report exact holder identity but remain multiplicity `unknown`, so they cannot
-independently emit a `residual` verdict.
+snapshot, listener identity, native coordinates, or causal-effect evidence
+differ. Its aggregate separately counts `proven` and `unknown` causal evidence
+among accepted trials; per-run tool-call IDs and command hashes are audit data,
+not coverage keys. Pruned samples can report exact holder identity but remain
+multiplicity `unknown`, so they cannot independently emit a `residual` verdict.
 
 `synthesis generate --feedback <evaluation.json>` imports only bounded
 atom-level `CandidateEvaluation` feedback from a prior profiled candidate. It
