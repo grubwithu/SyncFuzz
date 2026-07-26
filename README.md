@@ -109,6 +109,14 @@ freezes the materialization head, `retain-relevant-os-state` policy, recorded
 plan, passive observation, and three distinct checkpoint coordinates. A head
 control that is not `consistent` forces the set verdict to `inconclusive`.
 
+LangGraph recovery may additionally freeze one generic continuation user query
+into both the fork plan and recovery set. In each fresh restored runtime, the
+adapter records `P_pre -> continuation -> P_post`; relation classification uses
+only `P_pre`, while the normal Agent turn and `P_post` remain typed evidence.
+The exact query bytes, SHA-256, and ID must match all three controls and the
+fork plan. This is a behavior stimulus, not a scenario-specific Oracle. See
+[the continuation recovery protocol](docs/LANGGRAPH_CONTINUATION_RECOVERY.md).
+
 Recovery execution additionally has a relation artifact. The legacy
 `consistent` / `residual` / `missing` / `duplicate` outcome remains for
 compatibility, but is not a vulnerability verdict. A complete recovery set can
@@ -285,6 +293,16 @@ directory. Legacy roots without `statefuzz-attempt.json` are derived from
 their evidence; a root whose top-level candidate was overwritten while it
 retains an earlier seed is reported as `invalid-artifact-root`, never as an
 accepted recovery result.
+
+For accepted roots, `synthesis statefuzz-relation-batch-report` adds the
+evidence-only aggregation layer. It reads each root's
+`recovery-relation-report.json`, verifies the seed/profile/recovery lineage and
+shared passive scope, then counts canonical before/after/head relation vectors,
+complete three-control sets, head consistency, causal-evidence status,
+contract-status metadata, and runtime image IDs. Missing or malformed relation
+artifacts remain explicit denominator entries. The report does not read task
+text or retained-file contents and does not emit a contract or vulnerability
+verdict.
 
 The V2.3 recovery executor additionally registers the first real durable
 adapter, `maf-workflow`. Its adapter-owned plan maps V2 coordinates to exact

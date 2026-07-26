@@ -96,7 +96,7 @@ Usage:
   syncfuzz profile calibration-audit --path-run runs/<id> --fd-run runs/<id> --socket-run runs/<id> [--out calibration-audit.json]
   syncfuzz profile promote-seed --objective objective.json [--profile-run profile-run.json | --target-run runs/<id> --profile-kind synthesis-candidate --synthesis-candidate candidate.json] --frontier before..after --out state-seed.json
   syncfuzz profile recovery-pair --objective objective.json --seed state-seed.json --passive-observation observation-id --out recovery-pair.json
-  syncfuzz profile recovery-set --objective objective.json --seed state-seed.json --passive-observation observation-id [--retention-policy retain-relevant-os-state] --out historical-recovery-set.json
+  syncfuzz profile recovery-set --objective objective.json --seed state-seed.json --passive-observation observation-id [--retention-policy retain-relevant-os-state] [--continuation-query 'continue current task'] --out historical-recovery-set.json
   syncfuzz recovery execute --seed state-seed.json [--pair recovery-pair.json | --set historical-recovery-set.json] [--out recovery-execution.json] [--out-relation recovery-relation-report.json] [--timeout 2m]
   syncfuzz recovery classify-relation --seed state-seed.json --execution recovery-set-execution.json --out recovery-relation-report.json
   syncfuzz recovery relation-novelty [--reports report-a.json,report-b.json | --fidelity-batch runs/<batch>] [--ledger relation-novelty-ledger.json] --out relation-novelty-ledger.json
@@ -109,10 +109,11 @@ Usage:
   syncfuzz synthesis evaluation-status --objective objective.json --evaluation evaluation.json [--require-eligible]
   syncfuzz synthesis statefuzz-attempt-status --objective objective.json --candidate candidate.json [--evaluation evaluation.json] --attempt 0 --artifact-root runs/<attempt> --status accepted|rejected-evaluation|rejected-source-baseline|execution-failed [--reason reason] --out statefuzz-attempt.json
   syncfuzz synthesis statefuzz-batch-report --objective objective.json --root runs/<batch> --out statefuzz-batch-report.json
+  syncfuzz synthesis statefuzz-relation-batch-report --objective objective.json --root runs/<batch> --out statefuzz-relation-batch-report.json
   syncfuzz synthesis promote --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --out state-seed.json
   syncfuzz synthesis bind-maf-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest maf-workflow-fork-manifest.json --python python3 --runner targets/maf_workflow_checkpoint/run_target.py --prepared-workspace prepared --runtime-root forks --out-plan maf-fork-plan.json --out-profile-run bound-profile-run.json --out-binding native-frontier-binding.json
   syncfuzz synthesis bind-langgraph-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after [--lifecycle langgraph-lifecycle.json] [--workspace-file-path agent-result.txt] --manifest langgraph-native-checkpoints.json --out-binding langgraph-native-frontier-binding.json
-  syncfuzz synthesis prepare-langgraph-fork --objective objective.json --candidate candidate.json --profile-run profile-run.json --binding langgraph-native-frontier-binding.json --model provider:model --container-image syncfuzz-langgraph:dev --runtime-root recovery-runtimes [--passive-unix-socket-path agent.sock | --passive-workspace-file-path agent-result.txt] --out-plan langgraph-fork-plan.json --out-profile-run bound-profile-run.json
+  syncfuzz synthesis prepare-langgraph-fork --objective objective.json --candidate candidate.json --profile-run profile-run.json --binding langgraph-native-frontier-binding.json --model provider:model --container-image syncfuzz-langgraph:dev --runtime-root recovery-runtimes [--passive-unix-socket-path agent.sock | --passive-workspace-file-path agent-result.txt] [--continuation-query 'continue current task'] --out-plan langgraph-fork-plan.json --out-profile-run bound-profile-run.json
   syncfuzz synthesis release-langgraph-runtime --profile-run profile-run.json
   syncfuzz profile container-scope --container <running-container>
   syncfuzz profile process-monitor --cgroup-id <cgroup-v2-id> [--duration 10s] [--out raw-os-events.jsonl]
@@ -459,7 +460,7 @@ func recoveryClassifyRelation(args []string) {
 
 func runSynthesis(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "syncfuzz synthesis requires a subcommand; supported: schedule, generate, execute-langgraph, evaluate, evaluation-status, statefuzz-attempt-status, statefuzz-batch-report, promote, bind-maf-frontier, bind-langgraph-frontier, prepare-langgraph-fork, release-langgraph-runtime")
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis requires a subcommand; supported: schedule, generate, execute-langgraph, evaluate, evaluation-status, statefuzz-attempt-status, statefuzz-batch-report, statefuzz-relation-batch-report, promote, bind-maf-frontier, bind-langgraph-frontier, prepare-langgraph-fork, release-langgraph-runtime")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -477,6 +478,8 @@ func runSynthesis(args []string) {
 		synthesisStateFuzzAttemptStatus(args[1:])
 	case "statefuzz-batch-report":
 		synthesisStateFuzzBatchReport(args[1:])
+	case "statefuzz-relation-batch-report":
+		synthesisStateFuzzRelationBatchReport(args[1:])
 	case "promote":
 		synthesisPromote(args[1:])
 	case "bind-maf-frontier":
@@ -779,6 +782,41 @@ func synthesisStateFuzzBatchReport(args []string) {
 	fmt.Printf("rejected_resource_topology: %d\n", report.RejectedResourceTopologyCount)
 	fmt.Printf("execution_failures: %d\n", report.ExecutionFailureCount)
 	fmt.Printf("invalid_artifact_roots: %d\n", report.InvalidArtifactRootCount)
+	fmt.Printf("artifact: %s\n", *outPath)
+}
+
+func synthesisStateFuzzRelationBatchReport(args []string) {
+	fs := flag.NewFlagSet("synthesis statefuzz-relation-batch-report", flag.ExitOnError)
+	objectivePath := fs.String("objective", "", "StateObjective JSON path")
+	root := fs.String("root", "", "StateFuzz batch root containing attempt-* directories")
+	outPath := fs.String("out", "statefuzz-relation-batch-report.json", "StateFuzz relation batch report JSON output path")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*objectivePath) == "" || strings.TrimSpace(*root) == "" || strings.TrimSpace(*outPath) == "" {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis statefuzz-relation-batch-report requires --objective, --root, and --out")
+		os.Exit(2)
+	}
+	stateObjective, err := objective.ReadStateObjective(*objectivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-relation-batch-report failed: %v\n", err)
+		os.Exit(1)
+	}
+	report, err := synthesis.BuildStateFuzzRelationBatchReport(stateObjective, *root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-relation-batch-report failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := synthesis.WriteStateFuzzRelationBatchReport(*outPath, report); err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis statefuzz-relation-batch-report failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("attempts: %d\n", report.AttemptCount)
+	fmt.Printf("accepted: %d\n", report.AcceptedCount)
+	fmt.Printf("aggregated_relations: %d\n", report.AggregatedRelationCount)
+	fmt.Printf("invalid_relation_artifacts: %d\n", report.InvalidRelationArtifactCount)
+	fmt.Printf("complete_three_control_sets: %d\n", report.CompleteThreeControlSetCount)
+	fmt.Printf("head_consistent: %d\n", report.HeadConsistentCount)
 	fmt.Printf("artifact: %s\n", *outPath)
 }
 
@@ -1120,6 +1158,7 @@ func synthesisPrepareLangGraphFork(args []string) {
 	passiveUnixSocketPath := fs.String("passive-unix-socket-path", "", "workspace-relative Unix endpoint observed without connecting")
 	passiveWorkspaceFilePath := fs.String("passive-workspace-file-path", "", "workspace-relative regular file retained as the exact passive observation node")
 	passiveProbeMode := fs.String("passive-probe-mode", string(recovery.LangGraphPassiveProbeFull), "passive Unix listener probe mode: full or pruned")
+	continuationQuery := fs.String("continuation-query", "", "optional exact generic user query delivered after each restored checkpoint")
 	outPlan := fs.String("out-plan", "langgraph-fork-plan.json", "LangGraph recorded fork plan JSON output path")
 	outProfileRun := fs.String("out-profile-run", "bound-profile-run.json", "ProfileRun updated to use the LangGraph fork plan")
 	outWorkspaceTopology := fs.String("out-workspace-topology", "", "optional LangGraph workspace topology JSON artifact, written even for a topology rejection")
@@ -1168,7 +1207,7 @@ func synthesisPrepareLangGraphFork(args []string) {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis prepare-langgraph-fork failed: %v\n", err)
 		os.Exit(1)
 	}
-	plan, err := synthesis.PrepareLangGraphForkPlan(stateObjective, candidate, profileRun, binding, synthesis.LangGraphForkPlanConfig{Model: *model, ContainerImage: *containerImage, RuntimeRoot: *runtimeRoot, RuntimeContract: runtimeContract, ResourceContract: resourceContract, PassiveUnixSocketPath: *passiveUnixSocketPath, PassiveWorkspaceFilePath: *passiveWorkspaceFilePath, PassiveProbeMode: recovery.LangGraphPassiveProbeMode(*passiveProbeMode)})
+	plan, err := synthesis.PrepareLangGraphForkPlan(stateObjective, candidate, profileRun, binding, synthesis.LangGraphForkPlanConfig{Model: *model, ContainerImage: *containerImage, RuntimeRoot: *runtimeRoot, RuntimeContract: runtimeContract, ResourceContract: resourceContract, PassiveUnixSocketPath: *passiveUnixSocketPath, PassiveWorkspaceFilePath: *passiveWorkspaceFilePath, PassiveProbeMode: recovery.LangGraphPassiveProbeMode(*passiveProbeMode), ContinuationQuery: *continuationQuery})
 	if err != nil {
 		var topologyError *recovery.LangGraphWorkspaceTopologyError
 		if strings.TrimSpace(*outWorkspaceTopology) != "" && errors.As(err, &topologyError) {
@@ -1366,6 +1405,7 @@ func profileRecoverySet(args []string) {
 	seedPath := fs.String("seed", "", "validated StateSeed JSON path")
 	passiveObservation := fs.String("passive-observation", "", "fixed passive observation ID")
 	retentionPolicy := fs.String("retention-policy", string(recovery.RetentionPolicyRetainRelevantOSState), "OS retention policy")
+	continuationQuery := fs.String("continuation-query", "", "optional exact generic user query delivered after each restored checkpoint")
 	outPath := fs.String("out", "historical-recovery-set.json", "HistoricalRecoverySet JSON output path")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
@@ -1398,7 +1438,15 @@ func profileRecoverySet(args []string) {
 		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-set failed: unsupported retention policy %q\n", *retentionPolicy)
 		os.Exit(1)
 	}
-	set, err := recovery.NewForkRecoverySet(seed, recovery.RecordedPlan{
+	var continuation *recovery.ContinuationQuery
+	if strings.TrimSpace(*continuationQuery) != "" {
+		continuation, err = recovery.NewContinuationQuery(*continuationQuery)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-set failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	set, err := recovery.NewForkRecoverySetWithContinuation(seed, recovery.RecordedPlan{
 		SchemaVersion:         recovery.SchemaVersion,
 		RecordedPlanID:        seed.RecordedPlanID,
 		AdapterID:             seed.AdapterID,
@@ -1407,7 +1455,7 @@ func profileRecoverySet(args []string) {
 		PassiveObservationID:  *passiveObservation,
 		MaterializationHeadID: head.HeadID,
 		RetentionPolicy:       policy,
-	})
+	}, continuation)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz profile recovery-set failed: %v\n", err)
 		os.Exit(1)

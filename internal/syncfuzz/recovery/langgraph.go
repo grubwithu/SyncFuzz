@@ -389,6 +389,7 @@ type LangGraphForkPlan struct {
 	PassiveWorkspaceFilePath        string                                         `json:"passive_workspace_file_path,omitempty"`
 	PassiveProbeMode                LangGraphPassiveProbeMode                      `json:"passive_probe_mode,omitempty"`
 	PassiveObservationID            string                                         `json:"passive_observation_id"`
+	ContinuationQuery               *ContinuationQuery                             `json:"continuation_query,omitempty"`
 	MaterializationHeadID           string                                         `json:"materialization_head_id"`
 	MaterializationHeadCheckpointID string                                         `json:"materialization_head_checkpoint_id"`
 	SourceThreadID                  string                                         `json:"source_thread_id"`
@@ -418,6 +419,14 @@ func (p LangGraphForkPlan) ValidateFor(plan RecordedPlan) error {
 	}
 	if !p.PassiveProbeMode.Effective().Valid() {
 		return fmt.Errorf("LangGraph fork plan has unsupported passive probe mode %q", p.PassiveProbeMode)
+	}
+	if p.ContinuationQuery != nil {
+		if err := p.ContinuationQuery.Validate(); err != nil {
+			return fmt.Errorf("LangGraph fork plan continuation query: %w", err)
+		}
+		if p.RuntimeContract.SchemaVersion == "" || !p.RuntimeContract.SupportsContinuation() {
+			return fmt.Errorf("LangGraph fork plan continuation query requires the continuation-user-turn runtime capability")
+		}
 	}
 	if p.ResourceContract.SchemaVersion != "" {
 		if err := p.ResourceContract.Validate(); err != nil {

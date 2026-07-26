@@ -22,6 +22,8 @@ var requiredLangGraphRuntimeCapabilities = []string{
 	"passive-workspace-file-observer-v1",
 }
 
+const langGraphContinuationRuntimeCapability = "continuation-user-turn-v1"
+
 // LangGraphRuntimeContract is the compatibility evidence returned by the
 // image-owned runner before profiling and before every recovery query. ImageID
 // pins the mutable Docker tag to the concrete image used by the source lease.
@@ -39,15 +41,43 @@ func (c LangGraphRuntimeContract) Validate() error {
 	}
 	capabilities := append([]string(nil), c.Capabilities...)
 	sort.Strings(capabilities)
-	if len(capabilities) != len(requiredLangGraphRuntimeCapabilities) {
+	if len(capabilities) != len(requiredLangGraphRuntimeCapabilities) && len(capabilities) != len(requiredLangGraphRuntimeCapabilities)+1 {
 		return fmt.Errorf("LangGraph runtime contract has an unsupported capability set")
 	}
-	for index, capability := range requiredLangGraphRuntimeCapabilities {
-		if capabilities[index] != capability {
+	required := make(map[string]struct{}, len(requiredLangGraphRuntimeCapabilities))
+	for _, capability := range requiredLangGraphRuntimeCapabilities {
+		required[capability] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		if _, exists := seen[capability]; exists {
+			return fmt.Errorf("LangGraph runtime contract has an unsupported capability set")
+		}
+		seen[capability] = struct{}{}
+		if capability == langGraphContinuationRuntimeCapability {
+			continue
+		}
+		if _, ok := required[capability]; !ok {
+			return fmt.Errorf("LangGraph runtime contract has an unsupported capability set")
+		}
+	}
+	for _, capability := range requiredLangGraphRuntimeCapabilities {
+		if _, ok := seen[capability]; !ok {
 			return fmt.Errorf("LangGraph runtime contract has an unsupported capability set")
 		}
 	}
 	return nil
+}
+
+// SupportsContinuation reports whether this exact runner image advertises the
+// capability required to deliver one frozen post-restore user turn.
+func (c LangGraphRuntimeContract) SupportsContinuation() bool {
+	for _, capability := range c.Capabilities {
+		if capability == langGraphContinuationRuntimeCapability {
+			return true
+		}
+	}
+	return false
 }
 
 func (c LangGraphRuntimeContract) Matches(other LangGraphRuntimeContract) bool {

@@ -1,6 +1,7 @@
 package recovery
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -161,6 +162,28 @@ func TestParseLangGraphRuntimeContractRequiresRecoveryCapabilities(t *testing.T)
 	}
 }
 
+func TestParseLangGraphRuntimeContractRecognizesContinuationCapability(t *testing.T) {
+	imageID := "sha256:" + strings.Repeat("b", 64)
+	contract, err := ParseLangGraphRuntimeContract([]byte(`{
+  "schema_version":"syncfuzz.langgraph-runtime-contract.v1",
+  "target_id":"langgraph-shell-react",
+  "runner_protocol":"syncfuzz.langgraph-runner.v1",
+  "capabilities":[
+    "continuation-user-turn-v1",
+    "durable-disk-checkpoints-v1",
+    "exact-checkpoint-restore-v1",
+    "passive-unix-socket-observer-v1",
+    "passive-workspace-file-observer-v1"
+  ]
+}`), imageID)
+	if err != nil {
+		t.Fatalf("ParseLangGraphRuntimeContract: %v", err)
+	}
+	if !contract.SupportsContinuation() {
+		t.Fatalf("continuation runtime capability was not preserved: %#v", contract)
+	}
+}
+
 func TestLangGraphWorkspaceSnapshotRejectsSymlinks(t *testing.T) {
 	source := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(source, "langgraph-checkpoints"), 0o755); err != nil {
@@ -226,6 +249,32 @@ func TestLangGraphRecoveryDockerArgsUseExactCheckpointIDAndSourceNamespaces(t *t
 	}
 	if !hasArgumentPair(args, "--passive-unix-socket-probe-mode", "full") || !hasArgumentPair(args, "--passive-unix-socket-expected-id", "socket:123") {
 		t.Fatalf("full recovery invocation must carry the recorded passive probe identity: %#v", args)
+	}
+}
+
+func TestLangGraphContinuationDockerArgsUseOneRestoredRuntimeForPassiveAndFollowUp(t *testing.T) {
+	plan := LangGraphForkPlan{
+		Model:                 "openai:test",
+		ContainerImage:        "syncfuzz-langgraph:test",
+		PassiveUnixSocketPath: "agent.sock",
+		SourceThreadID:        "profile-thread",
+		SourceRuntime:         LangGraphSourceRuntime{ContainerName: "syncfuzz-profile-source"},
+		WorkspaceSnapshot:     LangGraphWorkspaceSnapshot{SourceWorkspace: "/profile/workspace", PassiveUnixSocketPath: "agent.sock"},
+		UnixSocketProbe:       LangGraphUnixSocketProbe{SocketID: "socket:123", HolderPID: 7, HolderFD: 3},
+	}
+	continuation, err := NewContinuationQuery("Inspect the restored workspace and report its files.")
+	if err != nil {
+		t.Fatalf("NewContinuationQuery: %v", err)
+	}
+	args := langGraphRecoveryDockerArgsWithContinuation(plan, "/recovery/workspace", "runtime-1", 10001, 10001, "native-checkpoint-1", nil, continuation)
+	if hasArgument(args, "--passive-fork-observe") {
+		t.Fatalf("continuation recovery must not use the passive-only runner path: %#v", args)
+	}
+	if !hasArgumentPair(args, "--continuation-user-message", continuation.Query) || !hasArgumentPair(args, "--continuation-query-id", continuation.ContinuationQueryID) || !hasArgumentPair(args, "--continuation-observation-artifact", "/workspace/langgraph-continuation-observation.json") {
+		t.Fatalf("continuation recovery must inject the frozen query and request its artifact: %#v", args)
+	}
+	if !hasArgumentPair(args, "--passive-unix-socket-path", "agent.sock") || !hasArgumentPair(args, "--runtime-instance-id", "runtime-1") {
+		t.Fatalf("continuation must keep passive probing and the same recovered runtime identity: %#v", args)
 	}
 }
 
@@ -324,7 +373,7 @@ func TestLangGraphPassiveRecoveryStateRecognizesRetainedWorkspaceFile(t *testing
 	artifact.PassiveWorkspaceFile.AfterFork = metadata
 	artifact.PassiveWorkspaceFile.SameFileIdentity = true
 
-	osState, origin, multiplicity, metrics, evidence, err := langGraphPassiveRecoveryState(plan, artifact, LangGraphPassiveProbeFull)
+	osState, origin, multiplicity, metrics, evidence, err := langGraphPassiveRecoveryState(plan, artifact, LangGraphPassiveProbeFull, false)
 	if err != nil {
 		t.Fatalf("langGraphPassiveRecoveryState returned error: %v", err)
 	}
@@ -336,6 +385,106 @@ func TestLangGraphPassiveRecoveryStateRecognizesRetainedWorkspaceFile(t *testing
 	}
 	if len(evidence) != 2 || !strings.Contains(evidence[1], "open-effect") {
 		t.Fatalf("workspace file recovery evidence=%#v", evidence)
+	}
+}
+
+func TestLangGraphContinuationProjectsStaticRelationFromPreContinuationMetadata(t *testing.T) {
+	plan := LangGraphForkPlan{
+		PassiveWorkspaceFilePath: "agent-result.txt",
+		WorkspaceSnapshot: LangGraphWorkspaceSnapshot{
+			PassiveWorkspaceFilePath:   "agent-result.txt",
+			PassiveWorkspaceFileDevice: 42,
+			PassiveWorkspaceFileInode:  99,
+			PassiveWorkspaceFileMode:   0o640,
+		},
+		WorkspaceFileProbe: &LangGraphWorkspaceFileProbe{
+			SchemaVersion: LangGraphWorkspaceFileProbeSchema,
+			ResourceID:    "workspace:agent-result.txt",
+			CanonicalPath: "/workspace/agent-result.txt",
+			OpenEffectIDs: []string{"open-effect"},
+		},
+	}
+	artifact := langGraphRecoveryArtifact{}
+	artifact.PassiveWorkspaceFile.BeforeFork = langGraphPassiveWorkspaceFileMetadata{
+		IsRegularFile: true,
+		Device:        42,
+		Inode:         99,
+		Mode:          0o640,
+	}
+	// The active follow-up is permitted to change the post state. The static
+	// recovery relation must remain anchored to the observation immediately
+	// before that one user turn.
+	artifact.PassiveWorkspaceFile.AfterFork = langGraphPassiveWorkspaceFileMetadata{}
+
+	osState, origin, multiplicity, _, evidence, err := langGraphPassiveRecoveryState(plan, artifact, LangGraphPassiveProbeFull, true)
+	if err != nil {
+		t.Fatalf("langGraphPassiveRecoveryState: %v", err)
+	}
+	if osState != StatePresencePresent || origin != StateOriginResidual || multiplicity != EffectMultiplicitySingle {
+		t.Fatalf("pre-continuation state=%s origin=%s multiplicity=%s, want present/residual/single", osState, origin, multiplicity)
+	}
+	if len(evidence) == 0 || !strings.Contains(evidence[0], "pre-continuation") {
+		t.Fatalf("static relation evidence must identify the pre-continuation probe: %#v", evidence)
+	}
+}
+
+func TestReadLangGraphContinuationEvidenceBindsExactQueryAndRestore(t *testing.T) {
+	continuation, err := NewContinuationQuery("Inspect the restored workspace and report its files.")
+	if err != nil {
+		t.Fatalf("NewContinuationQuery: %v", err)
+	}
+	coordinate := LangGraphNativeCheckpointCoordinate{
+		SourceCheckpointID: "native-checkpoint-1",
+		MessageCount:       3,
+		Next:               []string{"tools"},
+	}
+	artifact := langGraphContinuationArtifact{
+		SchemaVersion:                   "syncfuzz.langgraph-continuation-observation.v1",
+		ObservationKind:                 "continuation-user-turn",
+		RuntimeInstanceID:               "runtime-1",
+		RuntimeRecreated:                true,
+		ThreadID:                        "profile-thread",
+		RequestedCheckpointID:           coordinate.SourceCheckpointID,
+		RestoredCheckpointID:            coordinate.SourceCheckpointID,
+		RestoredCheckpointMessageCount:  coordinate.MessageCount,
+		RestoredCheckpointNext:          coordinate.Next,
+		ContinuationQueryID:             continuation.ContinuationQueryID,
+		ContinuationQuerySHA256:         continuation.QuerySHA256,
+		ContinuationUserMessage:         continuation.Query,
+		ContinuationInvoked:             true,
+		ContinuationUserTurnCount:       1,
+		ContinuationAIToolCallCount:     1,
+		ContinuationToolResultCount:     1,
+		PostContinuationCheckpointCount: 5,
+		PreEvidence:                     []string{"exact native checkpoint restored"},
+		PostEvidence:                    []string{"one continuation invoke completed"},
+	}
+	path := filepath.Join(t.TempDir(), "continuation.json")
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatalf("marshal continuation artifact: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write continuation artifact: %v", err)
+	}
+	evidence, err := readLangGraphContinuationEvidence(path, "runtime-1", LangGraphForkPlan{SourceThreadID: "profile-thread"}, coordinate, RecoveryQuery{ContinuationQueryID: continuation.ContinuationQueryID}, continuation)
+	if err != nil {
+		t.Fatalf("readLangGraphContinuationEvidence: %v", err)
+	}
+	if evidence == nil || evidence.ContinuationQueryID != continuation.ContinuationQueryID || len(evidence.PreEvidence) < 2 || len(evidence.PostEvidence) < 5 {
+		t.Fatalf("unexpected continuation evidence: %#v", evidence)
+	}
+
+	artifact.ContinuationUserMessage = "substituted message"
+	data, err = json.Marshal(artifact)
+	if err != nil {
+		t.Fatalf("marshal substituted continuation artifact: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write substituted continuation artifact: %v", err)
+	}
+	if _, err := readLangGraphContinuationEvidence(path, "runtime-1", LangGraphForkPlan{SourceThreadID: "profile-thread"}, coordinate, RecoveryQuery{ContinuationQueryID: continuation.ContinuationQueryID}, continuation); err == nil {
+		t.Fatal("expected substituted continuation text to be rejected")
 	}
 }
 

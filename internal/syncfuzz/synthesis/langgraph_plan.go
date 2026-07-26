@@ -23,6 +23,10 @@ type LangGraphForkPlanConfig struct {
 	PassiveUnixSocketPath    string
 	PassiveWorkspaceFilePath string
 	PassiveProbeMode         recovery.LangGraphPassiveProbeMode
+	// ContinuationQuery is one optional, generic user turn replayed after the
+	// exact checkpoint restore. It is frozen into the recorded plan and shared
+	// by all before/after/head controls.
+	ContinuationQuery string
 }
 
 func (c LangGraphForkPlanConfig) RetainedResourceContract() (recovery.LangGraphRetainedResourceContract, error) {
@@ -75,6 +79,13 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 	if !probeMode.Valid() {
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph fork plan has unsupported passive probe mode %q", config.PassiveProbeMode)
 	}
+	var continuation *recovery.ContinuationQuery
+	if strings.TrimSpace(config.ContinuationQuery) != "" {
+		continuation, err = recovery.NewContinuationQuery(config.ContinuationQuery)
+		if err != nil {
+			return recovery.LangGraphForkPlan{}, err
+		}
+	}
 	headCheckpointID, headMonotonicNS, err := langGraphMaterializationHead(run, binding)
 	if err != nil {
 		return recovery.LangGraphForkPlan{}, err
@@ -110,6 +121,9 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		if sourceRuntime.ContainerImageID == "" || sourceRuntime.ContainerImageID != config.RuntimeContract.ImageID {
 			return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph prepared runtime contract does not match the profiled source image")
 		}
+	}
+	if continuation != nil && !config.RuntimeContract.SupportsContinuation() {
+		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph continuation query requires a runtime contract with continuation-user-turn-v1")
 	}
 	var (
 		snapshot             recovery.LangGraphWorkspaceSnapshot
@@ -159,6 +173,7 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		WorkspaceTopology:               &workspaceTopology,
 		PassiveProbeMode:                probeMode,
 		PassiveObservationID:            passiveObservationID,
+		ContinuationQuery:               continuation,
 		MaterializationHeadID:           "materialization-head:" + run.ProfileRunID + ":" + headCheckpointID,
 		MaterializationHeadCheckpointID: headCheckpointID,
 		SourceThreadID:                  manifest.ThreadID,

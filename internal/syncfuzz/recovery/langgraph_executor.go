@@ -12,8 +12,9 @@ import (
 )
 
 // LangGraphForkExecutor clones a recorded durable store, then opens the exact
-// source checkpoint in a fresh constrained container. It never reruns the
-// candidate task while collecting a recovery observation.
+// source checkpoint in a fresh constrained container. Static recovery
+// classification is derived before any optional continuation turn; that turn
+// runs only as separately recorded experiment stimulus.
 type LangGraphForkExecutor struct{}
 
 func NewLangGraphForkExecutor() LangGraphForkExecutor { return LangGraphForkExecutor{} }
@@ -66,6 +67,41 @@ type langGraphRecoveryArtifact struct {
 	} `json:"passive_workspace_file"`
 }
 
+// langGraphContinuationArtifact is written by run_target.py after one user
+// message is injected into a freshly restored durable checkpoint. It is kept
+// separate from langGraphRecoveryArtifact: a continuation can use tools and
+// must never turn the passive observer itself into an active operation.
+type langGraphContinuationArtifact struct {
+	SchemaVersion                   string   `json:"schema_version"`
+	ObservationKind                 string   `json:"observation_kind"`
+	RuntimeInstanceID               string   `json:"runtime_instance_id"`
+	RuntimeRecreated                bool     `json:"runtime_recreated"`
+	ThreadID                        string   `json:"thread_id"`
+	RequestedCheckpointID           string   `json:"requested_checkpoint_id"`
+	RestoredCheckpointID            string   `json:"restored_checkpoint_id"`
+	RestoredCheckpointMessageCount  int      `json:"restored_checkpoint_message_count"`
+	RestoredCheckpointNext          []string `json:"restored_checkpoint_next"`
+	ContinuationQueryID             string   `json:"continuation_query_id"`
+	ContinuationQuerySHA256         string   `json:"continuation_query_sha256"`
+	ContinuationUserMessage         string   `json:"continuation_user_message"`
+	ContinuationInvoked             bool     `json:"continuation_invoked"`
+	ContinuationUserTurnCount       int      `json:"continuation_user_turn_count"`
+	ContinuationAIToolCallCount     int      `json:"continuation_ai_tool_call_count"`
+	ContinuationToolResultCount     int      `json:"continuation_tool_result_count"`
+	PostContinuationCheckpointCount int      `json:"post_continuation_checkpoint_count"`
+	PreEvidence                     []string `json:"pre_evidence"`
+	PostEvidence                    []string `json:"post_evidence"`
+}
+
+type langGraphRecoveryWorkspace struct {
+	Path                 string
+	RuntimeID            string
+	PassiveObservation   string
+	ContinuationArtifact string
+	SandboxUID           int
+	SandboxGID           int
+}
+
 func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecutionRequest) (RecoveryObservation, error) {
 	if request.Plan.AdapterID != LangGraphForkAdapterID {
 		return RecoveryObservation{}, fmt.Errorf("LangGraph executor cannot execute adapter %q", request.Plan.AdapterID)
@@ -83,6 +119,21 @@ func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecut
 	if request.Query.RetentionPolicy != "" && request.Query.RetentionPolicy != RetentionPolicyRetainRelevantOSState {
 		return RecoveryObservation{}, fmt.Errorf("LangGraph recovery query has unsupported retention policy %q", request.Query.RetentionPolicy)
 	}
+	if request.ContinuationQuery == nil {
+		if request.Query.ContinuationQueryID != "" {
+			return RecoveryObservation{}, fmt.Errorf("LangGraph recovery query binds continuation %q without a frozen query", request.Query.ContinuationQueryID)
+		}
+	} else {
+		if err := request.ContinuationQuery.Validate(); err != nil {
+			return RecoveryObservation{}, err
+		}
+		if request.Query.ContinuationQueryID != request.ContinuationQuery.ContinuationQueryID {
+			return RecoveryObservation{}, fmt.Errorf("LangGraph recovery query continuation does not match the frozen query")
+		}
+	}
+	if !sameContinuationQuery(forkPlan.ContinuationQuery, request.ContinuationQuery) {
+		return RecoveryObservation{}, fmt.Errorf("LangGraph recovery set continuation does not match the frozen fork plan")
+	}
 	coordinate, ok := forkPlan.CheckpointCoordinates[request.Query.CheckpointID]
 	if !ok {
 		return RecoveryObservation{}, fmt.Errorf("LangGraph fork plan has no coordinate for query checkpoint %q", request.Query.CheckpointID)
@@ -99,49 +150,19 @@ func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecut
 			return RecoveryObservation{}, fmt.Errorf("LangGraph recovery image no longer matches the profiled runtime contract")
 		}
 	}
-	runtimeRoot, err := filepath.Abs(forkPlan.RuntimeRoot)
-	if err != nil {
-		return RecoveryObservation{}, fmt.Errorf("resolve LangGraph runtime root: %w", err)
+	if request.ContinuationQuery != nil && !forkPlan.RuntimeContract.SupportsContinuation() {
+		return RecoveryObservation{}, fmt.Errorf("LangGraph recovery plan runtime does not advertise continuation-user-turn-v1")
 	}
-	if err := os.MkdirAll(runtimeRoot, 0o755); err != nil {
-		return RecoveryObservation{}, fmt.Errorf("create LangGraph runtime root: %w", err)
-	}
-	workspace, err := os.MkdirTemp(runtimeRoot, "syncfuzz-langgraph-fork-")
-	if err != nil {
-		return RecoveryObservation{}, fmt.Errorf("allocate LangGraph runtime workspace: %w", err)
-	}
-	if err := forkPlan.WorkspaceSnapshot.CloneTo(workspace); err != nil {
-		return RecoveryObservation{}, fmt.Errorf("clone LangGraph recovery source snapshot: %w", err)
-	}
-	passiveMountTarget, err := workspaceChild(workspace, forkPlan.WorkspaceSnapshot.PassiveResourcePath())
+	passiveWorkspace, err := prepareLangGraphRecoveryWorkspace(forkPlan)
 	if err != nil {
 		return RecoveryObservation{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(passiveMountTarget), 0o755); err != nil {
-		return RecoveryObservation{}, err
-	}
-	if err := os.WriteFile(passiveMountTarget, nil, 0o600); err != nil {
-		return RecoveryObservation{}, err
-	}
-	encodedSnapshot, err := json.Marshal(forkPlan.WorkspaceSnapshot)
-	if err != nil {
-		return RecoveryObservation{}, err
-	}
-	if err := os.WriteFile(filepath.Join(workspace, "langgraph-recovery-source-snapshot.json"), append(encodedSnapshot, '\n'), 0o644); err != nil {
-		return RecoveryObservation{}, err
-	}
-	runtimeID := "langgraph-fork-" + filepath.Base(workspace)
-	observationPath := filepath.Join(workspace, "langgraph-recovery-observation.json")
-	sandboxUID, sandboxGID := langGraphSandboxUserIDs()
-	if err := chownLangGraphRecoveryWorkspace(workspace, sandboxUID, sandboxGID); err != nil {
-		return RecoveryObservation{}, err
-	}
-	args := langGraphRecoveryDockerArgs(forkPlan, workspace, runtimeID, sandboxUID, sandboxGID, coordinate.SourceCheckpointID, langGraphProviderEnvironment())
+	args := langGraphRecoveryDockerArgsWithContinuation(forkPlan, passiveWorkspace.Path, passiveWorkspace.RuntimeID, passiveWorkspace.SandboxUID, passiveWorkspace.SandboxGID, coordinate.SourceCheckpointID, langGraphProviderEnvironment(), request.ContinuationQuery)
 	output, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
 	if err != nil {
 		return RecoveryObservation{}, fmt.Errorf("run LangGraph recovery container: %w: %s", err, strings.TrimSpace(string(output)))
 	}
-	data, err := os.ReadFile(observationPath)
+	data, err := os.ReadFile(passiveWorkspace.PassiveObservation)
 	if err != nil {
 		return RecoveryObservation{}, fmt.Errorf("read LangGraph recovery observation: %w", err)
 	}
@@ -149,7 +170,7 @@ func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecut
 	if err := json.Unmarshal(data, &artifact); err != nil {
 		return RecoveryObservation{}, fmt.Errorf("decode LangGraph recovery observation: %w", err)
 	}
-	if artifact.RuntimeInstanceID != runtimeID || !artifact.RuntimeRecreated || artifact.ThreadID != forkPlan.SourceThreadID || artifact.RequestedCheckpointID != coordinate.SourceCheckpointID || artifact.RestoredCheckpointID != coordinate.SourceCheckpointID {
+	if artifact.RuntimeInstanceID != passiveWorkspace.RuntimeID || !artifact.RuntimeRecreated || artifact.ThreadID != forkPlan.SourceThreadID || artifact.RequestedCheckpointID != coordinate.SourceCheckpointID || artifact.RestoredCheckpointID != coordinate.SourceCheckpointID {
 		return RecoveryObservation{}, fmt.Errorf("LangGraph recovery observation does not prove fresh native checkpoint restore")
 	}
 	if artifact.RestoredCheckpointMessageCount != coordinate.MessageCount || !sameStrings(artifact.RestoredCheckpointNext, coordinate.Next) {
@@ -161,27 +182,137 @@ func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecut
 			return RecoveryObservation{}, fmt.Errorf("LangGraph recovery observation did not use the planned %s passive probe", probeMode)
 		}
 	}
-	osState, origin, multiplicity, passiveMetrics, passiveEvidence, err := langGraphPassiveRecoveryState(forkPlan, artifact, probeMode)
+	osState, origin, multiplicity, passiveMetrics, passiveEvidence, err := langGraphPassiveRecoveryState(forkPlan, artifact, probeMode, request.ContinuationQuery != nil)
+	if err != nil {
+		return RecoveryObservation{}, err
+	}
+	continuationEvidence, err := readLangGraphContinuationEvidence(passiveWorkspace.ContinuationArtifact, passiveWorkspace.RuntimeID, forkPlan, coordinate, request.Query, request.ContinuationQuery)
 	if err != nil {
 		return RecoveryObservation{}, err
 	}
 	agentState := forkPlan.AgentStateByCheckpoint[request.Query.CheckpointID]
-	evidence := []string{"LangGraph fresh container: " + runtimeID, "retained source runtime verified: " + forkPlan.SourceRuntime.ContainerID, "source snapshot verified: " + forkPlan.WorkspaceSnapshot.WorkspaceSHA256, "native checkpoint restored by exact ID: " + artifact.RestoredCheckpointID, "timestamp-validated logical state: " + string(agentState), "passive probe mode: " + string(probeMode)}
+	evidence := []string{"LangGraph fresh container: " + passiveWorkspace.RuntimeID, "retained source runtime verified: " + forkPlan.SourceRuntime.ContainerID, "source snapshot verified: " + forkPlan.WorkspaceSnapshot.WorkspaceSHA256, "native checkpoint restored by exact ID: " + artifact.RestoredCheckpointID, "timestamp-validated logical state: " + string(agentState), "passive probe mode: " + string(probeMode)}
 	evidence = append(evidence, passiveEvidence...)
-	evidence = append(evidence, "passive observation artifact: "+observationPath)
-	return RecoveryObservation{SchemaVersion: ExecutionSchemaVersion, QueryID: request.Query.QueryID, SeedID: request.Query.SeedID, Boundary: request.Query.Boundary, CheckpointID: request.Query.CheckpointID, RecordedPlanID: request.Query.RecordedPlanID, PassiveObservationID: request.Query.PassiveObservationID, MaterializationHeadID: request.Query.MaterializationHeadID, RetentionPolicy: request.Query.RetentionPolicy, RuntimeInstanceID: runtimeID, AgentState: agentState, OSState: osState, OSStateOrigin: origin, EffectMultiplicity: multiplicity, PassiveProbe: passiveMetrics, Evidence: evidence}, nil
+	evidence = append(evidence, "passive observation artifact: "+passiveWorkspace.PassiveObservation)
+	return RecoveryObservation{SchemaVersion: ExecutionSchemaVersion, QueryID: request.Query.QueryID, SeedID: request.Query.SeedID, Boundary: request.Query.Boundary, CheckpointID: request.Query.CheckpointID, RecordedPlanID: request.Query.RecordedPlanID, PassiveObservationID: request.Query.PassiveObservationID, MaterializationHeadID: request.Query.MaterializationHeadID, RetentionPolicy: request.Query.RetentionPolicy, RuntimeInstanceID: passiveWorkspace.RuntimeID, AgentState: agentState, OSState: osState, OSStateOrigin: origin, EffectMultiplicity: multiplicity, PassiveProbe: passiveMetrics, ContinuationEvidence: continuationEvidence, Evidence: evidence}, nil
 }
 
-func langGraphPassiveRecoveryState(plan LangGraphForkPlan, artifact langGraphRecoveryArtifact, probeMode LangGraphPassiveProbeMode) (StatePresence, StateOrigin, EffectMultiplicity, *PassiveProbeMetrics, []string, error) {
+func prepareLangGraphRecoveryWorkspace(forkPlan LangGraphForkPlan) (langGraphRecoveryWorkspace, error) {
+	runtimeRoot, err := filepath.Abs(forkPlan.RuntimeRoot)
+	if err != nil {
+		return langGraphRecoveryWorkspace{}, fmt.Errorf("resolve LangGraph runtime root: %w", err)
+	}
+	if err := os.MkdirAll(runtimeRoot, 0o755); err != nil {
+		return langGraphRecoveryWorkspace{}, fmt.Errorf("create LangGraph runtime root: %w", err)
+	}
+	workspace, err := os.MkdirTemp(runtimeRoot, "syncfuzz-langgraph-fork-")
+	if err != nil {
+		return langGraphRecoveryWorkspace{}, fmt.Errorf("allocate LangGraph runtime workspace: %w", err)
+	}
+	if err := forkPlan.WorkspaceSnapshot.CloneTo(workspace); err != nil {
+		return langGraphRecoveryWorkspace{}, fmt.Errorf("clone LangGraph recovery source snapshot: %w", err)
+	}
+	passiveMountTarget, err := workspaceChild(workspace, forkPlan.WorkspaceSnapshot.PassiveResourcePath())
+	if err != nil {
+		return langGraphRecoveryWorkspace{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(passiveMountTarget), 0o755); err != nil {
+		return langGraphRecoveryWorkspace{}, err
+	}
+	if err := os.WriteFile(passiveMountTarget, nil, 0o600); err != nil {
+		return langGraphRecoveryWorkspace{}, err
+	}
+	encodedSnapshot, err := json.Marshal(forkPlan.WorkspaceSnapshot)
+	if err != nil {
+		return langGraphRecoveryWorkspace{}, err
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "langgraph-recovery-source-snapshot.json"), append(encodedSnapshot, '\n'), 0o644); err != nil {
+		return langGraphRecoveryWorkspace{}, err
+	}
+	runtimeID := "langgraph-fork-" + filepath.Base(workspace)
+	sandboxUID, sandboxGID := langGraphSandboxUserIDs()
+	if err := chownLangGraphRecoveryWorkspace(workspace, sandboxUID, sandboxGID); err != nil {
+		return langGraphRecoveryWorkspace{}, err
+	}
+	return langGraphRecoveryWorkspace{
+		Path:                 workspace,
+		RuntimeID:            runtimeID,
+		PassiveObservation:   filepath.Join(workspace, "langgraph-recovery-observation.json"),
+		ContinuationArtifact: filepath.Join(workspace, "langgraph-continuation-observation.json"),
+		SandboxUID:           sandboxUID,
+		SandboxGID:           sandboxGID,
+	}, nil
+}
+
+func readLangGraphContinuationEvidence(path, runtimeID string, plan LangGraphForkPlan, coordinate LangGraphNativeCheckpointCoordinate, query RecoveryQuery, continuation *ContinuationQuery) (*ContinuationEvidence, error) {
+	if continuation == nil {
+		if query.ContinuationQueryID != "" {
+			return nil, fmt.Errorf("LangGraph recovery query binds continuation %q without a frozen query", query.ContinuationQueryID)
+		}
+		return nil, nil
+	}
+	if err := continuation.Validate(); err != nil {
+		return nil, err
+	}
+	if query.ContinuationQueryID != continuation.ContinuationQueryID {
+		return nil, fmt.Errorf("LangGraph recovery query continuation does not match the frozen query")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read LangGraph continuation observation: %w", err)
+	}
+	var artifact langGraphContinuationArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return nil, fmt.Errorf("decode LangGraph continuation observation: %w", err)
+	}
+	if artifact.SchemaVersion != "syncfuzz.langgraph-continuation-observation.v1" || artifact.ObservationKind != "continuation-user-turn" || artifact.RuntimeInstanceID != runtimeID || !artifact.RuntimeRecreated || artifact.ThreadID != plan.SourceThreadID || artifact.RequestedCheckpointID != coordinate.SourceCheckpointID || artifact.RestoredCheckpointID != coordinate.SourceCheckpointID {
+		return nil, fmt.Errorf("LangGraph continuation observation does not prove an exact fresh restore")
+	}
+	if artifact.RestoredCheckpointMessageCount != coordinate.MessageCount || !sameStrings(artifact.RestoredCheckpointNext, coordinate.Next) {
+		return nil, fmt.Errorf("LangGraph continuation observation did not start from the planned native state shape")
+	}
+	if artifact.ContinuationQueryID != continuation.ContinuationQueryID || artifact.ContinuationQuerySHA256 != continuation.QuerySHA256 || artifact.ContinuationUserMessage != continuation.Query || !artifact.ContinuationInvoked {
+		return nil, fmt.Errorf("LangGraph continuation observation does not prove the frozen follow-up query was invoked")
+	}
+	if artifact.ContinuationUserTurnCount != 1 || artifact.ContinuationAIToolCallCount < 0 || artifact.ContinuationToolResultCount < 0 || artifact.PostContinuationCheckpointCount <= 0 || len(artifact.PreEvidence) == 0 || len(artifact.PostEvidence) == 0 {
+		return nil, fmt.Errorf("LangGraph continuation observation has incomplete completion evidence")
+	}
+	pre := append([]string(nil), artifact.PreEvidence...)
+	pre = append(pre, "continuation observation artifact: "+path)
+	post := append([]string(nil), artifact.PostEvidence...)
+	post = append(post,
+		"continuation invoked: true",
+		"continuation user-turn count: 1",
+		"continuation AI tool-call count: "+strconv.Itoa(artifact.ContinuationAIToolCallCount),
+		"continuation tool-result count: "+strconv.Itoa(artifact.ContinuationToolResultCount),
+		"post-continuation durable checkpoint count: "+strconv.Itoa(artifact.PostContinuationCheckpointCount),
+	)
+	return &ContinuationEvidence{ContinuationQueryID: continuation.ContinuationQueryID, PreEvidence: pre, PostEvidence: post}, nil
+}
+
+func sameContinuationQuery(left, right *ContinuationQuery) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.ContinuationQueryID == right.ContinuationQueryID && left.Query == right.Query && left.QuerySHA256 == right.QuerySHA256
+}
+
+func langGraphPassiveRecoveryState(plan LangGraphForkPlan, artifact langGraphRecoveryArtifact, probeMode LangGraphPassiveProbeMode, usePreContinuationObservation bool) (StatePresence, StateOrigin, EffectMultiplicity, *PassiveProbeMetrics, []string, error) {
 	if plan.PassiveUnixSocketPath != "" {
-		listenerIdentityMatches := matchesUnixSocketIdentity(artifact.PassiveUnixSocket.AfterFork, plan.UnixSocketProbe)
-		listenerMatches := matchesUnixSocketProbe(artifact.PassiveUnixSocket.AfterFork, plan.UnixSocketProbe)
+		metadata := artifact.PassiveUnixSocket.AfterFork
+		if usePreContinuationObservation {
+			metadata = artifact.PassiveUnixSocket.BeforeFork
+		}
+		listenerIdentityMatches := matchesUnixSocketIdentity(metadata, plan.UnixSocketProbe)
+		listenerMatches := matchesUnixSocketProbe(metadata, plan.UnixSocketProbe)
 		osState := StatePresenceAbsent
-		if socketPresent(artifact.PassiveUnixSocket.AfterFork) && listenerIdentityMatches {
+		if socketPresent(metadata) && listenerIdentityMatches {
 			osState = StatePresencePresent
 		}
 		origin := StateOriginNone
-		if osState == StatePresencePresent && artifact.PassiveUnixSocket.SameEndpointIdentity && matchesSnapshotSocket(artifact.PassiveUnixSocket.BeforeFork, plan.WorkspaceSnapshot) && matchesSnapshotSocket(artifact.PassiveUnixSocket.AfterFork, plan.WorkspaceSnapshot) {
+		if osState == StatePresencePresent && usePreContinuationObservation && matchesSnapshotSocket(metadata, plan.WorkspaceSnapshot) {
+			origin = StateOriginResidual
+		} else if osState == StatePresencePresent && artifact.PassiveUnixSocket.SameEndpointIdentity && matchesSnapshotSocket(artifact.PassiveUnixSocket.BeforeFork, plan.WorkspaceSnapshot) && matchesSnapshotSocket(artifact.PassiveUnixSocket.AfterFork, plan.WorkspaceSnapshot) {
 			origin = StateOriginResidual
 		} else if osState == StatePresencePresent {
 			origin = StateOriginUnknown
@@ -190,20 +321,29 @@ func langGraphPassiveRecoveryState(plan LangGraphForkPlan, artifact langGraphRec
 		if origin == StateOriginResidual && probeMode == LangGraphPassiveProbeFull && listenerMatches {
 			multiplicity = EffectMultiplicitySingle
 		}
-		metrics := &PassiveProbeMetrics{Mode: probeMode, DurationNS: artifact.PassiveUnixSocket.AfterFork.ProbeDurationNS, ScannedProcesses: artifact.PassiveUnixSocket.AfterFork.ScannedProcesses, ScannedFDs: artifact.PassiveUnixSocket.AfterFork.ScannedFDs}
-		evidence := []string{"passive probe scan counts: processes=" + strconv.Itoa(artifact.PassiveUnixSocket.AfterFork.ScannedProcesses) + ",fds=" + strconv.Itoa(artifact.PassiveUnixSocket.AfterFork.ScannedFDs), "eBPF-linked listener effects: " + plan.UnixSocketProbe.BindEffectID + "," + plan.UnixSocketProbe.ListenEffectID}
+		metrics := &PassiveProbeMetrics{Mode: probeMode, DurationNS: metadata.ProbeDurationNS, ScannedProcesses: metadata.ScannedProcesses, ScannedFDs: metadata.ScannedFDs}
+		phase := "post-continuation"
+		if usePreContinuationObservation {
+			phase = "pre-continuation"
+		}
+		evidence := []string{"passive " + phase + " probe scan counts: processes=" + strconv.Itoa(metadata.ScannedProcesses) + ",fds=" + strconv.Itoa(metadata.ScannedFDs), "eBPF-linked listener effects: " + plan.UnixSocketProbe.BindEffectID + "," + plan.UnixSocketProbe.ListenEffectID}
 		return osState, origin, multiplicity, metrics, evidence, nil
 	}
 	if plan.WorkspaceFileProbe == nil {
 		return StatePresenceUnknown, StateOriginUnknown, EffectMultiplicityUnknown, nil, nil, fmt.Errorf("LangGraph recovery plan has no passive workspace file probe")
 	}
 	after := artifact.PassiveWorkspaceFile.AfterFork
+	if usePreContinuationObservation {
+		after = artifact.PassiveWorkspaceFile.BeforeFork
+	}
 	osState := StatePresenceAbsent
 	if matchesSnapshotWorkspaceFile(after, plan.WorkspaceSnapshot) {
 		osState = StatePresencePresent
 	}
 	origin := StateOriginNone
-	if osState == StatePresencePresent && artifact.PassiveWorkspaceFile.SameFileIdentity && matchesSnapshotWorkspaceFile(artifact.PassiveWorkspaceFile.BeforeFork, plan.WorkspaceSnapshot) {
+	if osState == StatePresencePresent && usePreContinuationObservation && matchesSnapshotWorkspaceFile(after, plan.WorkspaceSnapshot) {
+		origin = StateOriginResidual
+	} else if osState == StatePresencePresent && artifact.PassiveWorkspaceFile.SameFileIdentity && matchesSnapshotWorkspaceFile(artifact.PassiveWorkspaceFile.BeforeFork, plan.WorkspaceSnapshot) {
 		origin = StateOriginResidual
 	} else if osState == StatePresencePresent {
 		origin = StateOriginUnknown
@@ -213,13 +353,21 @@ func langGraphPassiveRecoveryState(plan LangGraphForkPlan, artifact langGraphRec
 		multiplicity = EffectMultiplicitySingle
 	}
 	metrics := &PassiveProbeMetrics{Mode: probeMode, DurationNS: after.ProbeDurationNS}
-	evidence := []string{"passive workspace file identity: " + plan.WorkspaceFileProbe.CanonicalPath, "eBPF-linked workspace file open effects: " + strings.Join(plan.WorkspaceFileProbe.OpenEffectIDs, ",")}
+	phase := "post-continuation"
+	if usePreContinuationObservation {
+		phase = "pre-continuation"
+	}
+	evidence := []string{"passive " + phase + " workspace file identity: " + plan.WorkspaceFileProbe.CanonicalPath, "eBPF-linked workspace file open effects: " + strings.Join(plan.WorkspaceFileProbe.OpenEffectIDs, ",")}
 	return osState, origin, multiplicity, metrics, evidence, nil
 }
 
 // langGraphRecoveryDockerArgs is kept separate from execution so the V3
 // recovery contract can be asserted without a Docker daemon or model provider.
 func langGraphRecoveryDockerArgs(plan LangGraphForkPlan, workspace, runtimeID string, sandboxUID, sandboxGID int, checkpointID string, providerEnvironment map[string]string) []string {
+	return langGraphRecoveryDockerArgsWithContinuation(plan, workspace, runtimeID, sandboxUID, sandboxGID, checkpointID, providerEnvironment, nil)
+}
+
+func langGraphRecoveryDockerArgsWithContinuation(plan LangGraphForkPlan, workspace, runtimeID string, sandboxUID, sandboxGID int, checkpointID string, providerEnvironment map[string]string, continuation *ContinuationQuery) []string {
 	passivePath := plan.WorkspaceSnapshot.PassiveResourcePath()
 	args := []string{"run", "--rm", "--name", "syncfuzz-" + runtimeID, "--pids-limit", "128", "--memory", "256m", "--cpus", "1", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--network", "container:" + plan.SourceRuntime.ContainerName, "--pid", "container:" + plan.SourceRuntime.ContainerName, "--user", strconv.Itoa(sandboxUID) + ":" + strconv.Itoa(sandboxGID), "-v", workspace + ":/workspace", "-v", plan.WorkspaceSnapshot.SourcePassiveResourcePath() + ":/workspace/" + passivePath + ":ro", "-w", "/workspace", "-e", "LANGCHAIN_MODEL=" + plan.Model}
 	for _, key := range []string{"OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY"} {
@@ -227,7 +375,16 @@ func langGraphRecoveryDockerArgs(plan LangGraphForkPlan, workspace, runtimeID st
 			args = append(args, "-e", key+"="+value)
 		}
 	}
-	command := []string{langGraphRecoveryContainerImage(plan), "python3", "/opt/syncfuzz-langgraph/run_target.py", "--workspace", "/workspace", "--prompt-file", "/workspace/target-prompt.txt", "--task-file", "/workspace/target-task.json", "--thread-id", plan.SourceThreadID, "--execution-policy", "host", "--checkpoint-backend", "disk", "--internal-phase", "resume", "--checkpoint-id", checkpointID, "--passive-fork-observe", "--runtime-instance-id", runtimeID, "--recovery-observation-artifact", "/workspace/langgraph-recovery-observation.json"}
+	command := []string{langGraphRecoveryContainerImage(plan), "python3", "/opt/syncfuzz-langgraph/run_target.py", "--workspace", "/workspace", "--prompt-file", "/workspace/target-prompt.txt", "--task-file", "/workspace/target-task.json", "--thread-id", plan.SourceThreadID, "--execution-policy", "host", "--checkpoint-backend", "disk", "--internal-phase", "resume", "--checkpoint-id", checkpointID, "--runtime-instance-id", runtimeID, "--recovery-observation-artifact", "/workspace/langgraph-recovery-observation.json"}
+	if continuation == nil {
+		command = append(command, "--passive-fork-observe")
+	} else {
+		command = append(command,
+			"--continuation-user-message", continuation.Query,
+			"--continuation-query-id", continuation.ContinuationQueryID,
+			"--continuation-observation-artifact", "/workspace/langgraph-continuation-observation.json",
+		)
+	}
 	if plan.PassiveUnixSocketPath != "" {
 		command = append(command, "--passive-unix-socket-path", plan.PassiveUnixSocketPath, "--passive-unix-socket-probe-mode", string(plan.PassiveProbeMode.Effective()), "--passive-unix-socket-expected-id", plan.UnixSocketProbe.SocketID, "--passive-unix-socket-expected-holder-pid", strconv.FormatUint(uint64(plan.UnixSocketProbe.HolderPID), 10), "--passive-unix-socket-expected-holder-fd", strconv.Itoa(plan.UnixSocketProbe.HolderFD))
 	} else {

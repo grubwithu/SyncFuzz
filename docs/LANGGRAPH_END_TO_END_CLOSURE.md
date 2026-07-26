@@ -93,6 +93,14 @@ Q_head   = <seed, H, H,       retain relevant OS state, W, mechanism>
 
 其中 historical checkpoint cut 是唯一 discovery 变量。任务、模型、容器镜像、目标 adapter、retention policy、被动观察方式和 recorded plan 必须保持一致。当前 LangGraph V3 vertical slice 已实现 `Q_before/Q_after/Q_head`，并将 materialization head、retention policy 与 source-runtime lease 写入 `HistoricalRecoverySet`；下文涉及仅有 `RecoveryPair` 的描述均指历史 V2 baseline。
 
+默认 recovery 是 pure-passive：exact restore 后不向 Agent 追加 user turn，只做固定
+passive observation。若研究问题要求验证恢复后的 Agent 如何继续响应一个正常输入，
+可启用 **continuation recovery**：对三个 controls 在同一 restore 后顺序执行
+`P_pre -> frozen generic continuation query -> P_post`。continuation 的 exact bytes
+与 SHA-256 必须相同，且它只是实验刺激而不是手写 Oracle；完整协议、证据要求与
+pure-passive 的兼容边界见
+[LANGGRAPH_CONTINUATION_RECOVERY.md](LANGGRAPH_CONTINUATION_RECOVERY.md)。
+
 这与旧路线有根本区别：旧 mutation 路线会改 prompt profile、场景 primitive、activation 或 trusted follow-up；v2 不把这些变化当作新的 recovery query。它们可能仍是历史 regression fixture 或后续 case study，但不构成 StateSeed 发现或 coverage claim。
 
 ## 3. 本次闭环的具体输入
@@ -559,6 +567,16 @@ unknown causal tuple 仅保留审计计数。它不读取 task、tool/session id
 command hash 或 contract status，也不将 relation 结论升级为 guided generation
 的 Oracle。
 
+StateFuzz batch 另有一个不参与 novelty/scheduling 的归纳层：
+`synthesis statefuzz-relation-batch-report` 对每个 accepted attempt 读取
+`recovery-relation-report.json`，重新验证 seed/profile/recovery lineage 和
+三条 query 的 passive scope，然后按 canonical scope 聚合 before/after/head
+relation vector。它同时统计 complete three-control set、`Q_head` 一致性、
+causal evidence、contract metadata 与 runtime image ID；缺失或损坏的 relation
+artifact 会作为 `invalid-relation-artifact` 留在分母中。它不读 task 文本、
+文件内容或 tool-call identity，也不替代 Oracle、contract triage 或
+relation-novelty ledger。
+
 ## 10. 关键 artifact 清单与审计路径
 
 `runs/` 是生成物目录，按项目纪律不会提交到 Git。汇报或复查此运行时应保留该目录。审计可按下面的顺序打开：
@@ -598,7 +616,8 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 6. **historical cut 是唯一 discovery 变量。**同一 seed、head、frontier、task、model、image、recorded plan、retention policy、passive observation；当前 before/after 子集只改变 checkpoint coordinate。
 7. **每条 query 都是 fresh runtime。**before/after/head 不能复用 container、workspace 或 runtime ID；跨 query 比较的是可比的 head materialization，不是同一物理 OS instance。
 8. **query 内保留 residue。**同一 query 的 initial 与 fresh-resume process 留在同一 container/workspace，以便构造 `<A_C,O_H^(q)>`，检查 logical recovery 没有回滚的 OS state。
-9. **被动观察不改状态。**`lstat` 既不建连也不调用 Agent follow-up。
+9. **被动观察不改状态。**pure-passive 路径中的 `lstat` 既不建连也不调用 Agent
+   follow-up；continuation 路径把 `P_pre`、正常 user turn 与 `P_post` 明确分开。
 10. **credential 不落盘。**plan / pair / profile artifact 不包含 API key；运行时从环境传递。
 11. **image contract 必须一致。**source lease、准备期与恢复期的 image ID、runner protocol 和 recovery capability set 必须完全相同。
 12. **不确定就拒绝分类。**coordinate 非唯一、binding 不成立、runtime 未重建、probe 无法解释 multiplicity，均 fail closed。
@@ -795,11 +814,17 @@ and record a stable adapter version in `LANGGRAPH_STATEFUZZ_GENERATOR_ID`. The
 adapter reads the target-owned scaffold named by the bounded request; for this
 target it declares `agent.sock` as the workspace-local observable Unix endpoint.
 
-The next live experiment should use the regular-workspace-file family. It
-selects `agent-result.txt` as the retained metadata node and a distinct
-regular-file-only scaffold. The scaffold still leaves task wording to the
-external generator, but excludes Unix sockets, every other special workspace
-file, and background services so the recovery snapshot has no unmodelled node:
+The regular-workspace-file live experiment has now completed. The generated
+three-attempt batch at `runs/langgraph-workspace-file-contract` selected
+`agent-result.txt` as the retained metadata node and produced three accepted
+recovery sets with the same before/after/head relation vector. Its detailed
+artifact audit is in
+[LANGGRAPH_WORKSPACE_FILE_ATTEMPT_000.md](LANGGRAPH_WORKSPACE_FILE_ATTEMPT_000.md).
+The scaffold still leaves task wording to the external generator, but excludes
+Unix sockets, every other special workspace file, and background services so
+the recovery snapshot has no unmodelled node. The following command launches a
+comparable single attempt; it does not reproduce the exact candidate ID or
+model output of the recorded batch:
 
 ```bash
 make synthesis-langgraph-statefuzz-attempt \

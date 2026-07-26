@@ -201,6 +201,24 @@ def parse_args() -> argparse.Namespace:
         help="If set, fork from --checkpoint-index by appending a new user message.",
     )
     parser.add_argument(
+        "--continuation-user-message",
+        default=os.environ.get("SYNCFUZZ_LANGGRAPH_CONTINUATION_USER_MESSAGE", ""),
+        help="Append this frozen follow-up user message after an exact checkpoint restore and execute one normal agent turn.",
+    )
+    parser.add_argument(
+        "--continuation-query-id",
+        default=os.environ.get("SYNCFUZZ_LANGGRAPH_CONTINUATION_QUERY_ID", "").strip(),
+        help="Controller-issued identity for --continuation-user-message. It is recorded with the message SHA-256 for cross-fork audit.",
+    )
+    parser.add_argument(
+        "--continuation-observation-artifact",
+        default=os.environ.get(
+            "SYNCFUZZ_LANGGRAPH_CONTINUATION_OBSERVATION_ARTIFACT",
+            "langgraph-continuation-observation.json",
+        ),
+        help="Artifact filename written after a continuation turn with exact-restore and completion evidence.",
+    )
+    parser.add_argument(
         "--passive-fork-observe",
         action="store_true",
         default=env_bool("SYNCFUZZ_LANGGRAPH_PASSIVE_FORK_OBSERVE"),
@@ -295,6 +313,7 @@ def runtime_contract() -> dict[str, Any]:
         "target_id": "langgraph-shell-react",
         "runner_protocol": "syncfuzz.langgraph-runner.v1",
         "capabilities": [
+            "continuation-user-turn-v1",
             "durable-disk-checkpoints-v1",
             "exact-checkpoint-restore-v1",
             "passive-unix-socket-observer-v1",
@@ -903,6 +922,8 @@ def build_phase_command(
     fork_artifact: str,
     replay: bool,
     fork_user_message: str,
+    continuation_user_message: str,
+    continuation_query_id: str,
     runtime_instance_id: str,
 ) -> list[str]:
     command = [
@@ -938,6 +959,8 @@ def build_phase_command(
         fork_artifact,
         "--recovery-observation-artifact",
         args.recovery_observation_artifact,
+        "--continuation-observation-artifact",
+        args.continuation_observation_artifact,
     ]
     if args.prompt:
         command.extend(["--prompt", args.prompt])
@@ -973,6 +996,12 @@ def build_phase_command(
         command.append("--replay")
     if fork_user_message.strip():
         command.extend(["--fork-user-message", fork_user_message])
+    if continuation_user_message.strip():
+        command.extend(
+            ["--continuation-user-message", continuation_user_message]
+        )
+        if continuation_query_id.strip():
+            command.extend(["--continuation-query-id", continuation_query_id])
     if phase == "resume" and args.passive_fork_observe:
         command.append("--passive-fork-observe")
     if args.passive_unix_socket_path:
@@ -986,10 +1015,14 @@ def build_phase_command(
     return command
 
 
-def build_phase_environment(*, replay: bool, fork_user_message: str) -> dict[str, str]:
+def build_phase_environment(
+    *, replay: bool, fork_user_message: str, continuation_user_message: str = "", continuation_query_id: str = ""
+) -> dict[str, str]:
     env = os.environ.copy()
     env["SYNCFUZZ_LANGGRAPH_REPLAY"] = "true" if replay else "false"
     env["SYNCFUZZ_LANGGRAPH_FORK_USER_MESSAGE"] = fork_user_message
+    env["SYNCFUZZ_LANGGRAPH_CONTINUATION_USER_MESSAGE"] = continuation_user_message
+    env["SYNCFUZZ_LANGGRAPH_CONTINUATION_QUERY_ID"] = continuation_query_id
     return env
 
 
@@ -1023,6 +1056,8 @@ def run_split_process(args: argparse.Namespace) -> int:
         fork_artifact=args.fork_artifact,
         replay=False,
         fork_user_message="",
+        continuation_user_message="",
+        continuation_query_id="",
         runtime_instance_id=(args.runtime_instance_id + ":initial")
         if args.runtime_instance_id
         else "",
@@ -1050,6 +1085,8 @@ def run_split_process(args: argparse.Namespace) -> int:
         fork_artifact=args.fork_artifact,
         replay=args.replay,
         fork_user_message=args.fork_user_message,
+        continuation_user_message=args.continuation_user_message,
+        continuation_query_id=args.continuation_query_id,
         runtime_instance_id=args.runtime_instance_id,
     )
     resume_result = subprocess.run(
@@ -1058,6 +1095,8 @@ def run_split_process(args: argparse.Namespace) -> int:
         env=build_phase_environment(
             replay=args.replay,
             fork_user_message=args.fork_user_message,
+            continuation_user_message=args.continuation_user_message,
+            continuation_query_id=args.continuation_query_id,
         ),
     )
     if resume_result.returncode != 0:
@@ -2514,6 +2553,96 @@ def passive_unix_listener_observation(
     return finish()
 
 
+def summarize_continuation_observation(
+    *,
+    args: argparse.Namespace,
+    thread_id: str,
+    selected_state: Any,
+    selected_checkpoint_index: int,
+    checkpoint_selection: str,
+    user_message: str,
+    continuation_query_id: str,
+    continuation_result: Any | None,
+    continuation_history: list[Any],
+) -> dict[str, Any]:
+    """Record the one post-restore user turn without judging its outcome.
+
+    The controller freezes the query text in the recovery set. This artifact
+    proves which text was injected into this fresh runtime, the exact durable
+    state immediately before injection, and the durable states/messages that
+    exist after ``agent.invoke`` completes. It deliberately does not turn
+    tool output into a scenario-specific success condition.
+    """
+
+    selected_messages = (getattr(selected_state, "values", {}) or {}).get(
+        "messages", []
+    )
+    result_summary = summarize_messages(result_messages(continuation_result))
+    post_history = summarize_history(continuation_history)
+    query_sha256 = sha256_text(user_message)
+    result_sha256 = sha256_text(
+        json.dumps(result_summary, ensure_ascii=False, sort_keys=True)
+    )
+    restored_checkpoint_id = extract_checkpoint_id(selected_state)
+    pre_evidence = [
+        "fresh resume runtime instance: "
+        + (
+            args.runtime_instance_id
+            or f"langgraph-runtime:{thread_id}:pid:{os.getpid()}"
+        ),
+        "native checkpoint requested by exact ID: " + args.checkpoint_id.strip(),
+        "native checkpoint restored by exact ID: " + restored_checkpoint_id,
+        "restored checkpoint message count: " + str(len(selected_messages)),
+        "restored checkpoint next: "
+        + json.dumps(list(getattr(selected_state, "next", ()) or ())),
+    ]
+    post_evidence = [
+        "continuation user turn invoked exactly once",
+        "continuation result message count: " + str(len(result_summary)),
+        "continuation AI tool-call count: "
+        + str(ai_tool_call_count(result_messages(continuation_result))),
+        "continuation tool-result count: "
+        + str(tool_message_count(result_messages(continuation_result))),
+        "continuation result summary SHA-256: " + result_sha256,
+        "durable checkpoint count after continuation: " + str(len(post_history)),
+    ]
+    return {
+        "schema_version": "syncfuzz.langgraph-continuation-observation.v1",
+        "observation_kind": "continuation-user-turn",
+        "runtime_instance_id": args.runtime_instance_id
+        or f"langgraph-runtime:{thread_id}:pid:{os.getpid()}",
+        "runtime_pid": os.getpid(),
+        "thread_id": thread_id,
+        "process_mode": args.process_mode,
+        "internal_phase": args.internal_phase,
+        "runtime_recreated": args.internal_phase == "resume",
+        "checkpoint_selector": checkpoint_selection,
+        "requested_checkpoint_id": args.checkpoint_id.strip(),
+        "restored_checkpoint_index": selected_checkpoint_index,
+        "restored_checkpoint_id": restored_checkpoint_id,
+        "restored_checkpoint_message_count": len(selected_messages),
+        "restored_checkpoint_next": list(
+            getattr(selected_state, "next", ()) or ()
+        ),
+        "continuation_query_id": continuation_query_id,
+        "continuation_query_sha256": query_sha256,
+        "continuation_user_message": user_message,
+        "continuation_invoked": continuation_result is not None,
+        "continuation_user_turn_count": 1,
+        "continuation_ai_tool_call_count": ai_tool_call_count(
+            result_messages(continuation_result)
+        ),
+        "continuation_tool_result_count": tool_message_count(
+            result_messages(continuation_result)
+        ),
+        "post_continuation_checkpoint_count": len(post_history),
+        "pre_evidence": pre_evidence,
+        "post_evidence": post_evidence,
+        "continuation_result": result_summary,
+        "post_continuation_history": post_history,
+    }
+
+
 def summarize_passive_recovery_observation(
     *,
     args: argparse.Namespace,
@@ -2793,6 +2922,25 @@ def write_json(path: Path, value: Any) -> None:
 
 def main() -> int:
     args = parse_args()
+    legacy_fork_user_message = args.fork_user_message.strip()
+    continuation_user_message = args.continuation_user_message.strip()
+    if legacy_fork_user_message and continuation_user_message:
+        raise SystemExit(
+            "--fork-user-message and --continuation-user-message are mutually exclusive"
+        )
+    if continuation_user_message and args.passive_fork_observe:
+        raise SystemExit(
+            "--continuation-user-message cannot be combined with --passive-fork-observe"
+        )
+    active_followup_message = continuation_user_message or legacy_fork_user_message
+    continuation_query_id = args.continuation_query_id.strip()
+    if continuation_user_message and not continuation_query_id:
+        # The controller normally issues this ID. A deterministic fallback
+        # keeps direct target invocations auditable without inventing a second
+        # text channel.
+        continuation_query_id = (
+            "continuation-query:sha256:" + sha256_text(continuation_user_message)
+        )
     if args.runtime_contract:
         print(json.dumps(runtime_contract(), sort_keys=True, separators=(",", ":")))
         return 0
@@ -2801,7 +2949,7 @@ def main() -> int:
         and args.process_mode == "split-process"
         and (
             args.replay
-            or args.fork_user_message.strip()
+            or active_followup_message
             or args.passive_fork_observe
         )
     ):
@@ -2894,7 +3042,8 @@ def main() -> int:
         lifecycle.begin_operation(
             "resume_load",
             replay_requested=args.replay,
-            fork_requested=bool(args.fork_user_message.strip()),
+            fork_requested=bool(legacy_fork_user_message),
+            continuation_requested=bool(continuation_user_message),
         )
         lifecycle.complete_operation("resume_load", [])
     history = collect_state_history(agent, config)
@@ -2926,7 +3075,7 @@ def main() -> int:
     )
     selected_state = resolve_history_state(history, selected_checkpoint_index)
     if (
-        args.replay or args.fork_user_message.strip() or args.passive_fork_observe
+        args.replay or active_followup_message or args.passive_fork_observe
     ) and selected_state is None:
         raise SystemExit(
             "replay or fork requested but checkpoint index "
@@ -2953,16 +3102,20 @@ def main() -> int:
             lifecycle.note_history(summarize_history(replay_history), "replay")
     fork_result = None
     passive_recovery_observation = None
-    if args.fork_user_message.strip():
+    continuation_observation = None
+    continuation_history: list[Any] = []
+    if active_followup_message:
         passive_before_fork = None
         if args.passive_unix_socket_path or args.passive_workspace_file_path:
             passive_before_fork = passive_fork_observation(workspace, args)
+        followup_operation = "continuation" if continuation_user_message else "fork"
         lifecycle.begin_operation(
-            "fork",
+            followup_operation,
             checkpoint_index=selected_checkpoint_index,
             checkpoint_selector=checkpoint_selector,
             checkpoint_id=extract_checkpoint_id(selected_state),
-            fork_user_message=args.fork_user_message.strip()[:500],
+            followup_user_message=active_followup_message[:500],
+            continuation_query_id=continuation_query_id,
         )
         try:
             fork_result = maybe_fork(
@@ -2970,7 +3123,7 @@ def main() -> int:
                 HumanMessage,
                 history,
                 selected_checkpoint_index,
-                args.fork_user_message.strip(),
+                active_followup_message,
             )
         finally:
             if passive_before_fork is not None:
@@ -2990,14 +3143,33 @@ def main() -> int:
                     workspace / args.recovery_observation_artifact,
                     passive_recovery_observation,
                 )
-            lifecycle.complete_operation("fork", result_messages(fork_result))
+            lifecycle.complete_operation(followup_operation, result_messages(fork_result))
         if fork_result is None:
             raise SystemExit(
-                f"fork requested but checkpoint index {selected_checkpoint_index} is unavailable"
+                "continuation or fork requested but checkpoint index "
+                f"{selected_checkpoint_index} is unavailable"
             )
         if selected_state is not None:
-            fork_history = collect_state_history(agent, selected_state.config)
-            lifecycle.note_history(summarize_history(fork_history), "fork")
+            continuation_history = collect_state_history(agent, selected_state.config)
+            lifecycle.note_history(
+                summarize_history(continuation_history), followup_operation
+            )
+        if continuation_user_message:
+            continuation_observation = summarize_continuation_observation(
+                args=args,
+                thread_id=thread_id,
+                selected_state=selected_state,
+                selected_checkpoint_index=selected_checkpoint_index,
+                checkpoint_selection=checkpoint_selector,
+                user_message=continuation_user_message,
+                continuation_query_id=continuation_query_id,
+                continuation_result=fork_result,
+                continuation_history=continuation_history,
+            )
+            write_json(
+                workspace / args.continuation_observation_artifact,
+                continuation_observation,
+            )
     elif args.passive_fork_observe:
         lifecycle.begin_operation(
             "passive_fork_observe",
@@ -3088,13 +3260,23 @@ def main() -> int:
         if selected_state is not None
         else "",
         "replay_requested": args.replay,
-        "fork_requested": bool(args.fork_user_message.strip()),
+        "fork_requested": bool(legacy_fork_user_message),
+        "continuation_requested": bool(continuation_user_message),
+        "continuation_query_id": continuation_query_id
+        if continuation_user_message
+        else "",
+        "continuation_query_sha256": sha256_text(continuation_user_message)
+        if continuation_user_message
+        else "",
         "passive_fork_observe_requested": args.passive_fork_observe,
         "runtime_instance_id": args.runtime_instance_id,
         "passive_unix_socket_path": args.passive_unix_socket_path,
         "passive_workspace_file_path": args.passive_workspace_file_path,
         "recovery_observation_artifact": args.recovery_observation_artifact
         if passive_recovery_observation is not None
+        else "",
+        "continuation_observation_artifact": args.continuation_observation_artifact
+        if continuation_observation is not None
         else "",
         "history_count": len(history),
         "lifecycle_artifact": args.lifecycle_artifact,
@@ -3109,7 +3291,8 @@ def main() -> int:
         "target_completed",
         validation_error=validation_error,
         replay_requested=args.replay,
-        fork_requested=bool(args.fork_user_message.strip()),
+        fork_requested=bool(legacy_fork_user_message),
+        continuation_requested=bool(continuation_user_message),
     )
     lifecycle_artifact = lifecycle.artifact()
     summary["lifecycle_event_count"] = lifecycle_artifact["summary"]["event_count"]
@@ -3134,7 +3317,7 @@ def main() -> int:
                 selector=checkpoint_selector,
             ),
         )
-    if args.fork_user_message.strip():
+    if legacy_fork_user_message:
         write_json(
             workspace / args.fork_artifact,
             summarize_operation_result(
@@ -3143,7 +3326,19 @@ def main() -> int:
                 selected_checkpoint_index,
                 fork_result,
                 selector=checkpoint_selector,
-                user_message=args.fork_user_message.strip(),
+                user_message=legacy_fork_user_message,
+            ),
+        )
+    if continuation_user_message:
+        write_json(
+            workspace / args.fork_artifact,
+            summarize_operation_result(
+                "continuation",
+                history,
+                selected_checkpoint_index,
+                fork_result,
+                selector=checkpoint_selector,
+                user_message=continuation_user_message,
             ),
         )
 

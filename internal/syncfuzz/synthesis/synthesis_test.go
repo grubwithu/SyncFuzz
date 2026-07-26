@@ -311,6 +311,25 @@ func TestBuildStateFuzzBatchReportKeepsLegacyRejectionsAndMixedRoots(t *testing.
 		if err != nil {
 			t.Fatalf("MaterializationHeadFor: %v", err)
 		}
+		observation := func(name, checkpointID string, agentState recovery.StatePresence) recovery.RecoveryObservation {
+			return recovery.RecoveryObservation{
+				SchemaVersion:         recovery.ExecutionSchemaVersion,
+				QueryID:               "recovery-query:" + seed.SeedID + ":" + name,
+				SeedID:                seed.SeedID,
+				Boundary:              recovery.BoundaryFork,
+				CheckpointID:          checkpointID,
+				RecordedPlanID:        seed.RecordedPlanID,
+				PassiveObservationID:  "passive:statefuzz",
+				MaterializationHeadID: head.HeadID,
+				RetentionPolicy:       recovery.RetentionPolicyRetainRelevantOSState,
+				RuntimeInstanceID:     "runtime:" + name,
+				AgentState:            agentState,
+				OSState:               recovery.StatePresencePresent,
+				OSStateOrigin:         recovery.StateOriginResidual,
+				EffectMultiplicity:    recovery.EffectMultiplicitySingle,
+				Evidence:              []string{"complete synthetic relation evidence"},
+			}
+		}
 		execution := recovery.ForkRecoverySetExecution{
 			SchemaVersion:       recovery.ExecutionSchemaVersion,
 			RecoverySetID:       "recovery-set:" + seed.SeedID,
@@ -319,6 +338,9 @@ func TestBuildStateFuzzBatchReportKeepsLegacyRejectionsAndMixedRoots(t *testing.
 			RecordedPlanID:      seed.RecordedPlanID,
 			MaterializationHead: head,
 			RetentionPolicy:     recovery.RetentionPolicyRetainRelevantOSState,
+			Before:              observation("before", seed.BeforeCheckpointID, recovery.StatePresenceAbsent),
+			After:               observation("after", seed.AfterCheckpointID, recovery.StatePresencePresent),
+			Head:                observation("head", seed.MaterializationHeadCheckpointID, recovery.StatePresencePresent),
 			Classification: recovery.RecoverySetClassification{
 				BeforeOutcome: "residual",
 				AfterOutcome:  "consistent",
@@ -332,6 +354,13 @@ func TestBuildStateFuzzBatchReportKeepsLegacyRejectionsAndMixedRoots(t *testing.
 		}
 		if err := writeJSON(filepath.Join(attemptRoot, "recovery-set-execution.json"), execution); err != nil {
 			t.Fatalf("write recovery execution: %v", err)
+		}
+		relation, err := recovery.BuildRecoveryRelationReport(seed, execution)
+		if err != nil {
+			t.Fatalf("BuildRecoveryRelationReport: %v", err)
+		}
+		if err := recovery.WriteRecoveryRelationReport(filepath.Join(attemptRoot, "recovery-relation-report.json"), relation); err != nil {
+			t.Fatalf("WriteRecoveryRelationReport: %v", err)
 		}
 	}
 
@@ -402,6 +431,36 @@ func TestBuildStateFuzzBatchReportKeepsLegacyRejectionsAndMixedRoots(t *testing.
 	}
 	if report.Attempts[2].Status != StateFuzzBatchInvalidArtifactRoot || report.Attempts[2].Reason != "candidate-profile-seed-lineage-mismatch" {
 		t.Fatalf("expected mixed root to remain invalid, got %#v", report.Attempts[2])
+	}
+	relationReport, err := BuildStateFuzzRelationBatchReport(stateObjective, root)
+	if err != nil {
+		t.Fatalf("BuildStateFuzzRelationBatchReport: %v", err)
+	}
+	if relationReport.AttemptCount != 6 || relationReport.AcceptedCount != 1 || relationReport.AggregatedRelationCount != 1 || relationReport.InvalidRelationArtifactCount != 0 || relationReport.NotEligibleAttemptCount != 5 || relationReport.CompleteThreeControlSetCount != 1 || relationReport.HeadConsistentCount != 1 || relationReport.CausalEffectEvidenceCounts[string(recovery.CausalEffectEvidenceUnknown)] != 1 || relationReport.ContractStatusCounts[string(recovery.ContractNotEvaluated)] != 1 {
+		t.Fatalf("unexpected StateFuzz relation batch report: %#v", relationReport)
+	}
+	if len(relationReport.RelationVectors) != 1 || relationReport.RelationVectors[0].BeforeRelation != "effect-not-committed|present|original|single|unknown|uncommitted-original-residual" || relationReport.RelationVectors[0].AfterRelation != "effect-committed|present|original|single|unknown|aligned" || relationReport.RelationVectors[0].HeadRelation != "effect-committed|present|original|single|unknown|aligned" {
+		t.Fatalf("unexpected relation vector aggregate: %#v", relationReport.RelationVectors)
+	}
+	if err := os.Remove(filepath.Join(root, "attempt-001", "recovery-relation-report.json")); err != nil {
+		t.Fatalf("remove relation report: %v", err)
+	}
+	missingRelationReport, err := BuildStateFuzzRelationBatchReport(stateObjective, root)
+	if err != nil {
+		t.Fatalf("BuildStateFuzzRelationBatchReport without relation artifact: %v", err)
+	}
+	if missingRelationReport.AggregatedRelationCount != 0 || missingRelationReport.InvalidRelationArtifactCount != 1 || missingRelationReport.RelationStatusCounts[string(StateFuzzRelationBatchInvalidRelationArtifact)] != 1 {
+		t.Fatalf("missing relation artifact must remain visible in the denominator: %#v", missingRelationReport)
+	}
+	if err := os.WriteFile(filepath.Join(root, "attempt-001", "recovery-relation-report.json"), []byte(`{"schema_version":"syncfuzz.recovery-relation-report.v1"}`), 0o644); err != nil {
+		t.Fatalf("write malformed relation report: %v", err)
+	}
+	malformedRelationReport, err := BuildStateFuzzRelationBatchReport(stateObjective, root)
+	if err != nil {
+		t.Fatalf("BuildStateFuzzRelationBatchReport with malformed relation artifact: %v", err)
+	}
+	if malformedRelationReport.InvalidRelationArtifactCount != 1 {
+		t.Fatalf("malformed relation artifact must remain visible in the denominator: %#v", malformedRelationReport)
 	}
 }
 

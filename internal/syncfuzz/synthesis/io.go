@@ -81,6 +81,13 @@ func WriteStateFuzzBatchReport(path string, report StateFuzzBatchReport) error {
 	return writeJSON(path, report)
 }
 
+func WriteStateFuzzRelationBatchReport(path string, report StateFuzzRelationBatchReport) error {
+	if err := report.Validate(); err != nil {
+		return err
+	}
+	return writeJSON(path, report)
+}
+
 func WriteMAFNativeFrontierBinding(path string, binding MAFNativeFrontierBinding) error {
 	if binding.SchemaVersion != MAFNativeFrontierBindingSchema {
 		return fmt.Errorf("unsupported MAF native frontier binding schema %q", binding.SchemaVersion)

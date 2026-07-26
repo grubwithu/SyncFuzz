@@ -4,6 +4,8 @@
 package recovery
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -11,6 +13,58 @@ import (
 )
 
 const SchemaVersion = "syncfuzz.recovery.v1"
+
+// ContinuationQuery is one exact, adapter-neutral user input that is supplied
+// after a durable checkpoint has been restored. Its identity is derived from
+// the exact bytes of Query so a recovery control cannot silently substitute a
+// different follow-up task.
+//
+// It deliberately models only the input. Adapter-specific execution and
+// output evidence belongs to ContinuationEvidence on RecoveryObservation.
+type ContinuationQuery struct {
+	ContinuationQueryID string `json:"continuation_query_id"`
+	Query               string `json:"query"`
+	QuerySHA256         string `json:"query_sha256"`
+}
+
+func NewContinuationQuery(query string) (*ContinuationQuery, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("continuation query is required")
+	}
+	digest := sha256.Sum256([]byte(query))
+	querySHA256 := hex.EncodeToString(digest[:])
+	return &ContinuationQuery{
+		ContinuationQueryID: "continuation-query:" + querySHA256,
+		Query:               query,
+		QuerySHA256:         querySHA256,
+	}, nil
+}
+
+func (q ContinuationQuery) Validate() error {
+	if strings.TrimSpace(q.Query) == "" || strings.TrimSpace(q.ContinuationQueryID) == "" || strings.TrimSpace(q.QuerySHA256) == "" {
+		return fmt.Errorf("continuation query requires ID, query, and SHA-256")
+	}
+	digest := sha256.Sum256([]byte(q.Query))
+	expectedSHA256 := hex.EncodeToString(digest[:])
+	if q.QuerySHA256 != expectedSHA256 {
+		return fmt.Errorf("continuation query SHA-256 does not match its query")
+	}
+	if q.ContinuationQueryID != "continuation-query:"+expectedSHA256 {
+		return fmt.Errorf("continuation query ID does not match its query")
+	}
+	return nil
+}
+
+func freezeContinuationQuery(query *ContinuationQuery) (*ContinuationQuery, error) {
+	if query == nil {
+		return nil, nil
+	}
+	if err := query.Validate(); err != nil {
+		return nil, err
+	}
+	frozen := *query
+	return &frozen, nil
+}
 
 type Boundary string
 
@@ -128,20 +182,22 @@ type RecoveryQuery struct {
 	PassiveObservationID  string          `json:"passive_observation_id"`
 	MaterializationHeadID string          `json:"materialization_head_id,omitempty"`
 	RetentionPolicy       RetentionPolicy `json:"retention_policy,omitempty"`
+	ContinuationQueryID   string          `json:"continuation_query_id,omitempty"`
 }
 
 // RecoveryPair holds exactly two observations whose checkpoint coordinate is
 // the only permitted difference.
 type RecoveryPair struct {
-	SchemaVersion        string        `json:"schema_version"`
-	ComparisonPairID     string        `json:"comparison_pair_id"`
-	SeedID               string        `json:"seed_id"`
-	FrontierID           string        `json:"frontier_id"`
-	Boundary             Boundary      `json:"boundary"`
-	RecordedPlanID       string        `json:"recorded_plan_id"`
-	PassiveObservationID string        `json:"passive_observation_id"`
-	Before               RecoveryQuery `json:"before"`
-	After                RecoveryQuery `json:"after"`
+	SchemaVersion        string             `json:"schema_version"`
+	ComparisonPairID     string             `json:"comparison_pair_id"`
+	SeedID               string             `json:"seed_id"`
+	FrontierID           string             `json:"frontier_id"`
+	Boundary             Boundary           `json:"boundary"`
+	RecordedPlanID       string             `json:"recorded_plan_id"`
+	PassiveObservationID string             `json:"passive_observation_id"`
+	ContinuationQuery    *ContinuationQuery `json:"continuation_query,omitempty"`
+	Before               RecoveryQuery      `json:"before"`
+	After                RecoveryQuery      `json:"after"`
 }
 
 // HistoricalRecoverySet is the complete V2 recovery experiment. Before,
@@ -158,12 +214,20 @@ type HistoricalRecoverySet struct {
 	PassiveObservationID string              `json:"passive_observation_id"`
 	MaterializationHead  MaterializationHead `json:"materialization_head"`
 	RetentionPolicy      RetentionPolicy     `json:"retention_policy"`
+	ContinuationQuery    *ContinuationQuery  `json:"continuation_query,omitempty"`
 	Before               RecoveryQuery       `json:"before"`
 	After                RecoveryQuery       `json:"after"`
 	Head                 RecoveryQuery       `json:"head"`
 }
 
 func NewForkRecoverySet(seed objective.StateSeed, plan RecordedPlan) (*HistoricalRecoverySet, error) {
+	return NewForkRecoverySetWithContinuation(seed, plan, nil)
+}
+
+// NewForkRecoverySetWithContinuation freezes one optional continuation input
+// across the before/after/head controls. A nil continuation preserves the
+// passive-observation-only recovery experiment used by existing artifacts.
+func NewForkRecoverySetWithContinuation(seed objective.StateSeed, plan RecordedPlan, continuation *ContinuationQuery) (*HistoricalRecoverySet, error) {
 	if err := plan.ValidateFor(seed); err != nil {
 		return nil, err
 	}
@@ -174,7 +238,15 @@ func NewForkRecoverySet(seed objective.StateSeed, plan RecordedPlan) (*Historica
 	if plan.MaterializationHeadID != head.HeadID || plan.RetentionPolicy != RetentionPolicyRetainRelevantOSState {
 		return nil, fmt.Errorf("recorded plan must freeze materialization head %q and retention policy %q", head.HeadID, RetentionPolicyRetainRelevantOSState)
 	}
+	frozenContinuation, err := freezeContinuationQuery(continuation)
+	if err != nil {
+		return nil, err
+	}
 	newQuery := func(checkpointID string) RecoveryQuery {
+		continuationQueryID := ""
+		if frozenContinuation != nil {
+			continuationQueryID = frozenContinuation.ContinuationQueryID
+		}
 		return RecoveryQuery{
 			QueryID:               "recovery-query:" + seed.SeedID + ":" + checkpointID,
 			SeedID:                seed.SeedID,
@@ -184,6 +256,7 @@ func NewForkRecoverySet(seed objective.StateSeed, plan RecordedPlan) (*Historica
 			PassiveObservationID:  plan.PassiveObservationID,
 			MaterializationHeadID: head.HeadID,
 			RetentionPolicy:       plan.RetentionPolicy,
+			ContinuationQueryID:   continuationQueryID,
 		}
 	}
 	set := &HistoricalRecoverySet{
@@ -196,6 +269,7 @@ func NewForkRecoverySet(seed objective.StateSeed, plan RecordedPlan) (*Historica
 		PassiveObservationID: plan.PassiveObservationID,
 		MaterializationHead:  head,
 		RetentionPolicy:      plan.RetentionPolicy,
+		ContinuationQuery:    frozenContinuation,
 		Before:               newQuery(seed.BeforeCheckpointID),
 		After:                newQuery(seed.AfterCheckpointID),
 		Head:                 newQuery(head.CheckpointID),
@@ -219,6 +293,9 @@ func (s HistoricalRecoverySet) ValidateFor(seed objective.StateSeed) error {
 	if err := s.MaterializationHead.ValidateFor(seed); err != nil {
 		return err
 	}
+	if err := validateContinuationBinding(s.ContinuationQuery, s.Before, s.After, s.Head); err != nil {
+		return err
+	}
 	if err := validateSetQuery(s.Before, seed, s, seed.BeforeCheckpointID); err != nil {
 		return fmt.Errorf("before query: %w", err)
 	}
@@ -234,6 +311,26 @@ func (s HistoricalRecoverySet) ValidateFor(seed objective.StateSeed) error {
 	return nil
 }
 
+func validateContinuationBinding(continuation *ContinuationQuery, queries ...RecoveryQuery) error {
+	if continuation == nil {
+		for _, query := range queries {
+			if query.ContinuationQueryID != "" {
+				return fmt.Errorf("recovery query %q binds an absent continuation query", query.QueryID)
+			}
+		}
+		return nil
+	}
+	if err := continuation.Validate(); err != nil {
+		return err
+	}
+	for _, query := range queries {
+		if query.ContinuationQueryID != continuation.ContinuationQueryID {
+			return fmt.Errorf("recovery query %q does not bind frozen continuation query %q", query.QueryID, continuation.ContinuationQueryID)
+		}
+	}
+	return nil
+}
+
 func validateSetQuery(query RecoveryQuery, seed objective.StateSeed, set HistoricalRecoverySet, expectedCheckpoint string) error {
 	if strings.TrimSpace(query.QueryID) == "" || query.SeedID != seed.SeedID || query.Boundary != BoundaryFork || query.CheckpointID != expectedCheckpoint {
 		return fmt.Errorf("query lacks the shared seed/fork/checkpoint identity")
@@ -245,8 +342,22 @@ func validateSetQuery(query RecoveryQuery, seed objective.StateSeed, set Histori
 }
 
 func NewForkPair(seed objective.StateSeed, plan RecordedPlan) (*RecoveryPair, error) {
+	return NewForkPairWithContinuation(seed, plan, nil)
+}
+
+// NewForkPairWithContinuation freezes one optional continuation input across
+// both compatibility pair controls.
+func NewForkPairWithContinuation(seed objective.StateSeed, plan RecordedPlan, continuation *ContinuationQuery) (*RecoveryPair, error) {
 	if err := plan.ValidateFor(seed); err != nil {
 		return nil, err
+	}
+	frozenContinuation, err := freezeContinuationQuery(continuation)
+	if err != nil {
+		return nil, err
+	}
+	continuationQueryID := ""
+	if frozenContinuation != nil {
+		continuationQueryID = frozenContinuation.ContinuationQueryID
 	}
 	pair := &RecoveryPair{
 		SchemaVersion:        SchemaVersion,
@@ -256,6 +367,7 @@ func NewForkPair(seed objective.StateSeed, plan RecordedPlan) (*RecoveryPair, er
 		Boundary:             BoundaryFork,
 		RecordedPlanID:       plan.RecordedPlanID,
 		PassiveObservationID: plan.PassiveObservationID,
+		ContinuationQuery:    frozenContinuation,
 		Before: RecoveryQuery{
 			QueryID:              "recovery-query:" + seed.SeedID + ":" + seed.BeforeCheckpointID,
 			SeedID:               seed.SeedID,
@@ -263,6 +375,7 @@ func NewForkPair(seed objective.StateSeed, plan RecordedPlan) (*RecoveryPair, er
 			CheckpointID:         seed.BeforeCheckpointID,
 			RecordedPlanID:       plan.RecordedPlanID,
 			PassiveObservationID: plan.PassiveObservationID,
+			ContinuationQueryID:  continuationQueryID,
 		},
 		After: RecoveryQuery{
 			QueryID:              "recovery-query:" + seed.SeedID + ":" + seed.AfterCheckpointID,
@@ -271,6 +384,7 @@ func NewForkPair(seed objective.StateSeed, plan RecordedPlan) (*RecoveryPair, er
 			CheckpointID:         seed.AfterCheckpointID,
 			RecordedPlanID:       plan.RecordedPlanID,
 			PassiveObservationID: plan.PassiveObservationID,
+			ContinuationQueryID:  continuationQueryID,
 		},
 	}
 	if err := pair.ValidateFor(seed); err != nil {
@@ -294,6 +408,9 @@ func (p RecoveryPair) ValidateFor(seed objective.StateSeed) error {
 	}
 	if p.RecordedPlanID != seed.RecordedPlanID || strings.TrimSpace(p.PassiveObservationID) == "" {
 		return fmt.Errorf("recovery pair %q does not preserve the recorded plan and passive observation", p.ComparisonPairID)
+	}
+	if err := validateContinuationBinding(p.ContinuationQuery, p.Before, p.After); err != nil {
+		return err
 	}
 	if err := validatePairQuery(p.Before, seed, p, seed.BeforeCheckpointID); err != nil {
 		return fmt.Errorf("before query: %w", err)

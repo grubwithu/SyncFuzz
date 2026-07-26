@@ -67,27 +67,56 @@ func (m PassiveProbeMetrics) Valid() bool {
 	return m.Mode.Valid() && m.ScannedProcesses >= 0 && m.ScannedFDs >= 0
 }
 
+// ContinuationEvidence records the deterministic evidence collected on both
+// sides of executing one frozen continuation query. The evidence vocabulary is
+// deliberately adapter-neutral: concrete adapters may record checkpoint
+// restore, tool lifecycle, or observation artifact references without making
+// them part of recovery's state classifier.
+type ContinuationEvidence struct {
+	ContinuationQueryID string   `json:"continuation_query_id"`
+	PreEvidence         []string `json:"pre_evidence"`
+	PostEvidence        []string `json:"post_evidence"`
+}
+
+func (e ContinuationEvidence) ValidateFor(query RecoveryQuery) error {
+	if query.ContinuationQueryID == "" {
+		return fmt.Errorf("continuation evidence is not allowed for recovery query %q without a continuation", query.QueryID)
+	}
+	if e.ContinuationQueryID != query.ContinuationQueryID || len(e.PreEvidence) == 0 || len(e.PostEvidence) == 0 {
+		return fmt.Errorf("continuation evidence does not bind complete pre/post evidence to recovery query %q", query.QueryID)
+	}
+	for _, phase := range [][]string{e.PreEvidence, e.PostEvidence} {
+		for _, evidence := range phase {
+			if strings.TrimSpace(evidence) == "" {
+				return fmt.Errorf("continuation evidence for recovery query %q has an empty entry", query.QueryID)
+			}
+		}
+	}
+	return nil
+}
+
 // RecoveryObservation is the fixed passive observation for one member of a
 // fork pair. An adapter must bind it to the exact query and recorded plan that
 // SyncFuzz supplied; an observation cannot be silently reused for a different
 // checkpoint, plan, or passive observation.
 type RecoveryObservation struct {
-	SchemaVersion         string               `json:"schema_version"`
-	QueryID               string               `json:"query_id"`
-	SeedID                string               `json:"seed_id"`
-	Boundary              Boundary             `json:"boundary"`
-	CheckpointID          string               `json:"checkpoint_id"`
-	RecordedPlanID        string               `json:"recorded_plan_id"`
-	PassiveObservationID  string               `json:"passive_observation_id"`
-	MaterializationHeadID string               `json:"materialization_head_id,omitempty"`
-	RetentionPolicy       RetentionPolicy      `json:"retention_policy,omitempty"`
-	RuntimeInstanceID     string               `json:"runtime_instance_id"`
-	AgentState            StatePresence        `json:"agent_state"`
-	OSState               StatePresence        `json:"os_state"`
-	OSStateOrigin         StateOrigin          `json:"os_state_origin"`
-	EffectMultiplicity    EffectMultiplicity   `json:"effect_multiplicity"`
-	PassiveProbe          *PassiveProbeMetrics `json:"passive_probe,omitempty"`
-	Evidence              []string             `json:"evidence"`
+	SchemaVersion         string                `json:"schema_version"`
+	QueryID               string                `json:"query_id"`
+	SeedID                string                `json:"seed_id"`
+	Boundary              Boundary              `json:"boundary"`
+	CheckpointID          string                `json:"checkpoint_id"`
+	RecordedPlanID        string                `json:"recorded_plan_id"`
+	PassiveObservationID  string                `json:"passive_observation_id"`
+	MaterializationHeadID string                `json:"materialization_head_id,omitempty"`
+	RetentionPolicy       RetentionPolicy       `json:"retention_policy,omitempty"`
+	RuntimeInstanceID     string                `json:"runtime_instance_id"`
+	AgentState            StatePresence         `json:"agent_state"`
+	OSState               StatePresence         `json:"os_state"`
+	OSStateOrigin         StateOrigin           `json:"os_state_origin"`
+	EffectMultiplicity    EffectMultiplicity    `json:"effect_multiplicity"`
+	PassiveProbe          *PassiveProbeMetrics  `json:"passive_probe,omitempty"`
+	ContinuationEvidence  *ContinuationEvidence `json:"continuation_evidence,omitempty"`
+	Evidence              []string              `json:"evidence"`
 }
 
 func (o RecoveryObservation) ValidateFor(query RecoveryQuery, plan RecordedPlan) error {
@@ -103,6 +132,18 @@ func (o RecoveryObservation) ValidateFor(query RecoveryQuery, plan RecordedPlan)
 	if o.PassiveProbe != nil && !o.PassiveProbe.Valid() {
 		return fmt.Errorf("recovery observation %q has invalid passive probe metrics", o.QueryID)
 	}
+	if query.ContinuationQueryID == "" {
+		if o.ContinuationEvidence != nil {
+			return fmt.Errorf("recovery observation %q reports continuation evidence for a query without continuation", o.QueryID)
+		}
+	} else {
+		if o.ContinuationEvidence == nil {
+			return fmt.Errorf("recovery observation %q requires pre/post continuation evidence", o.QueryID)
+		}
+		if err := o.ContinuationEvidence.ValidateFor(query); err != nil {
+			return err
+		}
+	}
 	if len(o.Evidence) == 0 {
 		return fmt.Errorf("recovery observation %q requires deterministic evidence", o.QueryID)
 	}
@@ -114,8 +155,9 @@ func (o RecoveryObservation) ValidateFor(query RecoveryQuery, plan RecordedPlan)
 // for every invocation; it must not implement fork by reusing controller
 // observation checkpoints from the original profiling container.
 type ForkExecutionRequest struct {
-	Query RecoveryQuery `json:"query"`
-	Plan  RecordedPlan  `json:"plan"`
+	Query             RecoveryQuery      `json:"query"`
+	Plan              RecordedPlan       `json:"plan"`
+	ContinuationQuery *ContinuationQuery `json:"continuation_query,omitempty"`
 }
 
 // ForkExecutor is implemented only by adapters that expose an actual durable
@@ -194,14 +236,15 @@ type PairClassification struct {
 // It records no generated scenario, mutation focus, prompt variant, or query
 // genealogy.
 type ForkPairExecution struct {
-	SchemaVersion    string              `json:"schema_version"`
-	ComparisonPairID string              `json:"comparison_pair_id"`
-	SeedID           string              `json:"seed_id"`
-	FrontierID       string              `json:"frontier_id"`
-	RecordedPlanID   string              `json:"recorded_plan_id"`
-	Before           RecoveryObservation `json:"before"`
-	After            RecoveryObservation `json:"after"`
-	Classification   PairClassification  `json:"classification"`
+	SchemaVersion     string              `json:"schema_version"`
+	ComparisonPairID  string              `json:"comparison_pair_id"`
+	SeedID            string              `json:"seed_id"`
+	FrontierID        string              `json:"frontier_id"`
+	RecordedPlanID    string              `json:"recorded_plan_id"`
+	ContinuationQuery *ContinuationQuery  `json:"continuation_query,omitempty"`
+	Before            RecoveryObservation `json:"before"`
+	After             RecoveryObservation `json:"after"`
+	Classification    PairClassification  `json:"classification"`
 }
 
 // RecoverySetClassification retains the head no-rollback control alongside
@@ -226,6 +269,7 @@ type ForkRecoverySetExecution struct {
 	RecordedPlanID      string                    `json:"recorded_plan_id"`
 	MaterializationHead MaterializationHead       `json:"materialization_head"`
 	RetentionPolicy     RetentionPolicy           `json:"retention_policy"`
+	ContinuationQuery   *ContinuationQuery        `json:"continuation_query,omitempty"`
 	Before              RecoveryObservation       `json:"before"`
 	After               RecoveryObservation       `json:"after"`
 	Head                RecoveryObservation       `json:"head"`
@@ -252,11 +296,15 @@ func ExecuteForkPair(ctx context.Context, seed objective.StateSeed, pair Recover
 	if err := validatePairAgainstPlan(pair, plan); err != nil {
 		return nil, err
 	}
-	before, err := executeForkQuery(ctx, pair.Before, plan, executor)
+	frozenContinuation, err := freezeContinuationQuery(pair.ContinuationQuery)
+	if err != nil {
+		return nil, err
+	}
+	before, err := executeForkQuery(ctx, pair.Before, plan, frozenContinuation, executor)
 	if err != nil {
 		return nil, fmt.Errorf("execute before query: %w", err)
 	}
-	after, err := executeForkQuery(ctx, pair.After, plan, executor)
+	after, err := executeForkQuery(ctx, pair.After, plan, frozenContinuation, executor)
 	if err != nil {
 		return nil, fmt.Errorf("execute after query: %w", err)
 	}
@@ -265,14 +313,15 @@ func ExecuteForkPair(ctx context.Context, seed objective.StateSeed, pair Recover
 	}
 	classification := ClassifyForkPair(before, after)
 	return &ForkPairExecution{
-		SchemaVersion:    ExecutionSchemaVersion,
-		ComparisonPairID: pair.ComparisonPairID,
-		SeedID:           pair.SeedID,
-		FrontierID:       pair.FrontierID,
-		RecordedPlanID:   pair.RecordedPlanID,
-		Before:           before,
-		After:            after,
-		Classification:   classification,
+		SchemaVersion:     ExecutionSchemaVersion,
+		ComparisonPairID:  pair.ComparisonPairID,
+		SeedID:            pair.SeedID,
+		FrontierID:        pair.FrontierID,
+		RecordedPlanID:    pair.RecordedPlanID,
+		ContinuationQuery: frozenContinuation,
+		Before:            before,
+		After:             after,
+		Classification:    classification,
 	}, nil
 }
 
@@ -295,15 +344,19 @@ func ExecuteForkRecoverySet(ctx context.Context, seed objective.StateSeed, set H
 	if err := validateRecoverySetAgainstPlan(set, plan); err != nil {
 		return nil, err
 	}
-	before, err := executeForkQuery(ctx, set.Before, plan, executor)
+	frozenContinuation, err := freezeContinuationQuery(set.ContinuationQuery)
+	if err != nil {
+		return nil, err
+	}
+	before, err := executeForkQuery(ctx, set.Before, plan, frozenContinuation, executor)
 	if err != nil {
 		return nil, fmt.Errorf("execute before query: %w", err)
 	}
-	after, err := executeForkQuery(ctx, set.After, plan, executor)
+	after, err := executeForkQuery(ctx, set.After, plan, frozenContinuation, executor)
 	if err != nil {
 		return nil, fmt.Errorf("execute after query: %w", err)
 	}
-	head, err := executeForkQuery(ctx, set.Head, plan, executor)
+	head, err := executeForkQuery(ctx, set.Head, plan, frozenContinuation, executor)
 	if err != nil {
 		return nil, fmt.Errorf("execute head query: %w", err)
 	}
@@ -319,6 +372,7 @@ func ExecuteForkRecoverySet(ctx context.Context, seed objective.StateSeed, set H
 		RecordedPlanID:      set.RecordedPlanID,
 		MaterializationHead: set.MaterializationHead,
 		RetentionPolicy:     set.RetentionPolicy,
+		ContinuationQuery:   frozenContinuation,
 		Before:              before,
 		After:               after,
 		Head:                head,
@@ -363,8 +417,18 @@ func validateRecoverySetAgainstPlan(set HistoricalRecoverySet, plan RecordedPlan
 	return nil
 }
 
-func executeForkQuery(ctx context.Context, query RecoveryQuery, plan RecordedPlan, executor ForkExecutor) (RecoveryObservation, error) {
-	observation, err := executor.ExecuteFork(ctx, ForkExecutionRequest{Query: query, Plan: plan})
+func executeForkQuery(ctx context.Context, query RecoveryQuery, plan RecordedPlan, continuation *ContinuationQuery, executor ForkExecutor) (RecoveryObservation, error) {
+	frozenContinuation, err := freezeContinuationQuery(continuation)
+	if err != nil {
+		return RecoveryObservation{}, err
+	}
+	if query.ContinuationQueryID == "" && frozenContinuation != nil {
+		return RecoveryObservation{}, fmt.Errorf("recovery query %q does not bind supplied continuation", query.QueryID)
+	}
+	if query.ContinuationQueryID != "" && (frozenContinuation == nil || frozenContinuation.ContinuationQueryID != query.ContinuationQueryID) {
+		return RecoveryObservation{}, fmt.Errorf("recovery query %q does not bind supplied frozen continuation", query.QueryID)
+	}
+	observation, err := executor.ExecuteFork(ctx, ForkExecutionRequest{Query: query, Plan: plan, ContinuationQuery: frozenContinuation})
 	if err != nil {
 		return RecoveryObservation{}, err
 	}
