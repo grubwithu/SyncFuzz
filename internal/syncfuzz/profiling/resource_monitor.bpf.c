@@ -9,6 +9,7 @@
 
 typedef unsigned char __u8;
 typedef unsigned int __u32;
+typedef unsigned short __u16;
 typedef unsigned long long __u64;
 typedef long long __s64;
 typedef int __s32;
@@ -35,6 +36,7 @@ static long (*bpf_get_current_comm)(void *buf, __u32 size_of_buf) = (void *)16;
 static __u64 (*bpf_get_current_pid_tgid)(void) = (void *)14;
 static __u64 (*bpf_get_current_cgroup_id)(void) = (void *)80;
 static long (*bpf_probe_read_user_str)(void *dst, __u32 size, const void *unsafe_ptr) = (void *)114;
+static long (*bpf_probe_read_user)(void *dst, __u32 size, const void *unsafe_ptr) = (void *)112;
 static void *(*bpf_ringbuf_reserve)(void *ringbuf, __u64 size, __u64 flags) = (void *)131;
 static void (*bpf_ringbuf_submit)(void *data, __u64 flags) = (void *)132;
 
@@ -202,6 +204,18 @@ static __always_inline void capture_path(__u32 kind, __u64 arg0, __u64 arg1, __u
 	}
 	if (kind == SYNCFUZZ_CHDIR || kind == SYNCFUZZ_SETXATTR) {
 		bpf_probe_read_user_str(destination, SYNCFUZZ_PATH_LEN, (const void *)arg0);
+		return;
+	}
+	if (kind == SYNCFUZZ_BIND || kind == SYNCFUZZ_CONNECT) {
+		/* syscall(fd, struct sockaddr_un *addr, addrlen): sun_path starts
+		 * after the two-byte sa_family_t. Only filesystem AF_UNIX names are
+		 * recorded; abstract names have an initial NUL and intentionally remain
+		 * empty because they cannot be bound to a workspace pathname contract. */
+		__u16 family = 0;
+		bpf_probe_read_user(&family, sizeof(family), (const void *)arg1);
+		if (family == 1) { /* AF_UNIX */
+			bpf_probe_read_user_str(destination, SYNCFUZZ_PATH_LEN, (const void *)(arg1 + sizeof(family)));
+		}
 	}
 }
 

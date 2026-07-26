@@ -1,10 +1,34 @@
-# SyncFuzz v2 研究计划：状态目标驱动的 Historical Checkpoint Recovery Fuzzing
+# SyncFuzz 研究计划：环境结构化的 Historical Recovery-Hazard Fuzzing
 
-状态：**当前路线**（2026-07-24）。本文取代旧路线中以 `primitive substitution`、`activation substitution`、`phase shift`、`cross-seed crossover` 为核心的变异计划。此前的设计与实验记录保留在历史分支和归档文档中，但不再作为新的实现或论文主张的基础。
+状态：**已冻结的 V3 原型**（2026-07-26）。V2 已完成的 eBPF/probe evidence、StateSeed、native checkpoint binding、retained-runtime recovery 与静态 relation 可作为后续工作的基础设施，但当前 V3 LangGraph Unix-socket 实现不构成有效的方法闭环。冻结原因、可复用边界和新项目的起点见 [LEGACY_V3_PROTOTYPE_STATUS.md](LEGACY_V3_PROTOTYPE_STATUS.md)。`primitive substitution`、`activation substitution`、`phase shift`、`cross-seed crossover` 等旧 scenario mutation 仍只保留在历史分支和归档中。
 
-本计划由 [ChatGPT-0723.md](ChatGPT-0723.md) 收束而来；后者是讨论记录，本文是可执行的规范。
+本文的 V3 设计规范是 [RECOVERY_HAZARD_FUZZING.md](RECOVERY_HAZARD_FUZZING.md)。下文第 1 节及其后的 V2 规范、实现记录和实验审计仍然有效，但仅作为该路线的底座；若两者有冲突，以本节 0 和 V3 设计规范为准。
 
-## 1. 核心问题与新方法
+历史 LangGraph artifact/Make target 中的 “V3” 是 retained-runtime recovery-set contract
+的实现标签，并不表示 `EnvironmentProgram` fuzzer 已经实现；本文会以具体 artifact 或
+“V2 recovery substrate”描述现状，避免用版本号混淆实现与研究路线。
+
+## 0. 当前 V3 路线
+
+当前主输入不再只是一次自然语言 task，而是：
+
+```text
+X = <Workload, EnvironmentProgram E, RecoveryPlan Σ>
+```
+
+其中 `Workload=<P_init,P_cont>` 是低频、冻结的正常任务语料；`E` 是高频变异的、可 materialize 的 typed resource-binding graph；`Σ=<H,C,ρ,K,μ,Obs>` 是高频选择的历史恢复计划。`W` 在 V3 中专指 profile 中的 write/bind effect，`Obs` 表示 observation contract，避免与旧 artifact 中的 `W` 混用。
+
+V3 要发现的不是静态 relation 本身，而是：
+
+```text
+W -> R(C,H) -> U'
+```
+
+即 materialization 中形成/改变资源绑定的 effect，经 historical recovery 后被 resumed Agent 的正常 resolve/use 实际触达。现有 before/after/head set 是单一候选的归因骨架；在同一 control bundle 内只改变 checkpoint coordinate，但 Fuzzer 全局会变异 `E` 和 `Σ`。`after/head` 是诊断控制，不要求 Agent 采取固定的清理或修复行为。
+
+第一阶段只实现 Unix socket resource family：EnvironmentProgram、有限 binding/alias/holder-lifetime mutation、recovery-time `connect`/listener identity/use evidence，以及五控制 report 的 artifact-level join。现有的 static `residual`、`aligned` 等 relation 不会被追写成 `REBOUND` finding 或 vulnerability；只有真实 target 的 clean/tainted control bundle 完成后，才可产生 evidence-level `rebound` classification，且它仍不是漏洞 verdict。
+
+## 1. V2 基础：核心问题与历史方法
 
 SyncFuzz 要回答的问题是：
 
@@ -19,7 +43,7 @@ recover a historical C while retain: <A_C, O_H>
 
 只有 `C ≺ H` 且 `ΔO(C,H) ≠ ∅` 时，logical rollback 才可能形成新的 A/O mixed state。产品 API 只是 adapter 用于实现该 cut 的 mechanism；若一个 mechanism 会重放 effect、销毁 relevant runtime 或复制 OS namespace，它具有不同的 OS retention semantics，不能与 retain-state recovery 混为同一个实验条件。
 
-新的闭环为：
+V2 已实现的基础闭环为：
 
 ```text
 State Objective
@@ -32,24 +56,26 @@ State Objective
   -> differential A/O classification
 ```
 
-这包含两个相互独立、按顺序运行的搜索器：
+这包含两个相互独立、按顺序运行的 provision/recovery 循环；它们现在为 V3 提供 StateSeed 与合法 recovery coordinate：
 
 1. **State Fuzzer**：为未覆盖的 OS 状态目标合成自然任务，并只保留经真实执行验证的状态形成实例。
 2. **Historical Checkpoint Recovery Fuzzer**：围绕已观测的持久 OS 状态变化，选择 historical cut，并在固定 OS retention policy 下测试 frontier 前、frontier 后与 logical head。
 
 当前 LangGraph executor 使用产品的 `fork` 路径实现 retain-state historical recovery；这是**当前 adapter mechanism**，不是 discovery 搜索维度。以后接入 replay / rewind 时，先验证它们是否实际构造相同的 `<A_C,O_H>`；不相同则把其 OS retention / re-execution 语义作为独立受控条件，而不是把 API 名字并入 fuzz 笛卡尔积。
 
-## 2. 不再采用的设计
+## 2. V2 mutation 边界与 V3 例外
 
-以下机制不再属于发现 Query 的 Mutator：
+以下机制仍不属于发现 Query 的 Mutator：
 
 - 将 PATH、环境变量、shell function、FD、Unix socket 等手写场景互相替换；
-- 只改变 topology、prompt profile 或 process mode 而把它记为新的 Query；
+- 只改变 prompt profile、措辞或 process mode 而把它记为新的 Query；
 - 用 `trusted-action` 将已观测 residue 接到 SyncFuzz 预写的后果；
 - 以 `cross-seed crossover` 拼接已知 plant 与 activation；
 - 用 `parent_query_id` 描述上述操作形成的“谱系”。
 
 它们分别是独立状态样例、实验控制、prompt presentation 或后发现影响验证；都不能说明系统产生了新的恢复状态。历史任务可以保留为 regression fixture，但不计入新路线的 StateSeed corpus 或 coverage claim。
+
+V3 的 `EnvironmentProgram` topology mutation 是明确例外：它必须是 typed、可执行、带 mutation lineage 的资源绑定图，且只有经真实 materialization/profile 证明形成 `W` 与 persistent frontier 后才计入 coverage。它不是旧的手写 scenario substitution，也不通过 prompt 文本制造预期结论。
 
 ## 3. 术语与不可变关系
 
@@ -64,19 +90,22 @@ State Objective
 | `MaterializationHead` | initial execution 完成后、relevant OS effect 仍被确认存在的 logical head `H` | 否；由 terminal controller checkpoint 的 probe evidence 冻结进 StateSeed / recovery set |
 | `StateSeed` | 满足 objective、跨 frontier 存活，并可用于在 head OS state 上做历史恢复的 `ProfileRun` | 否，自动晋升 |
 | `HistoricalRecoverySet` | 同一 seed、head、retention policy、plan、probe 下的 before / after / head controls | 否；已实现，`RecoveryPair` 仅为历史兼容子集 |
-| `RecoveryQuery` | `<seed_id, materialization_head, historical_checkpoint, retention_policy, passive_observation, mechanism>` | 否 |
+| `RecoveryQuery` | `<seed_id, materialization_head, historical_checkpoint, retention_policy, Obs, mechanism>`；是 V3 `Σ` 的现有单步执行表示 | 否 |
+| `Workload` | 固定的 normal task pair `<P_init,P_cont>`，供多次 `E/Σ` 变异复用 | family 是；实例经 admission 后冻结 |
+| `EnvironmentProgram` | 计划构造的 typed resource-binding graph；不同于实际 probe 的 observed graph | grammar 是；具体实例由 Fuzzer 变异 |
+| `RecoveryHazardTuple` | `W -> R(C,H) -> U'` 的 write/bind、恢复和 resolve/use evidence | 否 |
 
 `StateObjective` 不是 prompt；`SynthesisCandidate` 不是 Query；`StateSeed` 不是人工 testcase；`RecoveryPair` 不是 Query genealogy。
 
 对于一个 frontier `(C_i, C_{i+1}]` 和 materialization head `H`，目标实验结构是：
 
 ```text
-Q_before = <seed, H, C_i,     retain relevant OS state, W, mechanism>
-Q_after  = <seed, H, C_{i+1}, retain relevant OS state, W, mechanism>
-Q_head   = <seed, H, H,       retain relevant OS state, W, mechanism>
+Q_before = <seed, H, C_i,     retain relevant OS state, Obs, mechanism>
+Q_after  = <seed, H, C_{i+1}, retain relevant OS state, Obs, mechanism>
+Q_head   = <seed, H, H,       retain relevant OS state, Obs, mechanism>
 ```
 
-三者的 task、recorded execution plan、topology、retention policy、oracle 和 probe schema 必须相同；**historical checkpoint cut 是唯一 discovery 变量**。`Q_before` 是核心发现 query，`Q_after` 是 frontier-local control，`Q_head` 是 no-logical-rollback control。`HistoricalRecoverySet` 已将 head / retention / 三个 query 写成一等 artifact；`RecoveryPair` 仅保留给旧 fixture 兼容。
+三者的 task、recorded execution plan、environment realization、retention policy、observation schema 和 adapter mechanism 必须相同；**在同一 recovery control bundle 内，historical checkpoint cut 是唯一变化项**。`Q_before` 是 treatment，`Q_after` 是 frontier-local control，`Q_head` 是 no-logical-rollback control。不同 Fuzz case 则可以变异 `E` 与 `Σ`。`HistoricalRecoverySet` 已将 head / retention / 三个 query 写成一等 artifact；`RecoveryPair` 仅保留给旧 fixture 兼容。
 
 ## 4. State Objective 与状态面
 
@@ -102,7 +131,7 @@ relation: fixed-path-served-by-descendant
 persistence: across-checkpoint
 ```
 
-人工维护的是 effect grammar、资源依赖和合法组合，而不是具体路径、daemon 故事或 prompt。初版 atom 覆盖 `Process`、`Namespace`、`Handle/Capability`、`IPC`；`Execution Context` 通过 shell/context probe 加入，`Metadata/Security` 作为第二轮对象。没有一个 family 的实际、可验证 objective 以前，不宣称该 family 已覆盖。
+人工维护的是 effect grammar、资源依赖和合法组合，而不是具体路径、daemon 故事或 prompt。初版 atom 覆盖 `Process`、`Namespace`、`Handle/Capability`、`IPC`；`Execution Context` 通过 shell/context probe 加入，`Metadata/Security` 作为第二轮对象。没有一个 family 的实际、可验证 objective 以前，不宣称该 family 已覆盖。在 V3 中，`StateObjective` 保留为 effect/persistence admission constraint 与 coverage label；它不再单独决定 `E` 的绑定语义或完整 fuzz case。
 
 ## 5. Hybrid Observation 与 Frontier
 
@@ -113,6 +142,13 @@ eBPF / raw collector  -> 哪个区间发生了内核可见 effect
 state probe            -> 哪些资源在 checkpoint / recovery 时仍然存在
 differential oracle    -> Agent logical state 与 OS state 的关系类别
 ```
+
+这三项是已实现 V2 底座的职责。在 V3 中，它们分别成为 `W -> R(C,H) -> U'`
+证据链的前两段与静态下层：profile-time eBPF 负责定位 write/bind effect `W`；
+state probe 负责确认该 effect 的资源闭包、frontier 和 head-time persistence；恢复期新增的
+typed resolve/use observer 才负责证明 `U'`。因此当前 `residual` / `aligned` relation
+仍有价值，但只能说明 A/O relation，不能代替恢复后实际的 resource dependence 或
+hazard verdict。
 
 每个 profiling run 使用固定的宽发现面；不能按当前 seed 动态缩窄 hook。第一版 collector 至少记录 process lifecycle、pathname mutation、FD/capability、Unix IPC 事件，并为每项记录 monotonic timestamp、PID/TID、run cgroup（或等价 isolation identity）、process lineage 与 resource identity。
 
@@ -133,7 +169,7 @@ R(C) = persistent resources observable at C
 
 同一 historical recovery query 的 initial materialization 与 fresh recovery process 留在同一个 container，以保留要判断的 `O_H`；同一 recovery set 的 before / after / head query 必须使用彼此独立的新 container。这样每条 query 测试的是自己的 `<A_C^(q), O_H^(q)>`，而不是跨容器传递一个物理 OS instance；实验必须另行检查这些 freshly materialized head 在声明的状态关系上可比。`local` 仅用于单元测试、fixture 和离线分析，不作为正式 profiling/coverage 结果的默认环境。初始 sandbox 保持非 root、无网络、`cap-drop=ALL`、`no-new-privileges`、CPU/内存/PID 限制；外部服务测试需要显式、单独的网络策略。
 
-### 5.2 Frontier 选择与覆盖
+### 5.3 Frontier 选择与覆盖
 
 frontier 分数仅用于调度，依据 persistence、capability creation、namespace mutation、lifetime escape 和 novelty。选择采用按 state family 分层的预算，而不是全局 Top-K，避免 Unix socket 等高频对象吞没其他状态面。
 
@@ -146,9 +182,16 @@ frontier 分数仅用于调度，依据 persistence、capability creation、name
 
 并周期性执行 full-vs-pruned probe 对照。pruned probe 的 verdict、resource identity、attribution 或 reconstruction 分类与 full probe 不一致时，不能将其作为可靠优化。
 
-## 6. 两个搜索循环
+该元组是 V2 relation coverage。V3 另行记录 binding、recovery-plan、dependency 与
+realized-hazard coverage：至少包含 namespace、resource type、indirection depth、holder
+lifetime、frontier type、rollback depth、`W` class、`U'` class 和 semantic relation。
+只有 `<Workload,E,Σ>` 通过 materialization / persistence / identity gate，且新增上述
+coverage 时才进入 V3 corpus；小型 fixture 的有限组合只用于校准，不可报告为 fuzzing
+coverage。
 
-### State Fuzzer
+## 6. V2 基础循环与 V3 搜索循环
+
+### V2 State Fuzzer（已实现底座）
 
 1. coverage scheduler 选择未覆盖或低覆盖的 `StateObjective`；
 2. 通过通用 generator interface 合成一个正常的软件工程任务；LLM 只是可替换实现，不是 oracle；
@@ -158,7 +201,7 @@ frontier 分数仅用于调度，依据 persistence、capability creation、name
 
 当前手写 LangGraph 任务仅用于校准 collector、adapter 和 oracle；它们不作为“靠手写 seed 覆盖状态面”的证据。自然性以人工抽样审查，不能由模型自述代替。
 
-### Historical Checkpoint Recovery Fuzzer
+### V2 Historical Checkpoint Recovery Fuzzer（已实现底座）
 
 1. 从已晋升的 seed 提取并分层选择 frontier；
 2. 将 frontier 前、frontier 后和 logical head 组成一个 historical recovery set；
@@ -167,6 +210,28 @@ frontier 分数仅用于调度，依据 persistence、capability creation、name
 5. 将 before/after 的 boundary-localization evidence 与 head negative control 一并保留。
 
 `trusted action` 可以在确认 contract violation 后由人工做独立 case study，但它不进入上述 scheduler、coverage 或 Query 生成逻辑。
+
+### V3 Environment-Structured Recovery-Hazard Fuzzer（当前开发主线）
+
+1. 从已通过稳定性 gate 的低频 `Workload` corpus 选择一个正常任务对；`StateObjective`
+   降级为 effect/persistence admission constraint 与 coverage label，不再单独定义完整
+   fuzz input。
+2. 从 typed `EnvironmentProgram E` grammar 变异 binding、alias/indirection、holder
+   lifetime 或 rebind，并在隔离运行中真实 materialize；LLM 若参与，只能扩展低频
+   workload corpus，不能决定高频的 `E` 或 `Σ` mutation。
+3. 用现有 profile / probe 证明 `W`、persistent frontier 和可比较的 head `H`；未形成
+   实际 resource closure 的 `E` 不进入 recovery 或 corpus。
+4. 从 `RecoveryPlan Σ` 选择合法 historical cut 与归因 control bundle，并固定
+   `ρ`、adapter mechanism、workload continuation 和 observation contract。当前仅有
+   single-step、fixed-head 的 before/after/head skeleton；head-shift 和 repeated recovery
+   均尚未实现。
+5. 在恢复后的 Agent 正常工作中采集 typed `resolve -> use` 证据，建立 `U'` 对
+   run-local object 和 semantic role 的依赖；将静态 relation、control bundle 和
+   `W -> R(C,H) -> U'` 分层输出，最后才由独立 contract layer 解释其意义。
+
+这里的 topology mutation 是显式、可执行的 `E` graph mutation，而不是旧 prompt/scenario
+substitution。`after` / `head` controls 不要求 Agent 清理、终止或修复某个对象；它们只用于
+判断 observed dependence 是否确实由 historical recovery cut 引起。
 
 ## 7. 实施里程碑
 
@@ -180,6 +245,10 @@ frontier 分数仅用于调度，依据 persistence、capability creation、name
 | V2.4 Execution-validated synthesis | objective grammar、coverage scheduler、generator command contract、candidate repair/retention | 新 StateSeed 只能由实际 trace 验证后进入 corpus；手写 fixture 不计覆盖 |
 | V2.5 Breadth and fidelity | 分层 frontier selection、coverage ledger、full-vs-pruned calibration | 可报告各 family 的 objective、effect、frontier 与 boundary coverage，且明确支持范围 |
 | V2.6 扩展 | 其他 recovery mechanism、第二批 family、contract-profile automation | 仅当 adapter 证明同一 retention/re-execution 语义时，才与 historical-cut baseline 合并比较 |
+| V3.0a EnvironmentProgram fixture calibration（已完成） | Unix-socket `E` IR、deterministic local materializer、mutation lineage、run-local/semantic identity、`RecoveryUsePlan` 与 five-control classifier | 真实 local bind/rebind/resolve/connect/I/O 可校准 IR 和判定组合；artifact 严格为 `fixture-only` / `realized-calibration`，不进入 StateSeed、target finding 或 coverage |
+| V3.0b Target materialization（进行中） | controller-owned `E` artifact、first-native-checkpoint 后 target child materializer、materialization provenance；target-profile cgroup-scoped `W` evidence 与 head-persistence gate | 已可将 child-holder Unix-socket `E` 传入 LangGraph profile，并在首个 durable checkpoint 后 target cgroup 内 bind/rebind；controller 验证 source native checkpoint、effect window、role/PID/FD/socket ID 及该 window 内 active socket 的 cgroup-scoped `bind`/`listen`。prepare-fork 会把 program endpoint、source checkpoint、window 和 active socket ID/PID/FD 与 native frontier binding、retained socket/head probe 一并锁入 plan。它尚未成为扩展的 StateSeed 或 coverage record |
+| V3.1 Recovery-time dependency evidence（进行中） | per-recovery-cgroup gated eBPF `connect(endpoint)` trace、retained active listener role-tagged completed-exchange record、target-side run-local/semantic identity adapter、native control bundle 与 `RecoveryHazardReport` | 已对带 `E` continuation 的 recovery 以独立 cgroup 采集并要求 `connect(/workspace/<endpoint>)`，再以无 payload active-role observer record 交叉确认 bounded request digest、response-sent 与 fixed acknowledgement。该 contract 已有 unit/artifact coverage，尚待真实 target live validation；before/after/head + clean controls 尚未写成 target `RecoveryHazardReport`，因此不能报告 realized target hazard |
+| V3.2 Coverage-guided search | `E/Σ` scheduler、binding/recovery/dependency/hazard coverage ledger、clean counterfactual controls | 只保留稳定且带来新 coverage 的 `<Workload,E,Σ>`；可分别报告 calibration、relation 与 realized-hazard 结果 |
 
 V2.1 先使用离线 trace fixture，是为了把 Normalizer、effect map 和 pairing 语义与 eBPF 部署权限隔离；它不是用手写 seed 替代自动生成。`syncfuzz profile analyze` 消费 checkpoint catalog、raw-event JSONL 与 checkpoint state summaries，写出 `normalized-effects.json` 和 `checkpoint-effect-map.json`。V2.2 通过后，真实 collector 是所有 coverage claim 的必要条件。
 
@@ -200,9 +269,12 @@ V2.2 的 resource syscall slice 已完成同一 calibration path 的 live valida
 - `CalibrationFixture`：可重复的 adapter/collector/oracle 回归输入；
 - `SynthesisScaffold`：向生成器提供的正常项目环境与任务类别。
 
-新建模块按职责分为 `objective`、`profiling`、`observation/effect`、`frontier`、`recovery`、`coverage` 与 `synthesis`；避免把它们重新塞进 target matrix 或 Scenario mutation 文件。
+V3 将在这些底座之上新增 `environment`（`E` IR/materializer/mutation lineage）、
+`recovery-use`（typed resolve/use evidence）和 `hazard`（report/coverage/scheduler）职责；
+`ObservedResourceGraph` 是 profile 的实际观测结果，不能与计划执行的 `EnvironmentProgram`
+混称。避免把它们重新塞进 target matrix 或 Scenario mutation 文件。
 
-V2.1b 的独立 IR 已落在 `internal/syncfuzz/objective`、`recovery` 和 `coverage`：`StateObjective` 只接受 bounded effect atom、lifetime、resource relation 与 persistence；`StateSeed` 只能由每个 atom 均有 evidence link 的 persistent frontier 自动晋升，且 linked resources 必须在 terminal materialization-head checkpoint 仍被 probe 确认；`RecoveryPair` 固定为同一 seed、同一 recorded plan artifact、同一 passive observation 的 fork before/after 兼容子集。新的 `HistoricalRecoverySet` 将显式 `<H,C,ρ,μ,W>` 记录为 `materialization_head`、`retain-relevant-os-state` 和 `Q_before/Q_after/Q_head`；所有 query 只能改变 checkpoint coordinate。coverage 的目标维度是 `<family, operation, lifetime, resource_relation, boundary, checkpoint_relation, relation_signature>`，绝不读取 legacy Scenario mutation、prompt variant 或 Query genealogy。当前 ledger 仍兼容旧 aggregate `outcome`；relation-novelty scheduler 尚未接线，不能把 schema 目标误写成已有 coverage 指标。每个 `ProfileRun` 必须显式标为 `synthesis-candidate` 或 `calibration-fixture`：只有前者可晋升为 `StateSeed`，后者即使是成功的真实 eBPF run 也只能校准 collector，绝不计入 coverage。`profile promote-seed` 可离线读取带 provenance 的 ProfileRun，也可导入一次完成的 target profiling artifact；导入时必须声明 provenance，`synthesis-candidate` 由 V2.4 scheduler 产生，不能为手写 smoke 标记。`profile recovery-pair` 与 `profile recovery-set` 均只能复用 seed 锁定的 recorded plan artifact。
+V2.1b 的独立 IR 已落在 `internal/syncfuzz/objective`、`recovery` 和 `coverage`：`StateObjective` 只接受 bounded effect atom、lifetime、resource relation 与 persistence；`StateSeed` 只能由每个 atom 均有 evidence link 的 persistent frontier 自动晋升，且 linked resources 必须在 terminal materialization-head checkpoint 仍被 probe 确认；`RecoveryPair` 固定为同一 seed、同一 recorded plan artifact、同一 passive observation 的 fork before/after 兼容子集。新的 `HistoricalRecoverySet` 将显式 `<H,C,ρ,K,μ,Obs>` 记录为 `materialization_head`、`retain-relevant-os-state` 和 `Q_before/Q_after/Q_head`；在一个既有 control bundle 内，所有 query 只能改变 checkpoint coordinate。coverage 的目标维度是 `<family, operation, lifetime, resource_relation, boundary, checkpoint_relation, relation_signature>`，绝不读取 legacy Scenario mutation、prompt variant 或 Query genealogy。当前 ledger 仍兼容旧 aggregate `outcome`；relation-novelty scheduler 尚未接线，不能把 schema 目标误写成已有 coverage 指标。每个 `ProfileRun` 必须显式标为 `synthesis-candidate` 或 `calibration-fixture`：只有前者可晋升为 `StateSeed`，后者即使是成功的真实 eBPF run 也只能校准 collector，绝不计入 coverage。`profile promote-seed` 可离线读取带 provenance 的 ProfileRun，也可导入一次完成的 target profiling artifact；导入时必须声明 provenance，`synthesis-candidate` 由 V2.4 scheduler 产生，不能为手写 smoke 标记。`profile recovery-pair` 与 `profile recovery-set` 均只能复用 seed 锁定的 recorded plan artifact。V3 现已在 `internal/syncfuzz/environment` 与 `internal/syncfuzz/hazard` 落下受限的 Unix-socket `E`、local `RecoveryUsePlan` 和 `RecoveryHazardReport` fixture calibration；它们只产生独立的 `calibration-fixture` evidence，不能成为 `StateSeed` 或 V2/V3 coverage。计划中的 target-side StateSeed 扩展才会绑定 `<Workload,E,H,frontier,ObservedResourceGraph>`，而不是仅复用 task-bound ProfileRun。
 
 V2.3 的 executor core 已落在 `internal/syncfuzz/recovery`：`ForkExecutorRegistry` 只为真正暴露 durable Agent checkpoint 的 adapter 注册 executor；每个 `RecoveryObservation` 必须绑定原始 query、recorded plan、passive observation、materialization head 与 retention policy，并报告独立 `runtime_instance_id`。`ExecuteForkRecoverySet` 强制 before/after/head 使用三个不同 runtime instance，且只向 executor 传递不同的 checkpoint coordinate；其 legacy deterministic classifier 输出 `consistent`、`residual`、`missing`、`duplicate`、`reconstruction` 或 `inconclusive`，并在 `Q_head` 不是 `consistent` 时拒绝把 before/after 的现象归因给 rollback。新的 `RecoveryRelationReport` 将 evidence completeness、logical effect phase、resource origin/multiplicity、relation class 与 `ContractEvaluation` 拆开：relation fuzzer 只消费完整 relation signature，contract 默认 `not-evaluated`，不把任何 relation 升格为漏洞。其 `seed_resource_ids` 只是 StateSeed 的 frontier scope，不是已完成的 effect/resource graph 归因。LangGraph 的 native manifest、frontier binding 和 fork plan 现保留 checkpoint-owned `durable_tool_lifecycle`（tool-call ID/name 与 tool-result ID）；缺失表示 legacy artifact，显式空值表示该 checkpoint 没有完整 durable tool identity。新 lifecycle event 以 `CLOCK_MONOTONIC` 标记 command span；仅当唯一 shell span 完整包围 linked eBPF effect window 且 after checkpoint durable 地记录同一 call/result 时，binding/plan 才附加 `tool_effect_provenance`。缺时间戳、歧义 span 或缺 after result 一律为 unknown。`recovery execute --out-relation` 与 `recovery classify-relation` 现将 immutable plan 中的结果复制为 `causal_effect_evidence`（`proven` 或 `unknown`），供后续 relation-novelty scheduler 消费；它不是 Oracle，也不改变当前 relation signature、classifier 或 contract status。因此当前 phase 仍只安全导出 `effect-not-committed` / `effect-committed`，不得使用 `PRE_CALL` / `CALL_DURABLE` / `RESULT_DURABLE`。resource graph 与 relation-novelty scheduler 仍是后续工作。`ExecuteForkPair` 仍保留给旧 fixture。`command` adapter 没有 Agent-native durable checkpoint，因此 registry 明确拒绝它；不能以 controller observation checkpoint 代替恢复 execution。
 
@@ -228,17 +300,37 @@ LangGraph 已成为第一条真实 candidate execution 路径：`synthesis execu
 
 所有 verdict 依赖可审计的 trace、probe 和 deterministic oracle。Recovery contract 自动生成仍是独立问题：它可为 oracle 提供期望语义，但不替代 effect validation 或 frontier selection。
 
+V3 的额外实证问题是：同一 Workload 下，`E/Σ` guidance 相对随机或枚举 baseline 是否
+更有效地产生稳定的 typed dependency / hazard coverage；clean environment 与
+retention-ablation controls 是否支持将 observed dependence 归因于 recovery，而不是模型
+随机性、普通 branch sharing 或某次独立 materialization。static relation 数量不能替代这类
+结果。
+
 ## 10. 与既定五项任务的对应
 
-| 任务 | v2 处理方式 |
+| 任务 | 当前处理方式 |
 | --- | --- |
 | 根因分析 | 已完成；作为 calibration fixture / case study，不再扩展为 mutation 主线 |
-| Mutator | 改为 objective-driven task synthesis 与 historical checkpoint cut；不再变异 recovery API 名称 |
-| Oracle / Contract 自动化 | 保留为后续 contract-profile 工作；当前先以 deterministic A/O 分类保证证据闭环 |
-| Violation / Seed 分类 | 由 effect grammar、validated StateSeed 与 coverage ledger 给出，而非手工 testcase 标签 |
+| Mutator | V2 保留 objective-driven task synthesis 与 historical cut；V3 的主 Mutator 是 typed `EnvironmentProgram E` 与 `RecoveryPlan Σ`，不变异 recovery API 名称 |
+| Oracle / Contract 自动化 | V2 有 deterministic A/O relation；V3 先新增 typed `U'` dependence / hazard evidence，contract-profile 仍是独立后续工作 |
+| Violation / Seed 分类 | V2 由 effect grammar、validated StateSeed 与 relation ledger 给出；V3 再区分 binding/capability hazard coverage，均不等于漏洞标签 |
 | eBPF 引入 | 作为 profiling 与 frontier mining 的核心发现信号；state probe 负责持久性确认 |
 
 ## 11. 紧接着要做的工作
+
+Unix-socket 的 `E` IR、local materializer、local resolve/use 与 five-control classifier 已
+首先以 fixture 校准完成。LangGraph 已在 eBPF collector 启动后 materialize `E`，并把实际
+`W`、native frontier、head socket identity 与授权 topology 写进 native recovery plan；每个带
+`E` 的 continuation recovery 也会 gated-bind 独立 cgroup collector，要求
+`connect -> active-listener completed exchange` evidence。紧接着要做的是以真实 target execution
+验证该链路，补充跨 runtime identity、clean-OS / clean-environment controls，并生成 target
+`RecoveryHazardReport`。在这些 target gates 完成前，既有 LangGraph
+`residual`、workspace-file relation、generic continuation evidence 和 local calibration 均只
+作为底座或回归基线，不能报告为 realized target hazard。
+
+下列长段记录的是 **2026-07-24 至 2026-07-25 的 V2 实现与实验历史状态**；其中的“当前”
+和“下一步”均以当时为准，不覆盖上面的 V3.0a/V3.0b 优先级，也不能推翻 fixture-only 与
+target-side evidence 的边界。
 
 第一层 **FD→`(device,inode)` identity probe** 已实现并完成 privileged live calibration；deleted-open-FD 的 collector effect 与 checkpoint probe 已形成 `exact-device-inode` link。Unix socket 的 namespace/FD identity 与 dependency closure 也已由 `1784805732832067342` 完成 privileged live calibration：`bind` / `listen` 经 `exact-socket-id` 关联到完整 endpoint closure。canonical-path、FD identity 与 Unix socket 的首轮 known-answer audit 均已完成，并由可重跑的 `profile calibration-audit` 输出 fixture-scoped precision/recall。V2.1b Objective / pair / coverage IR 与 provenance gate 已完成；V2.3 的 MAF-native durable-checkpoint recovery adapter 已完成 live fixture calibration；V2.4a 已实现 objective scheduler、generator contract、candidate provenance/retention gate，以及 logical-frontier 到 native MAF checkpoint 的 identity binding。LangGraph 现已接入真实 candidate 的 isolated, eBPF-profiled execution，并保留 initial durable runtime 的精确 checkpoint catalog；这一步不会把 controller checkpoint 冒充为 Agent checkpoint。LangGraph native-frontier mapper 已由 `1784813806441091527` 完成 live calibration：它要求同一 `CLOCK_MONOTONIC` 域的 native durable-save 时间戳，并只接受严格包围 linked objective-effect window 的 native checkpoint 对。LangGraph 的当前 fork executor 已完成 before / after live execution：query 内的 initial 与 fresh resume process 保留同一 workspace 以观察 `O_H^(q)`，before / after 则在独立 container 中执行。该实现是 historical recovery set 的 before/after 子集；它尚未显式记录 materialization head、head-time persistence 或 `Q_head` no-rollback control，且当前 Unix-socket metadata probe 的 multiplicity evidence 仍未知，故最新 pair 为 `inconclusive`。下一步首先是实现 explicit head/retention contract 与 head control，再增强 multiplicity probe；不能把该基线写成漏洞。`command` adapter 仍被明确排除，不能把 controller observation checkpoint 当作恢复点。V2.5 再以 full-vs-pruned 与新增 family 扩展 fidelity/breadth 实验。collector 与 controller checkpoint 只能产生可审计 evidence：它们不单独决定漏洞 verdict 或 StateSeed 晋升。当前没有内建 LLM generator，不新增 trusted-action，也不把任何手写 smoke input 晋升为 StateSeed。LangGraph reference vertical slice 的完整审计说明见 [LANGGRAPH_END_TO_END_CLOSURE.md](LANGGRAPH_END_TO_END_CLOSURE.md)。
 

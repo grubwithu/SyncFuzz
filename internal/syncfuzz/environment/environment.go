@@ -194,7 +194,10 @@ func (e ContainerEnvironment) PrepareRun(ctx context.Context, opts core.RunOptio
 		"sleep", "infinity",
 	}
 	if !e.AllowNetwork {
-		args = append(args[:4], append([]string{"--network", "none"}, args[4:]...)...)
+		// Insert before --name and its value. Inserting after the --name flag
+		// would make Docker parse --network as the container name and "none" as
+		// the image, which is especially easy to miss in privileged eBPF runs.
+		args = append(args[:3], append([]string{"--network", "none"}, args[3:]...)...)
 	}
 	output, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
 	if err != nil {

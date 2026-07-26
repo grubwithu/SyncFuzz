@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/coverage"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/environment"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/objective"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/profiling"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/recovery"
@@ -547,6 +548,184 @@ func TestLangGraphSynthesisTargetRunRequiresExplicitNetworkAndUsesCandidatePromp
 	}
 	if opts.CommandEnvironment["OPENAI_API_KEY"] != "not-written" || !strings.Contains(opts.Command, "/opt/syncfuzz-langgraph/run_target.py") {
 		t.Fatalf("expected ephemeral provider environment and image-owned runner: %#v", opts)
+	}
+}
+
+func TestLangGraphSynthesisTargetRunPassesOnlyValidatedEnvironmentProgramArtifact(t *testing.T) {
+	stateObjective := testObjective("ipc.listen", profiling.StateFamilyIPC, "listen")
+	request, err := NewGeneratorRequest(stateObjective, LangGraphSynthesisTargetID, LangGraphSynthesisAdapterID, "scaffolds/langgraph", 0, nil)
+	if err != nil {
+		t.Fatalf("NewGeneratorRequest returned error: %v", err)
+	}
+	candidate, err := NewCandidate(request, "test-generator", GeneratorResponse{Task: "Perform the normal integration check."})
+	if err != nil {
+		t.Fatalf("NewCandidate returned error: %v", err)
+	}
+	baseline, err := environment.NewUnixSocketProgram(environment.UnixSocketProgramOptions{
+		LogicalName:            "agent-service",
+		ResolutionMode:         environment.UnixSocketResolutionConfig,
+		ResolutionKey:          "agent_socket",
+		ResolutionArtifactPath: "service.json",
+		EndpointPath:           "agent.sock",
+		InitialRole:            "baseline",
+		ActiveRole:             "baseline",
+		HolderLifetime:         environment.HolderLifetimeChild,
+	})
+	if err != nil {
+		t.Fatalf("NewUnixSocketProgram returned error: %v", err)
+	}
+	program, err := baseline.MutateUnixSocket(environment.UnixSocketMutation{Operator: environment.MutationOperatorRebind, ActiveRole: "replacement"})
+	if err != nil {
+		t.Fatalf("MutateUnixSocket returned error: %v", err)
+	}
+	opts, err := NewLangGraphSynthesisTargetRunOptions(stateObjective, candidate, LangGraphExecutionConfig{
+		OutDir: t.TempDir(), AllowNetwork: true, RetainRuntime: true, EnvironmentProgram: &program, ProfileFollowupQuery: "Run the normal health check.",
+	})
+	if err != nil {
+		t.Fatalf("NewLangGraphSynthesisTargetRunOptions returned error: %v", err)
+	}
+	if opts.EnvironmentProgram == nil || opts.EnvironmentProgram.ProgramID != program.ProgramID {
+		t.Fatalf("target options lost immutable environment program: %#v", opts.EnvironmentProgram)
+	}
+	for _, expected := range []string{"--environment-program-file", "$SYNCFUZZ_ENVIRONMENT_PROGRAM_FILE", "--environment-materialization-artifact", "$SYNCFUZZ_ENVIRONMENT_MATERIALIZATION_ARTIFACT"} {
+		if !strings.Contains(opts.Command, expected) {
+			t.Fatalf("target command lacks controller-owned environment artifact argument %q: %s", expected, opts.Command)
+		}
+	}
+}
+
+func TestLangGraphTargetEnvironmentMaterializationRequiresNativeAndEBPFEvidence(t *testing.T) {
+	baseline, err := environment.NewUnixSocketProgram(environment.UnixSocketProgramOptions{
+		LogicalName: "agent-service", ResolutionMode: environment.UnixSocketResolutionDirect,
+		EndpointPath: "agent.sock", InitialRole: "baseline", ActiveRole: "baseline", HolderLifetime: environment.HolderLifetimeChild,
+	})
+	if err != nil {
+		t.Fatalf("NewUnixSocketProgram returned error: %v", err)
+	}
+	program, err := baseline.MutateUnixSocket(environment.UnixSocketMutation{Operator: environment.MutationOperatorRebind, ActiveRole: "replacement"})
+	if err != nil {
+		t.Fatalf("MutateUnixSocket returned error: %v", err)
+	}
+	artifact := environment.TargetUnixSocketMaterialization{
+		SchemaVersion: environment.TargetUnixSocketMaterializationSchemaVersion, ProgramID: program.ProgramID,
+		SourceNativeCheckpointID: "checkpoint-1", SourceCheckpointMonotonicNS: 100,
+		EffectWindowMonotonicNS: environment.TargetEffectWindow{Start: 100, End: 140},
+		Family:                  environment.EnvironmentResourceFamilyUnixSocket, EndpointPath: "agent.sock", LogicalName: "agent-service", ResolutionMode: environment.UnixSocketResolutionDirect, UseEventArtifactPath: "environment-use-events.jsonl",
+		ResolutionSteps: []environment.ResolutionStep{
+			{Kind: environment.ResolutionStepLogicalName, From: "agent-service", To: "agent.sock"},
+			{Kind: environment.ResolutionStepPathname, From: "agent.sock", To: "unix-endpoint:agent.sock"},
+		},
+		Listeners: []environment.TargetUnixSocketListener{
+			{PID: 11, Role: "baseline", Endpoint: "/workspace/agent.sock", EndpointDevice: 1, EndpointInode: 101, FD: 3, SocketID: "socket:11", SocketDevice: 1, SocketInode: 11, ReadyMonotonicNS: 120},
+			{PID: 12, Role: "replacement", Endpoint: "/workspace/agent.sock", EndpointDevice: 1, EndpointInode: 102, FD: 3, SocketID: "socket:12", SocketDevice: 1, SocketInode: 12, ReadyMonotonicNS: 130},
+		},
+		ActiveListener: environment.TargetUnixSocketListener{PID: 12, Role: "replacement", Endpoint: "/workspace/agent.sock", EndpointDevice: 1, EndpointInode: 102, FD: 3, SocketID: "socket:12", SocketDevice: 1, SocketInode: 12, ReadyMonotonicNS: 130},
+	}
+	artifactPath := filepath.Join(t.TempDir(), target.TargetEnvironmentMaterializationArtifact)
+	if err := writeJSON(artifactPath, artifact); err != nil {
+		t.Fatalf("write materialization artifact: %v", err)
+	}
+	followup := environment.TargetEnvironmentProfileFollowup{
+		SchemaVersion:                     environment.TargetEnvironmentProfileFollowupSchemaVersion,
+		ProgramID:                         program.ProgramID,
+		MaterializationNativeCheckpointID: "checkpoint-1",
+		FollowupQuerySHA256:               strings.Repeat("a", 64),
+		FollowupInvoked:                   true,
+		FollowupToolResultCount:           1,
+		AfterNativeCheckpointID:           "checkpoint-2",
+		AfterNativeCheckpointMonotonicNS:  200,
+	}
+	if err := writeJSON(filepath.Join(filepath.Dir(artifactPath), target.TargetEnvironmentProfileFollowupArtifact), followup); err != nil {
+		t.Fatalf("write profile follow-up artifact: %v", err)
+	}
+	result := &target.TargetRunResult{ArtifactDir: filepath.Dir(artifactPath), ResourceProfiling: &target.TargetResourceProfilingResult{Events: []profiling.RawEvent{
+		{EventID: "bind", MonotonicNS: 125, Kind: profiling.RawEventBind, Resource: profiling.ResourceRef{SocketID: "socket:12", Path: "/workspace/agent.sock"}},
+		{EventID: "listen", MonotonicNS: 130, Kind: profiling.RawEventListen, Resource: profiling.ResourceRef{SocketID: "socket:12"}},
+		{EventID: "connect", MonotonicNS: 160, Kind: profiling.RawEventConnect, Result: 0, Resource: profiling.ResourceRef{Path: "/workspace/agent.sock"}},
+	}}}
+	manifest := LangGraphNativeCheckpointManifest{NativeCheckpoints: []LangGraphNativeCheckpoint{{CheckpointID: "checkpoint-1", PersistedMonotonicNS: 100}}}
+	if err := validateLangGraphTargetEnvironmentMaterialization(result, manifest, program); err != nil {
+		t.Fatalf("validateLangGraphTargetEnvironmentMaterialization returned error: %v", err)
+	}
+	result.ResourceProfiling.Events = result.ResourceProfiling.Events[:1]
+	if err := validateLangGraphTargetEnvironmentMaterialization(result, manifest, program); err == nil {
+		t.Fatal("expected missing listen evidence rejection")
+	}
+}
+
+func TestLangGraphTargetEnvironmentMaterializationImportsOnlyRecordedArtifacts(t *testing.T) {
+	baseline, err := environment.NewUnixSocketProgram(environment.UnixSocketProgramOptions{
+		LogicalName: "agent-service", ResolutionMode: environment.UnixSocketResolutionDirect,
+		EndpointPath: "agent.sock", InitialRole: "baseline", ActiveRole: "baseline", HolderLifetime: environment.HolderLifetimeChild,
+	})
+	if err != nil {
+		t.Fatalf("NewUnixSocketProgram returned error: %v", err)
+	}
+	program, err := baseline.MutateUnixSocket(environment.UnixSocketMutation{Operator: environment.MutationOperatorRebind, ActiveRole: "replacement"})
+	if err != nil {
+		t.Fatalf("MutateUnixSocket returned error: %v", err)
+	}
+	dir := t.TempDir()
+	if err := environment.WriteEnvironmentProgram(filepath.Join(dir, target.TargetEnvironmentProgramArtifact), program); err != nil {
+		t.Fatalf("write environment program: %v", err)
+	}
+	materialization := environment.TargetUnixSocketMaterialization{
+		SchemaVersion: environment.TargetUnixSocketMaterializationSchemaVersion, ProgramID: program.ProgramID,
+		SourceNativeCheckpointID: "checkpoint-1", SourceCheckpointMonotonicNS: 100,
+		EffectWindowMonotonicNS: environment.TargetEffectWindow{Start: 100, End: 140},
+		Family:                  environment.EnvironmentResourceFamilyUnixSocket, EndpointPath: "agent.sock", LogicalName: "agent-service", ResolutionMode: environment.UnixSocketResolutionDirect, UseEventArtifactPath: "environment-use-events.jsonl",
+		ResolutionSteps: []environment.ResolutionStep{
+			{Kind: environment.ResolutionStepLogicalName, From: "agent-service", To: "agent.sock"},
+			{Kind: environment.ResolutionStepPathname, From: "agent.sock", To: "unix-endpoint:agent.sock"},
+		},
+		Listeners: []environment.TargetUnixSocketListener{
+			{PID: 11, Role: "baseline", Endpoint: "/workspace/agent.sock", EndpointDevice: 1, EndpointInode: 101, FD: 3, SocketID: "socket:11", SocketDevice: 1, SocketInode: 11, ReadyMonotonicNS: 120},
+			{PID: 12, Role: "replacement", Endpoint: "/workspace/agent.sock", EndpointDevice: 1, EndpointInode: 102, FD: 3, SocketID: "socket:12", SocketDevice: 1, SocketInode: 12, ReadyMonotonicNS: 130},
+		},
+		ActiveListener: environment.TargetUnixSocketListener{PID: 12, Role: "replacement", Endpoint: "/workspace/agent.sock", EndpointDevice: 1, EndpointInode: 102, FD: 3, SocketID: "socket:12", SocketDevice: 1, SocketInode: 12, ReadyMonotonicNS: 130},
+	}
+	if err := writeJSON(filepath.Join(dir, target.TargetEnvironmentMaterializationArtifact), materialization); err != nil {
+		t.Fatalf("write materialization: %v", err)
+	}
+	planPath := filepath.Join(dir, "target-task.json")
+	if err := writeJSON(planPath, map[string]string{
+		"environment_program_id":               program.ProgramID,
+		"environment_program_artifact":         target.TargetEnvironmentProgramArtifact,
+		"environment_materialization_artifact": target.TargetEnvironmentMaterializationArtifact,
+	}); err != nil {
+		t.Fatalf("write target plan: %v", err)
+	}
+	loadedProgram, loadedMaterialization, err := langGraphTargetEnvironmentMaterialization(planPath)
+	if err != nil || loadedProgram == nil || loadedMaterialization == nil || loadedProgram.ProgramID != program.ProgramID || loadedMaterialization.ActiveListener.SocketID != "socket:12" {
+		t.Fatalf("recorded environment artifacts were not imported: %#v %#v %v", loadedProgram, loadedMaterialization, err)
+	}
+	snapshot := recovery.LangGraphWorkspaceSnapshot{PassiveUnixSocketDevice: 1, PassiveUnixSocketInode: 102}
+	probe := recovery.LangGraphUnixSocketProbe{SocketID: "socket:12", HolderPID: 12, HolderFD: 3}
+	if err := validateLangGraphTargetEnvironmentRetainedSocket(*loadedMaterialization, snapshot, probe); err != nil {
+		t.Fatalf("validate target environment retained socket: %v", err)
+	}
+	snapshot.PassiveUnixSocketInode = 103
+	if err := validateLangGraphTargetEnvironmentRetainedSocket(*loadedMaterialization, snapshot, probe); err == nil {
+		t.Fatal("expected retained pathname identity mismatch rejection")
+	}
+	frontier, err := SelectLangGraphEnvironmentFrontier(objective.ProfileRun{
+		TargetID:             LangGraphSynthesisTargetID,
+		AdapterID:            LangGraphSynthesisAdapterID,
+		RecordedPlanArtifact: planPath,
+		CheckpointMap: profiling.CheckpointEffectMap{SchemaVersion: profiling.SchemaVersion, Intervals: []profiling.CheckpointInterval{{
+			FrontierID: "before-command..after-command", StartMonotonicNS: 90, EndMonotonicNS: 180, IsFrontier: true,
+			Effects: []profiling.NormalizedEffect{
+				{EffectID: "active-bind", MonotonicNS: 125, Family: profiling.StateFamilyIPC, Operation: "bind", Resource: profiling.ResourceRef{SocketID: "socket:12"}},
+				{EffectID: "active-listen", MonotonicNS: 130, Family: profiling.StateFamilyIPC, Operation: "listen", Resource: profiling.ResourceRef{SocketID: "socket:12"}},
+			},
+			EvidenceLinks: []profiling.EvidenceLink{
+				{EffectID: "active-bind", ResourceID: "unix-socket:socket:12", Relation: profiling.EvidenceLinkExactSocketID},
+				{EffectID: "active-listen", ResourceID: "unix-socket:socket:12", Relation: profiling.EvidenceLinkExactSocketID},
+			},
+		}}},
+	})
+	if err != nil || frontier != "before-command..after-command" {
+		t.Fatalf("SelectLangGraphEnvironmentFrontier = %q, %v", frontier, err)
 	}
 }
 

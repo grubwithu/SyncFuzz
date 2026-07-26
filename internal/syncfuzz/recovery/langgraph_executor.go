@@ -9,6 +9,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/environment"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/profiling"
 )
 
 // LangGraphForkExecutor clones a recorded durable store, then opens the exact
@@ -102,6 +106,13 @@ type langGraphRecoveryWorkspace struct {
 	SandboxGID           int
 }
 
+type langGraphRecoveryResourceTrace struct {
+	ScopeArtifact  string
+	EventsArtifact string
+	Scope          profiling.ProfilingScope
+	Events         []profiling.RawEvent
+}
+
 func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecutionRequest) (RecoveryObservation, error) {
 	if request.Plan.AdapterID != LangGraphForkAdapterID {
 		return RecoveryObservation{}, fmt.Errorf("LangGraph executor cannot execute adapter %q", request.Plan.AdapterID)
@@ -158,7 +169,13 @@ func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecut
 		return RecoveryObservation{}, err
 	}
 	args := langGraphRecoveryDockerArgsWithContinuation(forkPlan, passiveWorkspace.Path, passiveWorkspace.RuntimeID, passiveWorkspace.SandboxUID, passiveWorkspace.SandboxGID, coordinate.SourceCheckpointID, langGraphProviderEnvironment(), request.ContinuationQuery)
-	output, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	var recoveryTrace *langGraphRecoveryResourceTrace
+	var output []byte
+	if request.ContinuationQuery != nil && langGraphForkPlanHasEnvironmentProgram(forkPlan) {
+		output, recoveryTrace, err = runProfiledLangGraphRecoveryContainer(ctx, forkPlan, passiveWorkspace, args)
+	} else {
+		output, err = exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	}
 	if err != nil {
 		return RecoveryObservation{}, fmt.Errorf("run LangGraph recovery container: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -193,8 +210,269 @@ func (LangGraphForkExecutor) ExecuteFork(ctx context.Context, request ForkExecut
 	agentState := forkPlan.AgentStateByCheckpoint[request.Query.CheckpointID]
 	evidence := []string{"LangGraph fresh container: " + passiveWorkspace.RuntimeID, "retained source runtime verified: " + forkPlan.SourceRuntime.ContainerID, "source snapshot verified: " + forkPlan.WorkspaceSnapshot.WorkspaceSHA256, "native checkpoint restored by exact ID: " + artifact.RestoredCheckpointID, "timestamp-validated logical state: " + string(agentState), "passive probe mode: " + string(probeMode)}
 	evidence = append(evidence, passiveEvidence...)
+	var environmentUseEvidence *EnvironmentUseEvidence
+	if recoveryTrace != nil {
+		useEvidence, typedUseEvidence, err := validateLangGraphRecoveryEnvironmentUse(forkPlan, recoveryTrace)
+		if err != nil {
+			return RecoveryObservation{}, err
+		}
+		environmentUseEvidence = typedUseEvidence
+		evidence = append(evidence, "recovery cgroup-scoped resource events: "+recoveryTrace.EventsArtifact, "recovery cgroup scope: "+recoveryTrace.ScopeArtifact)
+		evidence = append(evidence, useEvidence...)
+		if continuationEvidence != nil {
+			continuationEvidence.PostEvidence = append(continuationEvidence.PostEvidence, useEvidence...)
+		}
+	}
 	evidence = append(evidence, "passive observation artifact: "+passiveWorkspace.PassiveObservation)
-	return RecoveryObservation{SchemaVersion: ExecutionSchemaVersion, QueryID: request.Query.QueryID, SeedID: request.Query.SeedID, Boundary: request.Query.Boundary, CheckpointID: request.Query.CheckpointID, RecordedPlanID: request.Query.RecordedPlanID, PassiveObservationID: request.Query.PassiveObservationID, MaterializationHeadID: request.Query.MaterializationHeadID, RetentionPolicy: request.Query.RetentionPolicy, RuntimeInstanceID: passiveWorkspace.RuntimeID, AgentState: agentState, OSState: osState, OSStateOrigin: origin, EffectMultiplicity: multiplicity, PassiveProbe: passiveMetrics, ContinuationEvidence: continuationEvidence, Evidence: evidence}, nil
+	return RecoveryObservation{SchemaVersion: ExecutionSchemaVersion, QueryID: request.Query.QueryID, SeedID: request.Query.SeedID, Boundary: request.Query.Boundary, CheckpointID: request.Query.CheckpointID, RecordedPlanID: request.Query.RecordedPlanID, PassiveObservationID: request.Query.PassiveObservationID, MaterializationHeadID: request.Query.MaterializationHeadID, RetentionPolicy: request.Query.RetentionPolicy, RuntimeInstanceID: passiveWorkspace.RuntimeID, AgentState: agentState, OSState: osState, OSStateOrigin: origin, EffectMultiplicity: multiplicity, PassiveProbe: passiveMetrics, ContinuationEvidence: continuationEvidence, EnvironmentUseEvidence: environmentUseEvidence, Evidence: evidence}, nil
+}
+
+type langGraphListenerUseEvent struct {
+	SchemaVersion        string `json:"schema_version"`
+	MonotonicNS          uint64 `json:"monotonic_ns"`
+	Role                 string `json:"role"`
+	Endpoint             string `json:"endpoint"`
+	PeerPID              int    `json:"peer_pid"`
+	RequestBytes         int    `json:"request_bytes"`
+	RequestSHA256        string `json:"request_sha256"`
+	ResponseSent         bool   `json:"response_sent"`
+	ResponseAcknowledged bool   `json:"response_acknowledged"`
+}
+
+// validateLangGraphRecoveryEnvironmentUse joins an active recovery-cgroup
+// AF_UNIX connect to the retained listener's own role-tagged accept record.
+// The listener log deliberately stores no request payload; role and endpoint
+// are enough to establish typed dependence on the active E binding.
+func validateLangGraphRecoveryEnvironmentUse(plan LangGraphForkPlan, trace *langGraphRecoveryResourceTrace) ([]string, *EnvironmentUseEvidence, error) {
+	if trace == nil || len(trace.Events) == 0 {
+		return nil, nil, fmt.Errorf("recovery environment use has no cgroup-scoped resource events")
+	}
+	program, err := environment.ReadEnvironmentProgram(filepath.Join(plan.WorkspaceSnapshot.SourceWorkspace, "environment-program.json"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read recovery environment program: %w", err)
+	}
+	materialization, err := environment.ReadTargetUnixSocketMaterialization(filepath.Join(plan.WorkspaceSnapshot.SourceWorkspace, "environment-materialization.json"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read recovery environment materialization: %w", err)
+	}
+	if err := materialization.ValidateFor(program); err != nil {
+		return nil, nil, fmt.Errorf("validate recovery environment materialization: %w", err)
+	}
+	expectedPath := "/workspace/" + filepath.ToSlash(program.UnixSocket.EndpointPath)
+	var (
+		firstNS      uint64
+		lastNS       uint64
+		connectCount int
+	)
+	for _, event := range trace.Events {
+		if firstNS == 0 || event.MonotonicNS < firstNS {
+			firstNS = event.MonotonicNS
+		}
+		if event.MonotonicNS > lastNS {
+			lastNS = event.MonotonicNS
+		}
+		if event.Kind == profiling.RawEventConnect && event.Result == 0 && filepath.Clean(event.Resource.Path) == expectedPath {
+			connectCount++
+		}
+	}
+	if connectCount == 0 {
+		return nil, nil, fmt.Errorf("recovery cgroup did not connect to environment endpoint %q", expectedPath)
+	}
+	data, err := os.ReadFile(filepath.Join(plan.WorkspaceSnapshot.SourceWorkspace, materialization.UseEventArtifactPath))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read retained listener use events: %w", err)
+	}
+	matchedAccepts := 0
+	var matchedUse *langGraphListenerUseEvent
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var event langGraphListenerUseEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			return nil, nil, fmt.Errorf("decode retained listener use event: %w", err)
+		}
+		if event.SchemaVersion == "syncfuzz.environment-listener-use.v1" && event.MonotonicNS >= firstNS && event.MonotonicNS <= lastNS && event.Role == materialization.ActiveListener.Role && event.Endpoint == expectedPath && event.PeerPID > 0 && event.RequestBytes > 0 && validSHA256Hex(event.RequestSHA256) && event.ResponseSent && event.ResponseAcknowledged {
+			matchedAccepts++
+			matched := event
+			matchedUse = &matched
+		}
+	}
+	if matchedAccepts == 0 {
+		return nil, nil, fmt.Errorf("recovery endpoint connect has no active-listener role-tagged completed exchange record")
+	}
+	connectEventIDs := make([]string, 0, connectCount)
+	for _, event := range trace.Events {
+		if event.Kind == profiling.RawEventConnect && event.Result == 0 && filepath.Clean(event.Resource.Path) == expectedPath {
+			connectEventIDs = append(connectEventIDs, event.EventID)
+		}
+	}
+	if matchedUse == nil {
+		return nil, nil, fmt.Errorf("recovery endpoint connect has no completed listener use record")
+	}
+	active := materialization.ActiveListener
+	typed := &EnvironmentUseEvidence{
+		SchemaVersion:          EnvironmentUseEvidenceSchemaVersion,
+		Family:                 "unix-socket",
+		ProgramID:              program.ProgramID,
+		LogicalName:            program.UnixSocket.LogicalName,
+		ResolvedEndpointPath:   expectedPath,
+		ConnectEventIDs:        connectEventIDs,
+		RequestSHA256:          matchedUse.RequestSHA256,
+		CompletedExchange:      true,
+		ListenerRole:           active.Role,
+		ListenerPID:            active.PID,
+		ListenerFD:             active.FD,
+		ListenerSocketID:       active.SocketID,
+		ListenerEndpointDevice: active.EndpointDevice,
+		ListenerEndpointInode:  active.EndpointInode,
+		ListenerSocketDevice:   active.SocketDevice,
+		ListenerSocketInode:    active.SocketInode,
+	}
+	if err := typed.Validate(); err != nil {
+		return nil, nil, fmt.Errorf("validate recovery environment use: %w", err)
+	}
+	return []string{
+		"recovery environment use: cgroup AF_UNIX connect to " + expectedPath,
+		"recovery environment use: active listener role " + materialization.ActiveListener.Role + " completed " + strconv.Itoa(matchedAccepts) + " acknowledged request/response exchange(s)",
+	}, typed, nil
+}
+
+func validSHA256Hex(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func langGraphForkPlanHasEnvironmentProgram(plan LangGraphForkPlan) bool {
+	_, err := os.Stat(filepath.Join(plan.WorkspaceSnapshot.SourceWorkspace, "environment-program.json"))
+	return err == nil
+}
+
+// runProfiledLangGraphRecoveryContainer creates a gated recovery container so
+// the host collector is attached to the recovery cgroup before the restored
+// agent can execute its continuation. This is intentionally distinct from
+// profile-time W collection: these events are U' candidate evidence.
+func runProfiledLangGraphRecoveryContainer(ctx context.Context, plan LangGraphForkPlan, workspace langGraphRecoveryWorkspace, runArgs []string) ([]byte, *langGraphRecoveryResourceTrace, error) {
+	if len(runArgs) == 0 || runArgs[0] != "run" {
+		return nil, nil, fmt.Errorf("profiled LangGraph recovery requires docker run arguments")
+	}
+	gate := filepath.Join(workspace.Path, ".syncfuzz-recovery-start")
+	if err := os.Remove(gate); err != nil && !os.IsNotExist(err) {
+		return nil, nil, fmt.Errorf("clear LangGraph recovery start gate: %w", err)
+	}
+	imageIndex := -1
+	image := langGraphRecoveryContainerImage(plan)
+	for index, value := range runArgs {
+		if value == image {
+			imageIndex = index
+			break
+		}
+	}
+	if imageIndex < 0 {
+		return nil, nil, fmt.Errorf("profiled LangGraph recovery could not locate its container image")
+	}
+	command := append([]string(nil), runArgs[imageIndex+1:]...)
+	gatedRunArgs := append([]string{}, runArgs[:imageIndex+1]...)
+	gatedRunArgs = append(gatedRunArgs, "/bin/sh", "-c", "while [ ! -f /workspace/.syncfuzz-recovery-start ]; do sleep 0.02; done; exec \"$@\"", "syncfuzz-recovery-gate")
+	gatedRunArgs = append(gatedRunArgs, command...)
+	createArgs := []string{"create"}
+	for _, value := range gatedRunArgs[1:] {
+		if value != "--rm" {
+			createArgs = append(createArgs, value)
+		}
+	}
+	containerName := "syncfuzz-" + workspace.RuntimeID
+	created := false
+	defer func() {
+		if created {
+			_ = exec.CommandContext(context.Background(), "docker", "rm", "-f", containerName).Run()
+		}
+	}()
+	if output, err := exec.CommandContext(ctx, "docker", createArgs...).CombinedOutput(); err != nil {
+		return output, nil, fmt.Errorf("create gated LangGraph recovery container: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	created = true
+	if output, err := exec.CommandContext(ctx, "docker", "start", containerName).CombinedOutput(); err != nil {
+		return output, nil, fmt.Errorf("start gated LangGraph recovery container: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	scope, err := environment.ResolveContainerProfilingScope(ctx, containerName, workspace.RuntimeID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve recovery eBPF cgroup scope: %w", err)
+	}
+	collector, err := profiling.StartResourceCollector(scope)
+	if err != nil {
+		return nil, nil, fmt.Errorf("start recovery eBPF resource collector: %w", err)
+	}
+	var (
+		mu      sync.Mutex
+		events  []profiling.RawEvent
+		readErr error
+		done    = make(chan struct{})
+	)
+	go func() {
+		defer close(done)
+		for {
+			event, readErrValue := collector.Read()
+			if readErrValue != nil {
+				if !profiling.IsResourceCollectorClosed(readErrValue) {
+					mu.Lock()
+					readErr = readErrValue
+					mu.Unlock()
+				}
+				return
+			}
+			mu.Lock()
+			events = append(events, event)
+			mu.Unlock()
+		}
+	}()
+	if err := os.WriteFile(gate, []byte("release\n"), 0o600); err != nil {
+		_ = collector.Close()
+		<-done
+		return nil, nil, fmt.Errorf("release LangGraph recovery start gate: %w", err)
+	}
+	output, waitErr := exec.CommandContext(ctx, "docker", "wait", containerName).CombinedOutput()
+	if closeErr := collector.Close(); closeErr != nil && waitErr == nil {
+		waitErr = fmt.Errorf("close recovery eBPF resource collector: %w", closeErr)
+	}
+	<-done
+	mu.Lock()
+	captured := append([]profiling.RawEvent(nil), events...)
+	collectorReadErr := readErr
+	mu.Unlock()
+	if collectorReadErr != nil && waitErr == nil {
+		waitErr = fmt.Errorf("read recovery eBPF resource collector: %w", collectorReadErr)
+	}
+	trace := &langGraphRecoveryResourceTrace{
+		ScopeArtifact:  filepath.Join(workspace.Path, "ebpf-recovery-resource-scope.json"),
+		EventsArtifact: filepath.Join(workspace.Path, "ebpf-recovery-resource-events.jsonl"),
+		Scope:          scope,
+		Events:         captured,
+	}
+	encodedScope, marshalErr := json.MarshalIndent(scope, "", "  ")
+	if marshalErr != nil {
+		return output, nil, marshalErr
+	}
+	if err := os.WriteFile(trace.ScopeArtifact, append(encodedScope, '\n'), 0o644); err != nil {
+		return output, nil, fmt.Errorf("write recovery eBPF scope: %w", err)
+	}
+	if err := profiling.WriteRawEventsJSONL(trace.EventsArtifact, captured); err != nil {
+		return output, nil, fmt.Errorf("write recovery eBPF events: %w", err)
+	}
+	if waitErr != nil {
+		return output, trace, fmt.Errorf("wait for gated LangGraph recovery container: %w: %s", waitErr, strings.TrimSpace(string(output)))
+	}
+	if strings.TrimSpace(string(output)) != "0" {
+		return output, trace, fmt.Errorf("gated LangGraph recovery container exited with status %s", strings.TrimSpace(string(output)))
+	}
+	return output, trace, nil
 }
 
 func prepareLangGraphRecoveryWorkspace(forkPlan LangGraphForkPlan) (langGraphRecoveryWorkspace, error) {

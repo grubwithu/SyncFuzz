@@ -31,6 +31,11 @@ Q_head:   agent logical state = present, file = present
 `causal_effect_evidence.status` 为 `unknown`，`contract.status` 为
 `not-evaluated`，且文件 activity 没有被声明或测量。
 
+按当前的 [Recovery-Hazard Fuzzing 设计](RECOVERY_HAZARD_FUZZING.md)，本次记录也
+没有恢复期的 typed resolve/use `U'`：executor 只做 `lstat` identity probe，不观察
+Agent 是否在恢复后读取、执行或以其他方式依赖该文件。因此它是一个静态
+`W -> R(C,H)` relation baseline，不是 realized hazard、`REBOUND` finding 或安全结论。
+
 ## 2. 固定输入
 
 | 项 | 值 | 作用 |

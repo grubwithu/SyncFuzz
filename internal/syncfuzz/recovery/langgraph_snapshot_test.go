@@ -1,14 +1,21 @@
 package recovery
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/environment"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/profiling"
 )
 
 func TestLangGraphWorkspaceSnapshotClonesDurableStoreAndRetainsSocketIdentity(t *testing.T) {
@@ -630,5 +637,195 @@ func TestLangGraphPassiveProbeModeDefaultsToFull(t *testing.T) {
 	}
 	if !LangGraphPassiveProbeFull.Valid() || !LangGraphPassiveProbePruned.Valid() || LangGraphPassiveProbeMode("unsafe").Valid() {
 		t.Fatal("unexpected passive probe mode validation")
+	}
+}
+
+func TestLangGraphWorkspaceSnapshotExcludesAuthorizedEphemeralObserverLog(t *testing.T) {
+	source := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, "langgraph-checkpoints"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		"agent-result.txt":                  "result\n",
+		"environment-use-events.jsonl":      "initial\n",
+		"langgraph-checkpoints/storage.pkl": "storage\n",
+		"langgraph-checkpoints/writes.pkl":  "writes\n",
+		"langgraph-checkpoints/blobs.pkl":   "blobs\n",
+	} {
+		if err := os.WriteFile(filepath.Join(source, path), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	contract, err := NewLangGraphRetainedResourceContract(LangGraphRetainedWorkspaceFile, "agent-result.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _, err := CaptureLangGraphWorkspaceSnapshotForContractWithEphemeralArtifacts(source, contract, []string{"environment-use-events.jsonl"})
+	if err != nil {
+		t.Fatalf("capture snapshot: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "environment-use-events.jsonl"), []byte("initial\nrecovery-use\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshot.VerifySource(); err != nil {
+		t.Fatalf("ephemeral observer update invalidated snapshot: %v", err)
+	}
+	destination := t.TempDir()
+	if err := snapshot.CloneTo(destination); err != nil {
+		t.Fatalf("clone snapshot: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "environment-use-events.jsonl")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ephemeral observer log leaked into recovery clone: %v", err)
+	}
+}
+
+func TestValidateLangGraphRecoveryEnvironmentUseRequiresConnectAndActiveRoleAccept(t *testing.T) {
+	source := t.TempDir()
+	baseline, err := environment.NewUnixSocketProgram(environment.UnixSocketProgramOptions{
+		LogicalName: "agent-service", ResolutionMode: environment.UnixSocketResolutionDirect,
+		EndpointPath: "agent.sock", InitialRole: "baseline", ActiveRole: "baseline", HolderLifetime: environment.HolderLifetimeChild,
+	})
+	if err != nil {
+		t.Fatalf("NewUnixSocketProgram returned error: %v", err)
+	}
+	program, err := baseline.MutateUnixSocket(environment.UnixSocketMutation{Operator: environment.MutationOperatorRebind, ActiveRole: "replacement"})
+	if err != nil {
+		t.Fatalf("MutateUnixSocket returned error: %v", err)
+	}
+	if err := environment.WriteEnvironmentProgram(filepath.Join(source, "environment-program.json"), program); err != nil {
+		t.Fatalf("write program: %v", err)
+	}
+	materialization := environment.TargetUnixSocketMaterialization{
+		SchemaVersion: environment.TargetUnixSocketMaterializationSchemaVersion, ProgramID: program.ProgramID,
+		SourceNativeCheckpointID: "checkpoint-1", SourceCheckpointMonotonicNS: 100,
+		EffectWindowMonotonicNS: environment.TargetEffectWindow{Start: 100, End: 140},
+		Family:                  environment.EnvironmentResourceFamilyUnixSocket, EndpointPath: "agent.sock", LogicalName: "agent-service", ResolutionMode: environment.UnixSocketResolutionDirect, UseEventArtifactPath: "environment-use-events.jsonl",
+		ResolutionSteps: []environment.ResolutionStep{
+			{Kind: environment.ResolutionStepLogicalName, From: "agent-service", To: "agent.sock"},
+			{Kind: environment.ResolutionStepPathname, From: "agent.sock", To: "unix-endpoint:agent.sock"},
+		},
+		Listeners: []environment.TargetUnixSocketListener{
+			{PID: 11, Role: "baseline", Endpoint: "/workspace/agent.sock", EndpointDevice: 1, EndpointInode: 101, FD: 3, SocketID: "socket:11", SocketDevice: 1, SocketInode: 11, ReadyMonotonicNS: 120},
+			{PID: 12, Role: "replacement", Endpoint: "/workspace/agent.sock", EndpointDevice: 1, EndpointInode: 102, FD: 3, SocketID: "socket:12", SocketDevice: 1, SocketInode: 12, ReadyMonotonicNS: 130},
+		},
+		ActiveListener: environment.TargetUnixSocketListener{PID: 12, Role: "replacement", Endpoint: "/workspace/agent.sock", EndpointDevice: 1, EndpointInode: 102, FD: 3, SocketID: "socket:12", SocketDevice: 1, SocketInode: 12, ReadyMonotonicNS: 130},
+	}
+	data, err := json.Marshal(materialization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "environment-materialization.json"), data, 0o644); err != nil {
+		t.Fatalf("write materialization: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "environment-use-events.jsonl"), []byte(`{"schema_version":"syncfuzz.environment-listener-use.v1","monotonic_ns":210,"role":"replacement","endpoint":"/workspace/agent.sock","peer_pid":77,"request_bytes":21,"request_sha256":"0000000000000000000000000000000000000000000000000000000000000000","response_sent":true,"response_acknowledged":true}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write use event: %v", err)
+	}
+	trace := &langGraphRecoveryResourceTrace{Events: []profiling.RawEvent{{EventID: "connect", MonotonicNS: 200, Kind: profiling.RawEventConnect, Result: 0, Resource: profiling.ResourceRef{Path: "/workspace/agent.sock"}}, {EventID: "after", MonotonicNS: 220, Kind: profiling.RawEventClose}}}
+	evidence, typed, err := validateLangGraphRecoveryEnvironmentUse(LangGraphForkPlan{WorkspaceSnapshot: LangGraphWorkspaceSnapshot{SourceWorkspace: source}}, trace)
+	if err != nil || len(evidence) != 2 || typed == nil || !typed.CompletedExchange || typed.RequestSHA256 == "" || len(typed.ConnectEventIDs) != 1 {
+		t.Fatalf("validate recovery environment use: %#v %#v, %v", evidence, typed, err)
+	}
+	trace.Events[0].Resource.Path = "/workspace/other.sock"
+	if _, _, err := validateLangGraphRecoveryEnvironmentUse(LangGraphForkPlan{WorkspaceSnapshot: LangGraphWorkspaceSnapshot{SourceWorkspace: source}}, trace); err == nil {
+		t.Fatal("expected unmatched connect rejection")
+	}
+}
+
+func TestLangGraphInternalUnixListenerRecordsAcknowledgedHealthExchange(t *testing.T) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source path")
+	}
+	runTarget := filepath.Clean(filepath.Join(filepath.Dir(testFile), "../../../targets/langgraph_shell_react/run_target.py"))
+	if _, err := os.Stat(runTarget); err != nil {
+		t.Fatalf("locate LangGraph target script: %v", err)
+	}
+	workspace := t.TempDir()
+	endpoint := filepath.Join(workspace, "agent.sock")
+	ready := filepath.Join(workspace, "ready.json")
+	uses := filepath.Join(workspace, "environment-use-events.jsonl")
+	command := exec.Command("python3", runTarget,
+		"--internal-unix-socket-listener",
+		"--internal-listener-endpoint", endpoint,
+		"--internal-listener-role", "replacement",
+		"--internal-listener-ready", ready,
+		"--internal-listener-use-artifact", uses,
+	)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatalf("start internal listener: %v", err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- command.Wait() }()
+	listenerExited := false
+	defer func() {
+		if listenerExited {
+			return
+		}
+		select {
+		case <-finished:
+			return
+		default:
+			if command.Process != nil {
+				_ = command.Process.Kill()
+			}
+			<-finished
+		}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("internal listener did not write a readiness record")
+		}
+		select {
+		case err := <-finished:
+			listenerExited = true
+			t.Skipf("internal listener is unavailable in this test environment: %v: %s", err, strings.TrimSpace(stderr.String()))
+		default:
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	connection, err := net.DialTimeout("unix", endpoint, 2*time.Second)
+	if err != nil {
+		t.Fatalf("connect to internal listener: %v", err)
+	}
+	defer connection.Close()
+	if _, err := connection.Write([]byte("normal-health-request\n")); err != nil {
+		t.Fatalf("write normal health request: %v", err)
+	}
+	response := make([]byte, 128)
+	read, err := connection.Read(response)
+	if err != nil {
+		t.Fatalf("read listener response: %v", err)
+	}
+	if string(response[:read]) != "syncfuzz-listener-role:replacement\n" {
+		t.Fatalf("unexpected listener response %q", string(response[:read]))
+	}
+	if _, err := connection.Write([]byte("syncfuzz-health-ack\n")); err != nil {
+		t.Fatalf("acknowledge listener response: %v", err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatalf("close client connection: %v", err)
+	}
+	for {
+		data, readErr := os.ReadFile(uses)
+		if readErr == nil && len(strings.TrimSpace(string(data))) > 0 {
+			var use langGraphListenerUseEvent
+			if err := json.Unmarshal(data, &use); err != nil {
+				t.Fatalf("decode listener use event: %v", err)
+			}
+			if use.Role != "replacement" || use.Endpoint != endpoint || use.PeerPID <= 0 || use.RequestBytes != len("normal-health-request\n") || !validSHA256Hex(use.RequestSHA256) || !use.ResponseSent || !use.ResponseAcknowledged {
+				t.Fatalf("listener did not record completed normal exchange: %#v", use)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("internal listener did not write completed use record: %v", readErr)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

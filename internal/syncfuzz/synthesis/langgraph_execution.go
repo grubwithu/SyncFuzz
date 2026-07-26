@@ -10,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/environment"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/objective"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/profiling"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/recovery"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
@@ -113,6 +115,16 @@ type LangGraphExecutionConfig struct {
 	// observe the original listener process and socket namespace.
 	RetainRuntime       bool
 	ProviderEnvironment map[string]string
+	// EnvironmentProgram, when present, is passed as a controller-written
+	// workspace artifact. The Python target materializes it between the initial
+	// task and ProfileFollowupQuery, at an exact durable native checkpoint.
+	// This gives the trajectory both a pre-materialization logical state and a
+	// later normal Agent turn that can observe the active binding.
+	EnvironmentProgram *environment.EnvironmentProgram
+	// ProfileFollowupQuery is a profiling-time normal user turn, never a
+	// recovery continuation. It is required for EnvironmentProgram runs so the
+	// adapter does not label a merely time-later checkpoint as Agent awareness.
+	ProfileFollowupQuery string
 }
 
 // LangGraphCandidateExecution links the scheduler candidate to one real,
@@ -182,6 +194,17 @@ func NewLangGraphSynthesisTargetRunOptions(stateObjective objective.StateObjecti
 	if !config.RetainRuntime {
 		return target.TargetRunOptions{}, fmt.Errorf("LangGraph synthesis execution requires retaining the profiled runtime for live OS-state recovery")
 	}
+	command := `python3 /opt/syncfuzz-langgraph/run_target.py --workspace "$SYNCFUZZ_WORKSPACE" --prompt-file "$SYNCFUZZ_PROMPT_FILE" --task-file "$SYNCFUZZ_TASK_FILE" --thread-id "$SYNCFUZZ_RUN_ID" --execution-policy host --checkpoint-backend disk --process-mode single --require-tool-use`
+	if config.EnvironmentProgram != nil {
+		if err := config.EnvironmentProgram.Validate(); err != nil {
+			return target.TargetRunOptions{}, fmt.Errorf("validate LangGraph environment program: %w", err)
+		}
+		if strings.TrimSpace(config.ProfileFollowupQuery) == "" {
+			return target.TargetRunOptions{}, fmt.Errorf("LangGraph environment program requires a profiling follow-up query")
+		}
+		command += ` --environment-program-file "$SYNCFUZZ_ENVIRONMENT_PROGRAM_FILE" --environment-materialization-artifact "$SYNCFUZZ_ENVIRONMENT_MATERIALIZATION_ARTIFACT"`
+		command += ` --profile-followup-user-message "$SYNCFUZZ_PROFILE_FOLLOWUP_USER_MESSAGE" --require-profile-followup-tool-use`
+	}
 	return target.TargetRunOptions{
 		AdapterID:               target.LangGraphTargetAdapterID,
 		TargetID:                LangGraphSynthesisTargetID,
@@ -189,7 +212,7 @@ func NewLangGraphSynthesisTargetRunOptions(stateObjective objective.StateObjecti
 		SynthesisCandidateID:    candidate.CandidateID,
 		Objective:               stateObjective.ObjectiveID,
 		Prompt:                  candidate.Task,
-		Command:                 `python3 /opt/syncfuzz-langgraph/run_target.py --workspace "$SYNCFUZZ_WORKSPACE" --prompt-file "$SYNCFUZZ_PROMPT_FILE" --task-file "$SYNCFUZZ_TASK_FILE" --thread-id "$SYNCFUZZ_RUN_ID" --execution-policy host --checkpoint-backend disk --process-mode single --require-tool-use`,
+		Command:                 command,
 		OutDir:                  config.OutDir,
 		Timeout:                 timeout,
 		ObserveDelay:            config.ObserveDelay,
@@ -200,6 +223,8 @@ func NewLangGraphSynthesisTargetRunOptions(stateObjective objective.StateObjecti
 		AllowNetwork:            config.AllowNetwork,
 		RetainEnvironment:       config.RetainRuntime,
 		CommandEnvironment:      copyNonEmptyEnvironment(config.ProviderEnvironment),
+		EnvironmentProgram:      config.EnvironmentProgram,
+		ProfileFollowupQuery:    strings.TrimSpace(config.ProfileFollowupQuery),
 	}, nil
 }
 
@@ -241,6 +266,11 @@ func ExecuteLangGraphCandidate(ctx context.Context, stateObjective objective.Sta
 	if err := copyExecutionArtifact(workspaceManifestPath, manifestPath); err != nil {
 		return LangGraphCandidateExecution{}, err
 	}
+	if config.EnvironmentProgram != nil {
+		if err := validateLangGraphTargetEnvironmentMaterialization(result, manifest, *config.EnvironmentProgram); err != nil {
+			return LangGraphCandidateExecution{}, err
+		}
+	}
 	profileRun, err := objective.ImportTargetProfileRun(result.ArtifactDir, stateObjective.ObjectiveID, objective.ProfileRunKindSynthesisCandidate, candidate.CandidateID)
 	if err != nil {
 		return LangGraphCandidateExecution{}, err
@@ -280,6 +310,74 @@ func validateLangGraphCandidateProfilingEvidence(result *target.TargetRunResult)
 	}
 	if result.ProfilingAnalysis == nil {
 		return fmt.Errorf("LangGraph candidate target run %q completed without profiling analysis", result.RunID)
+	}
+	return nil
+}
+
+// validateLangGraphTargetEnvironmentMaterialization verifies only delivery,
+// target-cgroup occurrence, and native-clock provenance for E. It intentionally
+// does not call this a frontier/head admission: that gate additionally needs a
+// target resource probe whose active listener identity is linked into the
+// controller checkpoint map.
+func validateLangGraphTargetEnvironmentMaterialization(result *target.TargetRunResult, manifest LangGraphNativeCheckpointManifest, program environment.EnvironmentProgram) error {
+	if result == nil || strings.TrimSpace(result.ArtifactDir) == "" || result.ResourceProfiling == nil {
+		return fmt.Errorf("LangGraph target environment materialization requires resource eBPF profiling")
+	}
+	artifact, err := environment.ReadTargetUnixSocketMaterialization(filepath.Join(result.ArtifactDir, target.TargetEnvironmentMaterializationArtifact))
+	if err != nil {
+		return err
+	}
+	if err := artifact.ValidateFor(program); err != nil {
+		return fmt.Errorf("validate target environment materialization: %w", err)
+	}
+	followup, err := environment.ReadTargetEnvironmentProfileFollowup(filepath.Join(result.ArtifactDir, target.TargetEnvironmentProfileFollowupArtifact))
+	if err != nil {
+		return err
+	}
+	if err := followup.ValidateFor(program, artifact); err != nil {
+		return fmt.Errorf("validate target environment profile follow-up: %w", err)
+	}
+	foundNative := false
+	for _, checkpoint := range manifest.NativeCheckpoints {
+		if checkpoint.CheckpointID == artifact.SourceNativeCheckpointID && checkpoint.PersistedMonotonicNS == uint64(artifact.SourceCheckpointMonotonicNS) {
+			foundNative = true
+			break
+		}
+	}
+	if !foundNative {
+		return fmt.Errorf("target environment materialization source checkpoint is absent from the native manifest")
+	}
+	activeSocketID := artifact.ActiveListener.SocketID
+	activeEndpoint := "/workspace/" + filepath.ToSlash(program.UnixSocket.EndpointPath)
+	seenBind, seenListen := false, false
+	for _, event := range result.ResourceProfiling.Events {
+		if event.MonotonicNS < uint64(artifact.EffectWindowMonotonicNS.Start) || event.MonotonicNS > uint64(artifact.EffectWindowMonotonicNS.End) || event.Resource.SocketID != activeSocketID {
+			continue
+		}
+		switch event.Kind {
+		case profiling.RawEventBind:
+			if filepath.Clean(event.Resource.Path) == activeEndpoint {
+				seenBind = true
+			}
+		case profiling.RawEventListen:
+			seenListen = true
+		}
+	}
+	if !seenBind || !seenListen {
+		return fmt.Errorf("target environment materialization lacks cgroup-scoped bind(%q)/listen evidence for active socket %q", activeEndpoint, activeSocketID)
+	}
+	seenFollowupConnect := false
+	for _, event := range result.ResourceProfiling.Events {
+		if event.Kind != profiling.RawEventConnect || event.Result != 0 || filepath.Clean(event.Resource.Path) != activeEndpoint {
+			continue
+		}
+		if event.MonotonicNS > uint64(artifact.EffectWindowMonotonicNS.End) && event.MonotonicNS <= uint64(followup.AfterNativeCheckpointMonotonicNS) {
+			seenFollowupConnect = true
+			break
+		}
+	}
+	if !seenFollowupConnect {
+		return fmt.Errorf("target environment profile follow-up lacks cgroup-scoped connect(%q) after materialization", activeEndpoint)
 	}
 	return nil
 }

@@ -19,7 +19,14 @@ import (
 )
 
 const (
-	TargetTaskArtifact                           = "target-task.json"
+	TargetTaskArtifact               = "target-task.json"
+	TargetEnvironmentProgramArtifact = "environment-program.json"
+	// TargetEnvironmentMaterializationArtifact is written by a target adapter
+	// only after it materializes the declarative program inside the target
+	// cgroup. Its presence is not evidence that recovery use was observed.
+	TargetEnvironmentMaterializationArtifact     = "environment-materialization.json"
+	TargetEnvironmentUseEventsArtifact           = "environment-use-events.jsonl"
+	TargetEnvironmentProfileFollowupArtifact     = "environment-profile-followup.json"
 	TargetPromptArtifact                         = "target-prompt.txt"
 	TargetOutputArtifact                         = "target-output.txt"
 	TargetResultArtifact                         = "target-result.json"
@@ -208,32 +215,46 @@ type TargetRunOptions struct {
 	// CommandEnvironment is an explicit, non-persisted environment allowlist
 	// for the target command (for example model-provider credentials).
 	CommandEnvironment map[string]string
+	// EnvironmentProgram is an immutable resource-topology input. It is
+	// controller-persisted into the target workspace; a target adapter may
+	// materialize it only at its documented checkpoint boundary.
+	EnvironmentProgram *environment.EnvironmentProgram
+	// ProfileFollowupQuery is an optional normal user turn issued by the
+	// LangGraph synthesis adapter after an EnvironmentProgram has been
+	// materialized. It belongs to the profiling trajectory, not to a recovery
+	// query: its purpose is to create a durable post-materialization state that
+	// can later serve as an awareness control.
+	ProfileFollowupQuery string
 }
 
 type TargetTask struct {
-	SchemaVersion        string              `json:"schema_version"`
-	RunID                string              `json:"run_id"`
-	AdapterID            string              `json:"adapter_id"`
-	TargetID             string              `json:"target_id"`
-	TaskID               string              `json:"task_id"`
-	SynthesisCandidateID string              `json:"synthesis_candidate_id,omitempty"`
-	Objective            string              `json:"objective"`
-	PromptProfileID      string              `json:"prompt_profile_id,omitempty"`
-	PromptVariantID      string              `json:"prompt_variant_id,omitempty"`
-	Scenario             *TargetScenarioInfo `json:"scenario,omitempty"`
-	Prompt               string              `json:"prompt"`
-	PromptFile           string              `json:"prompt_file"`
-	Command              string              `json:"command"`
-	TimeoutMillis        int64               `json:"timeout_ms"`
-	ObserveDelayMs       int64               `json:"observe_delay_ms"`
-	LateObserveDelayMs   int64               `json:"late_observe_delay_ms,omitempty"`
-	Environment          string              `json:"environment"`
-	ContainerImage       string              `json:"container_image,omitempty"`
-	AllowNetwork         bool                `json:"allow_network"`
-	RetainEnvironment    bool                `json:"retain_environment,omitempty"`
-	Workspace            string              `json:"workspace"`
-	ExpectedFiles        []string            `json:"expected_files,omitempty"`
-	CreatedAt            string              `json:"created_at"`
+	SchemaVersion                      string              `json:"schema_version"`
+	RunID                              string              `json:"run_id"`
+	AdapterID                          string              `json:"adapter_id"`
+	TargetID                           string              `json:"target_id"`
+	TaskID                             string              `json:"task_id"`
+	SynthesisCandidateID               string              `json:"synthesis_candidate_id,omitempty"`
+	Objective                          string              `json:"objective"`
+	PromptProfileID                    string              `json:"prompt_profile_id,omitempty"`
+	PromptVariantID                    string              `json:"prompt_variant_id,omitempty"`
+	Scenario                           *TargetScenarioInfo `json:"scenario,omitempty"`
+	Prompt                             string              `json:"prompt"`
+	PromptFile                         string              `json:"prompt_file"`
+	Command                            string              `json:"command"`
+	TimeoutMillis                      int64               `json:"timeout_ms"`
+	ObserveDelayMs                     int64               `json:"observe_delay_ms"`
+	LateObserveDelayMs                 int64               `json:"late_observe_delay_ms,omitempty"`
+	Environment                        string              `json:"environment"`
+	ContainerImage                     string              `json:"container_image,omitempty"`
+	AllowNetwork                       bool                `json:"allow_network"`
+	RetainEnvironment                  bool                `json:"retain_environment,omitempty"`
+	Workspace                          string              `json:"workspace"`
+	ExpectedFiles                      []string            `json:"expected_files,omitempty"`
+	EnvironmentProgramID               string              `json:"environment_program_id,omitempty"`
+	EnvironmentProgramArtifact         string              `json:"environment_program_artifact,omitempty"`
+	EnvironmentMaterializationArtifact string              `json:"environment_materialization_artifact,omitempty"`
+	ProfileFollowupQuery               string              `json:"profile_followup_query,omitempty"`
+	CreatedAt                          string              `json:"created_at"`
 }
 
 type TargetCommandResult struct {
@@ -400,6 +421,17 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	if strings.TrimSpace(opts.SynthesisCandidateID) != "" && opts.AdapterID != LangGraphTargetAdapterID {
 		return nil, fmt.Errorf("synthesis candidate provenance requires target adapter %q", LangGraphTargetAdapterID)
 	}
+	if opts.EnvironmentProgram != nil {
+		if err := opts.EnvironmentProgram.Validate(); err != nil {
+			return nil, fmt.Errorf("validate target environment program: %w", err)
+		}
+		if opts.AdapterID != LangGraphTargetAdapterID || environment.NormalizedEnvKind(opts.EnvKind) != "container" {
+			return nil, fmt.Errorf("target environment program requires the LangGraph container adapter")
+		}
+		if opts.EnvironmentProgram.UnixSocket.HolderLifetime != environment.HolderLifetimeChild {
+			return nil, fmt.Errorf("target environment program requires child holder lifetime; local foreground materialization cannot prove retained target state")
+		}
+	}
 	if opts.OutDir == "" {
 		opts.OutDir = "runs"
 	}
@@ -510,6 +542,20 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		ExpectedFiles:        opts.ExpectedFiles,
 		CreatedAt:            started.Format(time.RFC3339Nano),
 	}
+	if opts.EnvironmentProgram != nil {
+		task.EnvironmentProgramID = opts.EnvironmentProgram.ProgramID
+		task.EnvironmentProgramArtifact = TargetEnvironmentProgramArtifact
+		task.EnvironmentMaterializationArtifact = TargetEnvironmentMaterializationArtifact
+		if err := environment.WriteEnvironmentProgram(filepath.Join(run.RunDir, TargetEnvironmentProgramArtifact), *opts.EnvironmentProgram); err != nil {
+			return nil, err
+		}
+		if err := environment.WriteEnvironmentProgram(filepath.Join(run.Workspace, TargetEnvironmentProgramArtifact), *opts.EnvironmentProgram); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(opts.ProfileFollowupQuery) != "" {
+		task.ProfileFollowupQuery = strings.TrimSpace(opts.ProfileFollowupQuery)
+	}
 	if scenario, ok := targetScenarioByID(opts.TaskID); ok {
 		info := scenario.Info
 		info.DefaultExpectedFiles = append([]string{}, info.DefaultExpectedFiles...)
@@ -530,11 +576,12 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		return nil, err
 	}
 	if err := run.Trace.Write(core.NewEvent(run, "P1", "target_task_prepared", map[string]any{
-		"artifact":       TargetTaskArtifact,
-		"prompt_file":    TargetPromptArtifact,
-		"prompt_profile": opts.PromptProfileID,
-		"prompt_variant": opts.PromptVariantID,
-		"command":        opts.Command,
+		"artifact":            TargetTaskArtifact,
+		"prompt_file":         TargetPromptArtifact,
+		"prompt_profile":      opts.PromptProfileID,
+		"prompt_variant":      opts.PromptVariantID,
+		"command":             opts.Command,
+		"environment_program": task.EnvironmentProgramArtifact,
 	})); err != nil {
 		return nil, err
 	}
@@ -819,6 +866,42 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		"filesystem-metadata.json",
 		TargetResultArtifact,
 	}
+	environmentMaterializationRecorded := false
+	if opts.EnvironmentProgram != nil {
+		artifacts = append(artifacts, TargetEnvironmentProgramArtifact)
+		if _, err := os.Stat(filepath.Join(run.Workspace, TargetEnvironmentMaterializationArtifact)); err == nil {
+			if err := copyTargetWorkspaceArtifact(run.Workspace, run.RunDir, TargetEnvironmentMaterializationArtifact); err != nil {
+				return nil, err
+			}
+			materialization, err := environment.ReadTargetUnixSocketMaterialization(filepath.Join(run.RunDir, TargetEnvironmentMaterializationArtifact))
+			if err != nil {
+				return nil, err
+			}
+			if err := materialization.ValidateFor(*opts.EnvironmentProgram); err != nil {
+				return nil, fmt.Errorf("validate target environment materialization: %w", err)
+			}
+			if err := copyTargetWorkspaceArtifact(run.Workspace, run.RunDir, TargetEnvironmentUseEventsArtifact); err != nil {
+				return nil, fmt.Errorf("copy target environment use events: %w", err)
+			}
+			if err := copyTargetWorkspaceArtifact(run.Workspace, run.RunDir, TargetEnvironmentProfileFollowupArtifact); err != nil {
+				return nil, fmt.Errorf("copy target environment profile follow-up: %w", err)
+			}
+			followup, err := environment.ReadTargetEnvironmentProfileFollowup(filepath.Join(run.RunDir, TargetEnvironmentProfileFollowupArtifact))
+			if err != nil {
+				return nil, err
+			}
+			if err := followup.ValidateFor(*opts.EnvironmentProgram, materialization); err != nil {
+				return nil, fmt.Errorf("validate target environment profile follow-up: %w", err)
+			}
+			artifacts = append(artifacts, TargetEnvironmentMaterializationArtifact, TargetEnvironmentProfileFollowupArtifact)
+			artifacts = append(artifacts, TargetEnvironmentUseEventsArtifact)
+			environmentMaterializationRecorded = true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("inspect target environment materialization artifact: %w", err)
+		} else if completed {
+			return nil, fmt.Errorf("target completed without required environment materialization artifact %q", TargetEnvironmentMaterializationArtifact)
+		}
+	}
 	if processProfiling != nil {
 		artifacts = append(artifacts, TargetEBPFProcessScopeArtifact, TargetEBPFProcessEventsArtifact)
 	}
@@ -844,6 +927,16 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-after.json", Kind: "process-snapshot"},
 		{Layer: "os", StateClass: "process", Phase: "P6", Artifact: "process-lineage.json", Kind: "process-lineage"},
 		{Layer: "os", StateClass: "filesystem-metadata", Phase: "P6", Artifact: "filesystem-metadata.json", Kind: "filesystem-metadata"},
+	}
+	if opts.EnvironmentProgram != nil {
+		observations = append(observations, core.StateObservation{Layer: "agent", StateClass: "environment-program", Phase: "P1", Artifact: TargetEnvironmentProgramArtifact, Kind: "immutable-topology", Description: "controller-validated EnvironmentProgram delivered to the target workspace"})
+		if environmentMaterializationRecorded {
+			observations = append(observations,
+				core.StateObservation{Layer: "os", StateClass: "target-environment-materialization", Phase: "P5", Artifact: TargetEnvironmentMaterializationArtifact, Kind: "target-materialization-provenance", Description: "target-owned post-native-checkpoint materialization record; requires separate eBPF frontier and head admission"},
+				core.StateObservation{Layer: "agent", StateClass: "target-environment-profile-followup", Phase: "P5", Artifact: TargetEnvironmentProfileFollowupArtifact, Kind: "post-materialization-agent-turn", Description: "target-owned normal Agent follow-up provenance; eBPF and listener evidence must separately prove endpoint use"},
+				core.StateObservation{Layer: "os", StateClass: "target-environment-use-events", Phase: "P5", Artifact: TargetEnvironmentUseEventsArtifact, Kind: "listener-side-use-log", Description: "role-tagged listener accepts recorded without request payload; recovery cgroup tracing is required for attribution"},
+			)
+		}
 	}
 	if processProfiling != nil {
 		observations = append(observations,
@@ -890,6 +983,9 @@ func RunTarget(ctx context.Context, opts TargetRunOptions) (*TargetRunResult, er
 	observations = append(observations, adapterObservations...)
 
 	stateClasses := []string{"workspace", "process", "target-command"}
+	if opts.EnvironmentProgram != nil {
+		stateClasses = append(stateClasses, "environment-program")
+	}
 	if processProfiling != nil {
 		stateClasses = append(stateClasses, "ebpf-process")
 	}
@@ -3218,6 +3314,20 @@ func readTargetOracleFile(workspace string, name string) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
+func copyTargetWorkspaceArtifact(workspace string, artifactDir string, name string) error {
+	if filepath.Base(name) != name {
+		return fmt.Errorf("target artifact %q is not a workspace-root file", name)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, name))
+	if err != nil {
+		return fmt.Errorf("read target workspace artifact %s: %w", name, err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, name), data, 0o644); err != nil {
+		return fmt.Errorf("copy target workspace artifact %s: %w", name, err)
+	}
+	return nil
+}
+
 func execTargetCommand(ctx context.Context, env core.Environment, run *core.RunContext, opts TargetRunOptions, workspacePath string) (TargetCommandResult, []byte, error) {
 	commandEnv := targetCommandEnv(opts, run.RunID, workspacePath)
 	started := time.Now()
@@ -3254,6 +3364,13 @@ func targetCommandEnv(opts TargetRunOptions, runID string, workspacePath string)
 		"SYNCFUZZ_PROMPT":      opts.Prompt,
 		"SYNCFUZZ_PROMPT_FILE": promptFile,
 		"SYNCFUZZ_TASK_FILE":   taskFile,
+	}
+	if opts.EnvironmentProgram != nil {
+		env["SYNCFUZZ_ENVIRONMENT_PROGRAM_FILE"] = filepath.Join(workspacePath, TargetEnvironmentProgramArtifact)
+		env["SYNCFUZZ_ENVIRONMENT_MATERIALIZATION_ARTIFACT"] = filepath.Join(workspacePath, TargetEnvironmentMaterializationArtifact)
+	}
+	if strings.TrimSpace(opts.ProfileFollowupQuery) != "" {
+		env["SYNCFUZZ_PROFILE_FOLLOWUP_USER_MESSAGE"] = strings.TrimSpace(opts.ProfileFollowupQuery)
 	}
 	for key, value := range targetTaskEnvOverridesWithPlan(opts.TaskID, opts.ExecutionPlan) {
 		env[key] = value

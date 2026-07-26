@@ -7,9 +7,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/environment"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/objective"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/profiling"
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/recovery"
+	"github.com/grubwithu/syncfuzz/internal/syncfuzz/target"
 )
 
 type LangGraphForkPlanConfig struct {
@@ -94,6 +96,40 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 	if err != nil {
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("read LangGraph native manifest for materialization head: %w", err)
 	}
+	program, materialization, err := langGraphTargetEnvironmentMaterialization(run.RecordedPlanArtifact)
+	if err != nil {
+		return recovery.LangGraphForkPlan{}, err
+	}
+	if program != nil {
+		if !hasSocket || resourceContract.WorkspaceRelativePath != program.UnixSocket.EndpointPath {
+			return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph environment program endpoint %q requires the matching Unix socket retained-resource contract", program.UnixSocket.EndpointPath)
+		}
+		if materialization.SourceNativeCheckpointID != binding.BeforeNativeCheckpointID || binding.FirstEffectMonotonicNS < uint64(materialization.EffectWindowMonotonicNS.Start) || binding.LastEffectMonotonicNS > uint64(materialization.EffectWindowMonotonicNS.End) {
+			return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph native frontier binding does not exactly bracket the target environment materialization")
+		}
+		followup, err := langGraphTargetEnvironmentProfileFollowup(run.RecordedPlanArtifact, *program, *materialization)
+		if err != nil {
+			return recovery.LangGraphForkPlan{}, err
+		}
+		var followupCheckpoint *LangGraphNativeCheckpoint
+		for index := range manifest.NativeCheckpoints {
+			checkpoint := &manifest.NativeCheckpoints[index]
+			if checkpoint.CheckpointID == followup.AfterNativeCheckpointID {
+				followupCheckpoint = checkpoint
+				break
+			}
+		}
+		if followupCheckpoint == nil || int64(followupCheckpoint.PersistedMonotonicNS) != followup.AfterNativeCheckpointMonotonicNS {
+			return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph environment profile follow-up checkpoint is absent from the native manifest")
+		}
+		binding.AfterNativeCheckpointID = followupCheckpoint.CheckpointID
+		binding.AfterNativeMonotonicNS = followupCheckpoint.PersistedMonotonicNS
+		binding.AfterNativeCoordinate = nativeCheckpointCoordinate(*followupCheckpoint)
+		binding.AfterNativeToolLifecycle = cloneLangGraphDurableToolLifecycle(followupCheckpoint.DurableToolLifecycle)
+		if err := binding.Validate(); err != nil {
+			return recovery.LangGraphForkPlan{}, fmt.Errorf("validate post-follow-up LangGraph native binding: %w", err)
+		}
+	}
 	headNative, err := langGraphNativeMaterializationHead(manifest, binding, headMonotonicNS)
 	if err != nil {
 		return recovery.LangGraphForkPlan{}, err
@@ -132,7 +168,11 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		workspaceFileProbe   *recovery.LangGraphWorkspaceFileProbe
 		passiveObservationID string
 	)
-	snapshot, workspaceTopology, err = recovery.CaptureLangGraphWorkspaceSnapshotForContract(sourceWorkspace, resourceContract)
+	ephemeralObserverArtifacts := []string(nil)
+	if materialization != nil {
+		ephemeralObserverArtifacts = []string{materialization.UseEventArtifactPath}
+	}
+	snapshot, workspaceTopology, err = recovery.CaptureLangGraphWorkspaceSnapshotForContractWithEphemeralArtifacts(sourceWorkspace, resourceContract, ephemeralObserverArtifacts)
 	if err != nil {
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("capture LangGraph recovery source snapshot: %w", err)
 	}
@@ -140,6 +180,11 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		socketProbe, err = langGraphUnixSocketProbe(run, binding, headCheckpointID)
 		if err != nil {
 			return recovery.LangGraphForkPlan{}, err
+		}
+		if materialization != nil {
+			if err := validateLangGraphTargetEnvironmentRetainedSocket(*materialization, snapshot, socketProbe); err != nil {
+				return recovery.LangGraphForkPlan{}, err
+			}
 		}
 		passiveObservationID = "unix-socket-listener-holder-v1:" + resourceContract.WorkspaceRelativePath
 	} else {
@@ -206,6 +251,22 @@ func PrepareLangGraphForkPlan(stateObjective objective.StateObjective, candidate
 		return recovery.LangGraphForkPlan{}, fmt.Errorf("LangGraph binding does not preserve before, after, and materialization-head coordinates")
 	}
 	return plan, nil
+}
+
+// validateLangGraphTargetEnvironmentRetainedSocket joins three independent
+// profile-time views of the active E binding: target listener provenance,
+// eBPF-linked socket/holder probe, and lstat of the retained pathname. All
+// values are run-local; this check deliberately performs no cross-runtime
+// inode/PID comparison.
+func validateLangGraphTargetEnvironmentRetainedSocket(materialization environment.TargetUnixSocketMaterialization, snapshot recovery.LangGraphWorkspaceSnapshot, probe recovery.LangGraphUnixSocketProbe) error {
+	active := materialization.ActiveListener
+	if probe.SocketID != active.SocketID || probe.HolderPID != uint32(active.PID) || probe.HolderFD != active.FD {
+		return fmt.Errorf("LangGraph recovery socket probe does not match the target environment program active listener")
+	}
+	if snapshot.PassiveUnixSocketDevice != active.EndpointDevice || snapshot.PassiveUnixSocketInode != active.EndpointInode {
+		return fmt.Errorf("LangGraph retained socket pathname identity does not match the target environment program active listener")
+	}
+	return nil
 }
 
 func langGraphWorkspaceFileProbe(run objective.ProfileRun, binding LangGraphNativeFrontierBinding, headCheckpointID, workspaceFilePath string) (*recovery.LangGraphWorkspaceFileProbe, error) {
@@ -287,6 +348,62 @@ func cloneLangGraphToolEffectProvenance(source *LangGraphToolEffectProvenance) *
 	}
 	clone := recovery.LangGraphToolEffectProvenance(*source)
 	return &clone
+}
+
+// langGraphTargetEnvironmentMaterialization recovers the controller-persisted
+// E provenance from the immutable target plan. A profile with no E keeps the
+// historical generic recovery path unchanged; a profile with E must use its
+// exact active listener as the retained recovery resource.
+func langGraphTargetEnvironmentMaterialization(recordedPlanArtifact string) (*environment.EnvironmentProgram, *environment.TargetUnixSocketMaterialization, error) {
+	planPath := strings.TrimSpace(recordedPlanArtifact)
+	if planPath == "" {
+		return nil, nil, fmt.Errorf("LangGraph profile has no recorded target plan artifact")
+	}
+	var task struct {
+		EnvironmentProgramID               string `json:"environment_program_id"`
+		EnvironmentProgramArtifact         string `json:"environment_program_artifact"`
+		EnvironmentMaterializationArtifact string `json:"environment_materialization_artifact"`
+	}
+	if err := readJSON(planPath, &task); err != nil {
+		return nil, nil, fmt.Errorf("read LangGraph target environment plan: %w", err)
+	}
+	if strings.TrimSpace(task.EnvironmentProgramID) == "" && strings.TrimSpace(task.EnvironmentProgramArtifact) == "" && strings.TrimSpace(task.EnvironmentMaterializationArtifact) == "" {
+		return nil, nil, nil
+	}
+	if task.EnvironmentProgramArtifact != target.TargetEnvironmentProgramArtifact || task.EnvironmentMaterializationArtifact != target.TargetEnvironmentMaterializationArtifact {
+		return nil, nil, fmt.Errorf("LangGraph target plan has an unsupported environment artifact contract")
+	}
+	directory := filepath.Dir(planPath)
+	program, err := environment.ReadEnvironmentProgram(filepath.Join(directory, task.EnvironmentProgramArtifact))
+	if err != nil {
+		return nil, nil, err
+	}
+	if program.ProgramID != task.EnvironmentProgramID {
+		return nil, nil, fmt.Errorf("LangGraph target environment program does not match its recorded plan ID")
+	}
+	materialization, err := environment.ReadTargetUnixSocketMaterialization(filepath.Join(directory, task.EnvironmentMaterializationArtifact))
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := materialization.ValidateFor(program); err != nil {
+		return nil, nil, fmt.Errorf("validate LangGraph target environment materialization: %w", err)
+	}
+	return &program, &materialization, nil
+}
+
+func langGraphTargetEnvironmentProfileFollowup(recordedPlanArtifact string, program environment.EnvironmentProgram, materialization environment.TargetUnixSocketMaterialization) (environment.TargetEnvironmentProfileFollowup, error) {
+	planPath := strings.TrimSpace(recordedPlanArtifact)
+	if planPath == "" {
+		return environment.TargetEnvironmentProfileFollowup{}, fmt.Errorf("LangGraph profile has no recorded target plan artifact")
+	}
+	followup, err := environment.ReadTargetEnvironmentProfileFollowup(filepath.Join(filepath.Dir(planPath), target.TargetEnvironmentProfileFollowupArtifact))
+	if err != nil {
+		return environment.TargetEnvironmentProfileFollowup{}, err
+	}
+	if err := followup.ValidateFor(program, materialization); err != nil {
+		return environment.TargetEnvironmentProfileFollowup{}, fmt.Errorf("validate LangGraph target environment profile follow-up: %w", err)
+	}
+	return followup, nil
 }
 
 func langGraphSourceRuntime(run objective.ProfileRun) (recovery.LangGraphSourceRuntime, error) {

@@ -41,6 +41,20 @@
 > 被 retag 不能改变 runner，contract 改变则 fail closed。旧 profile 不含 image ID，
 > 不能冒充满足此新 contract。
 
+> **路线定位更新（2026-07-26）**：本文冻结的是已完成的 LangGraph V2
+> evidence/recovery vertical slice，即 profile-time `W` evidence、native
+> `R(C,H)`、before/after/head controls 与 static A/O relation。当前研究主线已转向
+> `X=<Workload,EnvironmentProgram E,RecoveryPlan Σ>` 和 `W -> R(C,H) -> U'`；
+> 本文的 original V2 slice 尚未实现 `E` materialization/mutation、semantic
+> cross-runtime identity 或 realized-hazard classifier。仓库随后已在该 slice 之外新增
+> target-side `E` materialization/native-plan lock，以及受限的 recovery-cgroup
+> `connect + active-listener completed-exchange` collector；它尚未完成 live five-control
+> execution 或 target identity/hazard report。
+> 仓库另有严格 `fixture-only` 的 Unix-socket calibration 实现这些 IR/control 的 local
+> 组合验证，但它没有接入本 LangGraph slice，不能补足上述 target-side 缺口。
+> 因此本文件中的 `residual` 不应追写为 `REBOUND`、hazard 或漏洞。规范见
+> [RECOVERY_HAZARD_FUZZING.md](RECOVERY_HAZARD_FUZZING.md)。
+
 本文以目前唯一一条已完整跑通的 LangGraph 路径为主线，解释 SyncFuzz v2 到底在做什么、每一个 artifact 代表什么、已经证明了什么，以及还没有证明什么。它是明天汇报当前开发进度的技术底稿，而不是论文实验结果表。
 
 ## 1. 一句话结论
@@ -86,12 +100,12 @@ historical recovery:    <A_C, O_H>, where C < H
 目标实验对一个 frontier `(C_i,C_{i+1}]` 产生三个 controls：
 
 ```text
-Q_before = <seed, H, C_i,     retain relevant OS state, W, mechanism>
-Q_after  = <seed, H, C_{i+1}, retain relevant OS state, W, mechanism>
-Q_head   = <seed, H, H,       retain relevant OS state, W, mechanism>
+Q_before = <seed, H, C_i,     retain relevant OS state, Obs, mechanism>
+Q_after  = <seed, H, C_{i+1}, retain relevant OS state, Obs, mechanism>
+Q_head   = <seed, H, H,       retain relevant OS state, Obs, mechanism>
 ```
 
-其中 historical checkpoint cut 是唯一 discovery 变量。任务、模型、容器镜像、目标 adapter、retention policy、被动观察方式和 recorded plan 必须保持一致。当前 LangGraph V3 vertical slice 已实现 `Q_before/Q_after/Q_head`，并将 materialization head、retention policy 与 source-runtime lease 写入 `HistoricalRecoverySet`；下文涉及仅有 `RecoveryPair` 的描述均指历史 V2 baseline。
+在本文这个固定 recovery control bundle 内，historical checkpoint cut 是唯一变化项。任务、模型、容器镜像、目标 adapter、retention policy、被动观察方式和 recorded plan 必须保持一致。当前 LangGraph V3 vertical slice 已实现 `Q_before/Q_after/Q_head`，并将 materialization head、retention policy 与 source-runtime lease 写入 `HistoricalRecoverySet`；下文涉及仅有 `RecoveryPair` 的描述均指历史 V2 baseline。新的全局 Fuzzer 则会在不同 case 间变异 `E` 与 `Σ`，而不是把它们混进本组 control。
 
 默认 recovery 是 pure-passive：exact restore 后不向 Agent 追加 user turn，只做固定
 passive observation。若研究问题要求验证恢复后的 Agent 如何继续响应一个正常输入，
@@ -613,7 +627,7 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 3. **同一 clock domain。**eBPF effect、controller checkpoint 和 LangGraph durable `put` 都以 `CLOCK_MONOTONIC` 连接。
 4. **binding 必须严格包围 effect window。**before native save 必须早于第一个 required effect；after native save 必须晚于最后一个 required effect。
 5. **旧 native ID 只作 provenance。**fresh runtime 只能通过 structural coordinate 唯一解析自己的新 ID。
-6. **historical cut 是唯一 discovery 变量。**同一 seed、head、frontier、task、model、image、recorded plan、retention policy、passive observation；当前 before/after 子集只改变 checkpoint coordinate。
+6. **当前 control bundle 内 historical cut 是唯一变化项。**同一 seed、head、frontier、task、model、image、recorded plan、retention policy、passive observation；当前 before/after/head set 只改变 checkpoint coordinate。V3 全局搜索会在 bundle 之间变异 `EnvironmentProgram E` 与 `RecoveryPlan Σ`，但不能破坏本组归因条件。
 7. **每条 query 都是 fresh runtime。**before/after/head 不能复用 container、workspace 或 runtime ID；跨 query 比较的是可比的 head materialization，不是同一物理 OS instance。
 8. **query 内保留 residue。**同一 query 的 initial 与 fresh-resume process 留在同一 container/workspace，以便构造 `<A_C,O_H^(q)>`，检查 logical recovery 没有回滚的 OS state。
 9. **被动观察不改状态。**pure-passive 路径中的 `lstat` 既不建连也不调用 Agent
@@ -630,9 +644,9 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 4. **StateSeed 具有可追溯来源。**它能回溯到 objective、candidate、profile run、native runtime、frontier 与 recorded plan。
 5. **能把 OS effect frontier 映射到框架原生恢复点。**映射依赖 monotonic durable-save timestamp，不依赖 checkpoint 名字或 list order。
 6. **能在新的 runtime 中恢复唯一匹配的 structural checkpoint shape。**旧 native ID 没有被错误复用；fresh runtime 中完成唯一 coordinate resolution。该 shape 不是完整 logical-state equivalence claim。
-7. **成对恢复的隔离条件已实际执行。**before / after 为两个独立 container，且每个 query 都有恢复实例证据。
-8. **结果解释能保守收敛。**当前 observation 不足时返回 `inconclusive`，不把“看似残留”写成确认漏洞。
-9. **当前 before/after 是 historical-cut 核心子集。**它尚未包含 `Q_head`，也未把 materialization head / retention policy 写成一等 artifact 字段。
+7. **三条 recovery control 的隔离条件已实际执行。**before / after / head 使用三个独立 runtime instance，且每条 query 都有恢复实例证据。
+8. **静态 relation 能保守收敛。**本 live calibration 的向量是 before=`residual`、after/head=`consistent`；它说明 V2 的 A/O evidence/recovery contract，而非 target-side `U'` 或漏洞。
+9. **materialization head、retention policy 与 `Q_head` 已是一等 artifact。**它们排除了“仅有 before/after pair”时无法定位的 no-rollback 混淆；clean counterfactual 与 typed use evidence 仍未接入本 slice。
 
 ## 13. 这条闭环没有证明什么
 
@@ -640,7 +654,7 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 
 | 不能宣称 | 原因 |
 |---|---|
-| “已经发现了 LangGraph 漏洞” | 最终结果是 `inconclusive`，没有满足完整 verdict evidence。 |
+| “已经发现了 LangGraph 漏洞” | static relation 是 `residual -> consistent -> consistent`，但没有 target-side typed `U'`、clean counterfactual 或 contract interpretation。 |
 | “SyncFuzz 已自动合成自然任务” | 本次 candidate 是 `manual-langgraph-baseline-v1`，尚无 generator success-rate 实验。 |
 | “覆盖了 IPC / OS 状态面” | 一个 validated seed 不是 family coverage；还需 objective / effect / frontier / outcome ledger。 |
 | “eBPF detector 的全局 precision / recall 已知” | 现有 calibration audit 仅是 fixture-scoped known-answer 检查。 |
@@ -648,27 +662,27 @@ runs/langgraph-v2.4/manual-baseline/native-timing/
 | “fresh runtime 已恢复完整语义等价的 Agent state” | 当前 coordinate 的可执行匹配键是 `message_count + next`，旧 ID / history index 只作 provenance；本 run 中它唯一，但不是完整 state hash。后续应增强 coordinate 或增加 semantic consistency validation。 |
 | “socket 元数据存在等于服务可用或可利用” | `lstat` 只证明 endpoint metadata，不证明 listener health、peer behavior 或安全影响。 |
 | “controller 观察点可直接恢复 Agent” | 恰恰相反；恢复依赖 LangGraph native durable checkpoints。 |
-| “当前 pair 已证明 head fork / no-rollback control” | 当前只有 frontier 前/后两个 cut；`Q_head` 尚未执行。 |
-| “before/after 共享同一个物理 OS head” | 两条 query 使用独立 container；当前只固定 materialization plan，尚未显式验证 head-state equivalence contract。 |
+| “legacy V2 pair 已证明 head fork / no-rollback control” | 旧 pair artifact 只有 frontier 前/后两个 cut；当前 live recovery **set** 已单独执行 `Q_head`，两者不能混用。 |
+| “三个 control 共享同一个物理 OS head” | 三条 query 是独立 recovery runtime；它们由同一 retained-source contract 与 head evidence 保证可比，而不是跨 query 传递一个物理 OS instance。 |
 
 ## 14. 当前最直接的技术缺口
 
-当前代码已把 historical checkpoint recovery 的 `H`、OS retention policy 与 retained source runtime 从隐含执行行为变成可审计 contract；`runs/langgraph-v3/live-calibration-003` 已以 distinct native head 完成 V3 privileged calibration。下一步是 full-vs-pruned probe fidelity 与更多 objective family，而不是扩大 prompt mutation。
+当前代码已把 historical checkpoint recovery 的 `H`、OS retention policy 与 retained source runtime 从隐含执行行为变成可审计 contract；`runs/langgraph-v3/live-calibration-003` 已以 distinct native head 完成 V3 privileged calibration。它是新路线的恢复底座。仓库现已增加 Unix-socket `EnvironmentProgram` materialization/native-plan lock 与 gated recovery-time `connect -> listener role-tagged completed-exchange` collector；下一步是对真实 target 完成该链路的验证、identity adapter 与 clean controls。full-vs-pruned probe fidelity 继续作为该 observer 的校准要求。
 
 优先工作应是：
 
-1. 用新的 retained-runtime distinct-head LangGraph profile 实际执行 `Q_before/Q_after/Q_head`；只有 `Q_head=consistent` 时才允许解释 before/after 差异。
-2. 完成 Unix listener holder probe 的 privileged calibration：验证 source container lease、`/proc/net/unix` 的 exact socket ID 与唯一 holder FD 都可在三个 independent recovery runtime 中读取。任何主动协议交互仍必须作为新的、明确命名的 observation contract，而不能替换该只读 probe。
-3. 把该 probe 与 head-equivalence check 的 full-vs-pruned fidelity 加入校准，验证优化观察面不会改变 verdict。
-4. 给 MAF adapter 增加 distinct native head binding 后再接入 set executor；在此之前它只能运行兼容 `RecoveryPair`。
-5. 在多个 objective 与 state family 上重复这条闭环，并用随机 / 非-frontier historical cut 作对照，测量 frontier guidance 是否真的提高有效 A/O relation / localization 产出。
-6. 再引入外部 generator 的多次 synthesis 评估：生成成功率、持久性、head retention、seed retention 和 coverage increment。
+1. 将 fixture-only Unix-socket `EnvironmentProgram E` 作为 graph-authorized topology 注入 LangGraph target，并在 collector 启动后 materialize，得到 target cgroup 的 `W`、frontier 和 head-persistence evidence。
+2. 以真实 target run 验证每个 fresh recovery container 的 gated `connect -> active listener completed-exchange` collector，并将 target-side run-local identity 与 semantic identity 接入 `RecoveryHazardReport`；不能用 generic continuation 或 fixture response 代替 `U'`。
+3. 为同一 native recovery set 加入 clean-OS / clean-environment counterfactual，和已有 before/after/head static controls 组成完整 five-control bundle。
+4. 将 full-vs-pruned fidelity 扩展到上述 target-side observer，确认优化观察面不会改变 relation 或 dependency verdict。
+5. 随后实现 `E/Σ` scheduler、coverage ledger 与稳定性 gate；再在多个 workload/state family 上重复，才评估 guidance 相对随机或枚举 baseline 的收益。
+6. 在 target integration 稳定后，再做外部 generator 的多次 synthesis 评估：生成成功率、持久性、head retention、seed retention 和 coverage increment。
 
 ## 15. 汇报时推荐的表述
 
 可以将当前进度概括为：
 
-> 我们已经完成了第一条真实 LangGraph V3 vertical slice：从一个状态目标出发，在实际 Agent shell 执行中由 eBPF 和 probe 确认 Unix listener 的持久 effect，自动定位 effect 两侧的 frontier，并用同一 monotonic clock 将该 frontier 映射到 LangGraph 原生 durable checkpoints。`runs/langgraph-v3/live-calibration-003` 以 materialization head、`retain-relevant-os-state` 和 before/after/head controls 完成恢复：before 为 `residual`，after/head 为 `consistent`，listener multiplicity 为 `single`。这不是漏洞结论，且手工 candidate 不构成 generator 或 coverage 结果。
+> 我们已经完成了第一条真实 LangGraph **V2 recovery substrate** vertical slice：从一个状态目标出发，在实际 Agent shell 执行中由 eBPF 和 probe 确认 Unix listener 的持久 effect，自动定位 effect 两侧的 frontier，并用同一 monotonic clock 将该 frontier 映射到 LangGraph 原生 durable checkpoints。`runs/langgraph-v3/live-calibration-003` 以 materialization head、`retain-relevant-os-state` 和 before/after/head controls 完成恢复：before 为 `residual`，after/head 为 `consistent`，listener multiplicity 为 `single`。这不是漏洞结论，且手工 candidate 不构成 generator 或 coverage 结果。environment-structured V3 现已在此底座旁接入 target `E` materialization/native-plan lock 与受限 recovery-use collector；仍未完成真实 target five-control 闭环。
 
 如果被追问“为什么不直接把 before 的 `agent absent / socket present` 当作漏洞”，回答应是：
 
@@ -926,13 +940,13 @@ GOCACHE=/tmp/syncfuzz-go-cache go run ./cmd/syncfuzz recovery execute \
 | 既定任务 | 本闭环给出的进展 |
 |---|---|
 | 根因分析 | 不在本路线扩展；已有 case study / calibration 可复用。 |
-| Mutator | 已明确替换为 state-objective-driven task synthesis 与 historical checkpoint cut；本例展示了其当前 before/after 子集。 |
-| Oracle / Contract 自动化 | 尚未完成；当前有 deterministic A/O classifier，但不等于自动 contract generation。 |
-| Violation / Seed 分类 | `StateObjective`、validated `StateSeed`、frontier 与 coverage IR 已提供新的分类基础。 |
+| Mutator | 本快照只展示 V2 的 task synthesis 与 historical-cut control；当前主线改为 typed `EnvironmentProgram E` 与 `RecoveryPlan Σ` mutation，尚未在本 slice 实现。 |
+| Oracle / Contract 自动化 | 尚未完成；当前有 deterministic static A/O classifier。V3 还需 recovery-time typed `U'` dependence / hazard evidence，仍不等于自动 contract generation。 |
+| Violation / Seed 分类 | `StateObjective`、validated `StateSeed`、frontier 与 relation IR 是 V2 基础；V3 将额外记录 binding/recovery/dependency/hazard coverage。 |
 | eBPF 引入 | 已是本闭环的核心发现信号，并与 probe 形成 identity-linked evidence。 |
 
 ## 19. 最终定位
 
 这条 LangGraph 闭环应被看作 SyncFuzz v2 的**reference vertical slice**：它覆盖了方法论中最容易被混淆的接口——OS effect、controller evidence、framework-native checkpoint、fresh recovery runtime 和最终 differential classification——并对每个接口设置了拒绝错误捷径的规则。方法的中心不是 fork API，而是对 retained OS head state 的 historical checkpoint cut。
 
-下一阶段不是再堆叠手写 mutation，而是让这条闭环在更强 probe 和更多 objective 上产生可以比较、可以量化、可以写进论文的证据。
+下一阶段不是再堆叠手写 mutation，而是在这条闭环之上实现结构化的 `E/Σ` 搜索和恢复期 `U'` 依赖证据；只有后者与 clean/ablation controls 共同成立，才可能形成可比较、可量化的 realized-hazard 结果。

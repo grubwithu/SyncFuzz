@@ -6,7 +6,7 @@ SyncFuzz 把前期关于 Agent、OS、安全边界、事务语义和主动漏洞
 
 本项目不优先构建新的 Agent Transaction 防御系统，而是主动攻击现有 Agent runtime 的 lifecycle 语义，寻找 checkpoint、retry、cancel、replay、fork、timeout、crash、resume 过程中出现的状态裂缝。
 
-可执行的当前路线与术语以 [RESEARCH_PLAN.md](RESEARCH_PLAN.md) 为准；本文只做定位与边界说明。
+可执行的当前路线与术语以 [RESEARCH_PLAN.md](RESEARCH_PLAN.md) 为准；[RECOVERY_HAZARD_FUZZING.md](RECOVERY_HAZARD_FUZZING.md) 是当前 V3 设计规范。本文只做定位与边界说明。
 
 ## 核心观察
 
@@ -31,22 +31,23 @@ SyncFuzz 优先回答一个可实验的问题（与 [RESEARCH_PLAN.md](RESEARCH_
 
 ## 当前路线
 
-新闭环为：
+当前的高层输入为：
 
 ```text
-State Objective
-  -> task synthesis
-  -> profiling execution
-  -> eBPF + state-probe validation
-  -> executable StateSeed
-  -> checkpoint-effect frontier mining
-  -> historical checkpoint recovery set (before / after / head)
-  -> differential A/O classification
+X = <Workload, EnvironmentProgram E, RecoveryPlan Σ>
 ```
 
-它包含两个相互独立、按顺序运行的搜索器：**State Fuzzer** 为未覆盖的 OS 状态目标合成自然任务并只保留经真实执行验证的 StateSeed；**Historical Checkpoint Recovery Fuzzer** 围绕已观测持久 OS 状态变化选 historical cut，在固定 OS retention policy 下测 frontier 前、frontier 后与 logical head。`fork` / `rewind` / `replay` 是 adapter mechanism 而非 discovery 维度。完整术语、IR、里程碑与迁移边界见 [RESEARCH_PLAN.md](RESEARCH_PLAN.md)。
+其中 `Workload` 是经稳定性 gate 后冻结的正常任务对；`E` 是高频变异、可实际 materialize 的 typed resource-binding graph；`Σ` 是高频选择的 historical recovery plan。研究目标是形成可审计链：
 
-状态基底按 state family 划分：`Namespace | Process | Handle/Capability | IPC | Execution Context | Metadata/Security`。当前主攻方向是 open FD、Unix socket、authority cache 这类仍携带安全能力的残留状态，而不是继续堆叠更多文件对象类型。
+```text
+W -> R(C,H) -> U'
+```
+
+`W` 是一次已验证的 write/bind/capability-formation effect，`R(C,H)` 是保留 head OS state 的历史逻辑恢复，`U'` 是恢复后 Agent 正常工作中对资源的 typed resolve/use。这将“有静态 residue”与“恢复后的 Agent 真的依赖了 divergent object”分开。
+
+已实现的 V2 闭环仍是必要底座：`StateObjective -> task synthesis -> profiling -> eBPF + state probe -> StateSeed -> frontier -> before/after/head recovery -> static A/O relation`。`fork` / `rewind` / `replay` 是 adapter mechanism 而非 discovery 维度。当前首先聚焦 Unix socket：已有一个 **fixture-only** 的 `EnvironmentProgram` materializer、run-local/semantic identity、`RecoveryUsePlan`、local `resolve -> connect -> I/O` 与 five-control hazard classifier；它只校准 IR 和判定逻辑，不能写成 LangGraph target 的 `U'`、finding 或 coverage。LangGraph profile 现可在首个 durable checkpoint 后于 target cgroup 内 materialize child-holder `E` 并保存 provenance；这还不是 eBPF frontier/head admission。target-side recovery-time eBPF trace 与 hazard scheduler 仍待实现。
+
+状态基底按 state family 划分：`Namespace | Process | Handle/Capability | IPC | Execution Context | Metadata/Security`。V3 先从 Unix socket 的 name-to-listener binding 做窄而可审计的实例，再扩展到 executable resolution、FD/capability 或 context resource family。
 
 ## 历史基线
 
@@ -56,23 +57,24 @@ State Objective
 
 ## 研究校准
 
-> **观测到 residue，并不自动等于观测到漏洞。**
+> **观测到 static residue，并不自动等于 observed hazard，更不自动等于漏洞。**
 
-有些 residue 只是 runtime 的既定持久化语义；有些才是 replay / fork / discard / resume 的 lifecycle contract 被破坏；还有一些即使存在，也要等后续 trusted execution 消费之后才变成真正的安全后果。因此真实 target 结果分三层：
+有些 residue 只是 runtime 的既定持久化语义；有些才是 replay / fork / discard / resume 的 lifecycle contract 被破坏；还有一些即使存在，也要等后续可信执行消费之后才变成真正的安全后果。因此真实 target 结果分四层：
 
-1. residue evidence：有没有真实状态残留、分叉或干净负结果；
-2. contract interpretation：它是否违反 target 的恢复/分叉契约；
-3. activation consequence：它是否会被后续可信执行激活成安全后果。
+1. static A/O relation：有没有真实状态残留、分叉或干净负结果；
+2. typed recovery dependence：恢复后的 Agent 是否实际 resolve/use 该对象（`U'`）；
+3. contract interpretation：它是否违反 target 的恢复/分叉契约；
+4. activation consequence：它是否会被后续可信执行激活成安全后果。
 
-框架主线优先负责前两层；第三层只做少量高价值验证实验，不把 exploit generation 变成主任务。Recovery Contract（按 target 记录 graph state 与各 OS state surface 在 lifecycle edge 上应 `preserve` / `reset` / `unspecified`）作为后续独立工作，其设计与 recovery semantics 见 [RESEARCH_PLAN.md](RESEARCH_PLAN.md) §9。
+V3 首先负责前两层；后两层分别需要 contract 与更高层影响证据。它不把任意外部 consequence 或 exploit generation 作为主搜索任务。Recovery Contract（按 target 记录 graph state 与各 OS state surface 在 lifecycle edge 上应 `preserve` / `reset` / `unspecified`）仍是独立工作，其设计与 recovery semantics 见 [RESEARCH_PLAN.md](RESEARCH_PLAN.md) §9。
 
 ## 路线校准
 
 当前路线保持在主动漏洞挖掘主线上，没有滑向通用防御系统或 prompt benchmark。判断依据是：
 
-- 每个 StateSeed 都有明确攻击者可控状态原语，而不是只测试模型是否“听话”；
+- 每个候选 `<Workload,E,Σ>` 都有可审计的 resource-binding mutation 与历史恢复，而不是只测试模型是否“听话”；
 - 每个发现都围绕 Agent lifecycle 语义：checkpoint、replay、rollback、fork、discard 或 persistent runtime；
-- 每个 oracle 都基于确定性 A/O 状态差分，而不是 LLM judge；
+- 每个 verdict 都基于确定性 A/O relation 或 typed dependency evidence，而不是 LLM judge；
 - 每个结果都输出可复现 artifact、mismatch signature 和 manifest。
 
 因此，SyncFuzz 当前阶段的目标不是轻率地证明某个 Agent “不安全”，而是先建立一组可复现实验，确保 runner、trace、snapshot、oracle 和 artifact 格式能稳定表达跨层 A/O 状态失同步现象，并进一步判断这些现象是否构成 lifecycle contract violation。

@@ -54,6 +54,10 @@ func main() {
 		profile(os.Args[2:])
 	case "recovery":
 		runRecovery(os.Args[2:])
+	case "hazard":
+		runHazard(os.Args[2:])
+	case "environment":
+		runEnvironment(os.Args[2:])
 	case "synthesis":
 		runSynthesis(os.Args[2:])
 	case "target":
@@ -81,6 +85,7 @@ Usage:
   syncfuzz fault-plans
   syncfuzz timing-profiles
   syncfuzz primitives [--include-planned]
+  syncfuzz environment unix-socket-program --out program.json --logical-name name --resolution-mode direct|config|environment|alias --endpoint-path service.sock --initial-role role --active-role role --holder-lifetime child
   syncfuzz matrix [--cases orphan-process,branch-leakage] [--timing baseline,tight,wide] [--include-planned]
   syncfuzz run --case orphan-process [--out runs] [--delay 1500ms] [--fault-plan <id>] [--primitive delayed-write] [--timing baseline] [--role fault] [--env local] [--container-image ubuntu:latest]
   syncfuzz pair --case orphan-process [--out runs] [--delay 1500ms] [--fault-plan <id>] [--primitive delayed-write] [--timing baseline] [--env local] [--container-image ubuntu:latest]
@@ -102,6 +107,8 @@ Usage:
   syncfuzz recovery relation-novelty [--reports report-a.json,report-b.json | --fidelity-batch runs/<batch>] [--ledger relation-novelty-ledger.json] --out relation-novelty-ledger.json
   syncfuzz recovery fidelity-report --roots runs/<trial-a>,runs/<trial-b> --out fidelity-report.json
   syncfuzz recovery fidelity-batch-report --root runs/<batch> --target-accepted-trials 3 --max-attempts 6 --out fidelity-report.json
+  syncfuzz hazard unix-socket-calibration [--workspace <scratch-dir>] [--timeout 30s] --out runs/v3-unix-socket-calibration.json
+  syncfuzz hazard langgraph-target-report --candidate candidate.json --base-project-id <id> --runner-constraints <frozen-constraints> --tainted-seed state-seed.json --tainted-set historical-recovery-set.json --tainted-execution recovery-set-execution.json --tainted-program tainted-environment.json [--tainted-materialization environment-materialization.json] --clean-seed state-seed.json --clean-set historical-recovery-set.json --clean-execution recovery-set-execution.json --clean-program clean-environment.json [--clean-materialization environment-materialization.json] --out recovery-hazard-report.json
   syncfuzz synthesis schedule --objectives objective-a.json,objective-b.json [--coverage-ledger coverage.json] [--relation-novelty-ledger relation-novelty-ledger.json] [--limit 0] --out schedule.json
   syncfuzz synthesis generate --objective objective.json --target <target-id> --adapter <adapter-id> --scaffold <scaffold-artifact> --generator-id <id> --generator-command '<command>' [--attempt 0] [--feedback candidate-evaluation.json] --out candidate.json
   syncfuzz synthesis execute-langgraph --objective objective.json --candidate candidate.json --allow-network --retain-runtime [--container-image syncfuzz-langgraph:dev] [--out runs/langgraph-candidate-execution.json] [--out-profile-run profile-run.json]
@@ -112,6 +119,7 @@ Usage:
   syncfuzz synthesis statefuzz-relation-batch-report --objective objective.json --root runs/<batch> --out statefuzz-relation-batch-report.json
   syncfuzz synthesis promote --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --out state-seed.json
   syncfuzz synthesis bind-maf-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after --manifest maf-workflow-fork-manifest.json --python python3 --runner targets/maf_workflow_checkpoint/run_target.py --prepared-workspace prepared --runtime-root forks --out-plan maf-fork-plan.json --out-profile-run bound-profile-run.json --out-binding native-frontier-binding.json
+  syncfuzz synthesis select-langgraph-environment-frontier --profile-run profile-run.json [--format text|id]
   syncfuzz synthesis bind-langgraph-frontier --objective objective.json --candidate candidate.json --profile-run profile-run.json --frontier before..after [--lifecycle langgraph-lifecycle.json] [--workspace-file-path agent-result.txt] --manifest langgraph-native-checkpoints.json --out-binding langgraph-native-frontier-binding.json
   syncfuzz synthesis prepare-langgraph-fork --objective objective.json --candidate candidate.json --profile-run profile-run.json --binding langgraph-native-frontier-binding.json --model provider:model --container-image syncfuzz-langgraph:dev --runtime-root recovery-runtimes [--passive-unix-socket-path agent.sock | --passive-workspace-file-path agent-result.txt] [--continuation-query 'continue current task'] --out-plan langgraph-fork-plan.json --out-profile-run bound-profile-run.json
   syncfuzz synthesis release-langgraph-runtime --profile-run profile-run.json
@@ -460,7 +468,7 @@ func recoveryClassifyRelation(args []string) {
 
 func runSynthesis(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "syncfuzz synthesis requires a subcommand; supported: schedule, generate, execute-langgraph, evaluate, evaluation-status, statefuzz-attempt-status, statefuzz-batch-report, statefuzz-relation-batch-report, promote, bind-maf-frontier, bind-langgraph-frontier, prepare-langgraph-fork, release-langgraph-runtime")
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis requires a subcommand; supported: schedule, generate, execute-langgraph, evaluate, evaluation-status, statefuzz-attempt-status, statefuzz-batch-report, statefuzz-relation-batch-report, promote, bind-maf-frontier, select-langgraph-environment-frontier, bind-langgraph-frontier, prepare-langgraph-fork, release-langgraph-runtime")
 		os.Exit(2)
 	}
 	switch args[0] {
@@ -484,6 +492,8 @@ func runSynthesis(args []string) {
 		synthesisPromote(args[1:])
 	case "bind-maf-frontier":
 		synthesisBindMAFFrontier(args[1:])
+	case "select-langgraph-environment-frontier":
+		synthesisSelectLangGraphEnvironmentFrontier(args[1:])
 	case "bind-langgraph-frontier":
 		synthesisBindLangGraphFrontier(args[1:])
 	case "prepare-langgraph-fork":
@@ -494,6 +504,34 @@ func runSynthesis(args []string) {
 		fmt.Fprintf(os.Stderr, "unknown syncfuzz synthesis subcommand %q\n", args[0])
 		os.Exit(2)
 	}
+}
+
+func synthesisSelectLangGraphEnvironmentFrontier(args []string) {
+	fs := flag.NewFlagSet("synthesis select-langgraph-environment-frontier", flag.ExitOnError)
+	profileRunPath := fs.String("profile-run", "", "completed LangGraph synthesis ProfileRun JSON path")
+	format := fs.String("format", "text", "output format: text or id")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if strings.TrimSpace(*profileRunPath) == "" || (*format != "text" && *format != "id") {
+		fmt.Fprintln(os.Stderr, "syncfuzz synthesis select-langgraph-environment-frontier requires --profile-run and --format text|id")
+		os.Exit(2)
+	}
+	profileRun, err := objective.ReadProfileRun(*profileRunPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis select-langgraph-environment-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	frontierID, err := synthesis.SelectLangGraphEnvironmentFrontier(profileRun)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "syncfuzz synthesis select-langgraph-environment-frontier failed: %v\n", err)
+		os.Exit(1)
+	}
+	if *format == "id" {
+		fmt.Println(frontierID)
+		return
+	}
+	fmt.Printf("frontier_id: %s\n", frontierID)
 }
 
 func synthesisReleaseLangGraphRuntime(args []string) {
@@ -835,6 +873,8 @@ func synthesisExecuteLangGraph(args []string) {
 	observeDelay := fs.Duration("observe-delay", 500*time.Millisecond, "post-command state-probe delay")
 	allowNetwork := fs.Bool("allow-network", false, "explicitly allow the isolated target container to call its configured model provider")
 	retainRuntime := fs.Bool("retain-runtime", false, "retain the profiled container for live OS-state recovery; release it after recovery")
+	environmentProgramPath := fs.String("environment-program", "", "validated EnvironmentProgram JSON to materialize between the initial task and a profiling follow-up")
+	profileFollowupQuery := fs.String("profile-followup-query", "", "normal user turn issued after environment materialization during profiling")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -852,6 +892,19 @@ func synthesisExecuteLangGraph(args []string) {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis execute-langgraph failed: %v\n", err)
 		os.Exit(1)
 	}
+	var environmentProgram *environment.EnvironmentProgram
+	if strings.TrimSpace(*environmentProgramPath) != "" {
+		program, err := environment.ReadEnvironmentProgram(*environmentProgramPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "syncfuzz synthesis execute-langgraph failed: %v\n", err)
+			os.Exit(1)
+		}
+		environmentProgram = &program
+		if strings.TrimSpace(*profileFollowupQuery) == "" {
+			fmt.Fprintln(os.Stderr, "syncfuzz synthesis execute-langgraph failed: --environment-program requires --profile-followup-query")
+			os.Exit(2)
+		}
+	}
 	providerEnvironment := make(map[string]string)
 	for _, key := range []string{"LANGCHAIN_MODEL", "OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY"} {
 		if value := os.Getenv(key); value != "" {
@@ -865,13 +918,15 @@ func synthesisExecuteLangGraph(args []string) {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout+30*time.Second)
 	defer cancel()
 	execution, err := synthesis.ExecuteLangGraphCandidate(ctx, stateObjective, candidate, synthesis.LangGraphExecutionConfig{
-		OutDir:              filepath.Dir(*outPath),
-		ContainerImage:      *containerImage,
-		Timeout:             *timeout,
-		ObserveDelay:        *observeDelay,
-		AllowNetwork:        *allowNetwork,
-		RetainRuntime:       *retainRuntime,
-		ProviderEnvironment: providerEnvironment,
+		OutDir:               filepath.Dir(*outPath),
+		ContainerImage:       *containerImage,
+		Timeout:              *timeout,
+		ObserveDelay:         *observeDelay,
+		AllowNetwork:         *allowNetwork,
+		RetainRuntime:        *retainRuntime,
+		ProviderEnvironment:  providerEnvironment,
+		EnvironmentProgram:   environmentProgram,
+		ProfileFollowupQuery: *profileFollowupQuery,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "syncfuzz synthesis execute-langgraph failed: %v\n", err)

@@ -43,6 +43,14 @@ func CaptureLangGraphWorkspaceFileSnapshot(sourceWorkspace, passiveWorkspaceFile
 // its topology in one pass before recovery begins. The topology is returned on
 // a contract violation so callers can persist a structured rejection artifact.
 func CaptureLangGraphWorkspaceSnapshotForContract(sourceWorkspace string, contract LangGraphRetainedResourceContract) (LangGraphWorkspaceSnapshot, LangGraphWorkspaceTopology, error) {
+	return CaptureLangGraphWorkspaceSnapshotForContractWithEphemeralArtifacts(sourceWorkspace, contract, nil)
+}
+
+// CaptureLangGraphWorkspaceSnapshotForContractWithEphemeralArtifacts freezes
+// the logical workspace while excluding controller-authorized append-only
+// observer channels from its digest and clone. Those channels remain on the
+// retained source runtime and are read only as recovery evidence.
+func CaptureLangGraphWorkspaceSnapshotForContractWithEphemeralArtifacts(sourceWorkspace string, contract LangGraphRetainedResourceContract, ephemeralArtifacts []string) (LangGraphWorkspaceSnapshot, LangGraphWorkspaceTopology, error) {
 	workspace, err := filepath.Abs(strings.TrimSpace(sourceWorkspace))
 	if err != nil {
 		return LangGraphWorkspaceSnapshot{}, LangGraphWorkspaceTopology{}, fmt.Errorf("resolve LangGraph source workspace: %w", err)
@@ -75,7 +83,11 @@ func CaptureLangGraphWorkspaceSnapshotForContract(sourceWorkspace string, contra
 	if !ok || stat.Ino == 0 {
 		return LangGraphWorkspaceSnapshot{}, topology, fmt.Errorf("retained LangGraph resource %s lacks inode metadata", resourcePath)
 	}
-	workspaceDigest, err := digestWorkspaceTree(workspace, contract.WorkspaceRelativePath)
+	exclusions, err := langGraphSnapshotExclusions(workspace, contract.WorkspaceRelativePath, ephemeralArtifacts)
+	if err != nil {
+		return LangGraphWorkspaceSnapshot{}, topology, err
+	}
+	workspaceDigest, err := digestWorkspaceTreeWithExclusions(workspace, exclusions)
 	if err != nil {
 		return LangGraphWorkspaceSnapshot{}, topology, err
 	}
@@ -99,6 +111,10 @@ func CaptureLangGraphWorkspaceSnapshotForContract(sourceWorkspace string, contra
 		snapshot.PassiveUnixSocketDevice = uint64(stat.Dev)
 		snapshot.PassiveUnixSocketInode = uint64(stat.Ino)
 		snapshot.PassiveUnixSocketMode = uint32(resourceInfo.Mode().Perm())
+	}
+	snapshot.EphemeralObserverArtifacts = append([]string(nil), ephemeralArtifacts...)
+	if err := snapshot.Validate(); err != nil {
+		return LangGraphWorkspaceSnapshot{}, topology, err
 	}
 	return snapshot, topology, nil
 }
@@ -202,15 +218,18 @@ func (s LangGraphWorkspaceSnapshot) VerifySource() error {
 		actual LangGraphWorkspaceSnapshot
 		err    error
 	)
+	contract, contractErr := NewLangGraphRetainedResourceContract(LangGraphRetainedWorkspaceFile, s.PassiveWorkspaceFilePath)
 	if s.PassiveUnixSocketPath != "" {
-		actual, err = CaptureLangGraphWorkspaceSnapshot(s.SourceWorkspace, s.PassiveUnixSocketPath)
-	} else {
-		actual, err = CaptureLangGraphWorkspaceFileSnapshot(s.SourceWorkspace, s.PassiveWorkspaceFilePath)
+		contract, contractErr = NewLangGraphRetainedResourceContract(LangGraphRetainedUnixSocket, s.PassiveUnixSocketPath)
 	}
+	if contractErr != nil {
+		return contractErr
+	}
+	actual, _, err = CaptureLangGraphWorkspaceSnapshotForContractWithEphemeralArtifacts(s.SourceWorkspace, contract, s.EphemeralObserverArtifacts)
 	if err != nil {
 		return err
 	}
-	if actual.WorkspaceSHA256 != s.WorkspaceSHA256 || actual.CheckpointStoreSHA256 != s.CheckpointStoreSHA256 || actual.PassiveUnixSocketDevice != s.PassiveUnixSocketDevice || actual.PassiveUnixSocketInode != s.PassiveUnixSocketInode || actual.PassiveUnixSocketMode != s.PassiveUnixSocketMode || actual.PassiveWorkspaceFileDevice != s.PassiveWorkspaceFileDevice || actual.PassiveWorkspaceFileInode != s.PassiveWorkspaceFileInode || actual.PassiveWorkspaceFileMode != s.PassiveWorkspaceFileMode {
+	if actual.WorkspaceSHA256 != s.WorkspaceSHA256 || actual.CheckpointStoreSHA256 != s.CheckpointStoreSHA256 || actual.PassiveUnixSocketDevice != s.PassiveUnixSocketDevice || actual.PassiveUnixSocketInode != s.PassiveUnixSocketInode || actual.PassiveUnixSocketMode != s.PassiveUnixSocketMode || actual.PassiveWorkspaceFileDevice != s.PassiveWorkspaceFileDevice || actual.PassiveWorkspaceFileInode != s.PassiveWorkspaceFileInode || actual.PassiveWorkspaceFileMode != s.PassiveWorkspaceFileMode || !sameStrings(actual.EphemeralObserverArtifacts, s.EphemeralObserverArtifacts) {
 		return fmt.Errorf("LangGraph source workspace no longer matches the recorded snapshot")
 	}
 	return nil
@@ -230,7 +249,11 @@ func (s LangGraphWorkspaceSnapshot) CloneTo(destination string) error {
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return err
 	}
-	entries, err := workspaceEntries(s.SourceWorkspace, s.PassiveResourcePath())
+	exclusions, err := langGraphSnapshotExclusions(s.SourceWorkspace, s.PassiveResourcePath(), s.EphemeralObserverArtifacts)
+	if err != nil {
+		return err
+	}
+	entries, err := workspaceEntriesWithExclusions(s.SourceWorkspace, exclusions)
 	if err != nil {
 		return err
 	}
@@ -277,7 +300,11 @@ type workspaceEntry struct {
 }
 
 func digestWorkspaceTree(root, excludedRelativePath string) (string, error) {
-	entries, err := workspaceEntries(root, excludedRelativePath)
+	return digestWorkspaceTreeWithExclusions(root, []string{excludedRelativePath})
+}
+
+func digestWorkspaceTreeWithExclusions(root string, exclusions []string) (string, error) {
+	entries, err := workspaceEntriesWithExclusions(root, exclusions)
 	if err != nil {
 		return "", err
 	}
@@ -308,6 +335,10 @@ func digestWorkspaceTree(root, excludedRelativePath string) (string, error) {
 }
 
 func workspaceEntries(root, excludedRelativePath string) ([]workspaceEntry, error) {
+	return workspaceEntriesWithExclusions(root, []string{excludedRelativePath})
+}
+
+func workspaceEntriesWithExclusions(root string, excludedRelativePaths []string) ([]workspaceEntry, error) {
 	root = filepath.Clean(root)
 	rootInfo, err := os.Lstat(root)
 	if err != nil {
@@ -316,9 +347,12 @@ func workspaceEntries(root, excludedRelativePath string) ([]workspaceEntry, erro
 	if !rootInfo.IsDir() {
 		return nil, fmt.Errorf("LangGraph workspace %s is not a directory", root)
 	}
-	excluded := filepath.Clean(excludedRelativePath)
-	if excluded == "." {
-		excluded = ""
+	excluded := make(map[string]struct{}, len(excludedRelativePaths))
+	for _, value := range excludedRelativePaths {
+		value = filepath.Clean(value)
+		if value != "." && value != "" {
+			excluded[value] = struct{}{}
+		}
 	}
 	entries := make([]workspaceEntry, 0)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -329,7 +363,7 @@ func workspaceEntries(root, excludedRelativePath string) ([]workspaceEntry, erro
 		if err != nil {
 			return err
 		}
-		if excluded != "" && relativePath == excluded {
+		if _, skip := excluded[relativePath]; skip {
 			return nil
 		}
 		info, err := entry.Info()
@@ -350,6 +384,21 @@ func workspaceEntries(root, excludedRelativePath string) ([]workspaceEntry, erro
 	}
 	sort.Slice(entries, func(left, right int) bool { return entries[left].relativePath < entries[right].relativePath })
 	return entries, nil
+}
+
+func langGraphSnapshotExclusions(workspace string, retainedPath string, ephemeralArtifacts []string) ([]string, error) {
+	exclusions := []string{filepath.Clean(retainedPath)}
+	for _, artifact := range ephemeralArtifacts {
+		artifact = filepath.Clean(strings.TrimSpace(artifact))
+		if artifact == "." || artifact == ".." || filepath.IsAbs(artifact) || strings.HasPrefix(artifact, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("invalid LangGraph ephemeral observer artifact %q", artifact)
+		}
+		if _, err := workspaceChild(workspace, artifact); err != nil {
+			return nil, err
+		}
+		exclusions = append(exclusions, artifact)
+	}
+	return exclusions, nil
 }
 
 func workspaceChild(root, relativePath string) (string, error) {

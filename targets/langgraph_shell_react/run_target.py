@@ -7,6 +7,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import socket
 import stat
 import subprocess
 import sys
@@ -293,6 +295,33 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print the runner compatibility contract and exit without initializing a model.",
     )
+    parser.add_argument(
+        "--environment-program-file",
+        default=os.environ.get("SYNCFUZZ_ENVIRONMENT_PROGRAM_FILE", "").strip(),
+        help="Controller-written EnvironmentProgram JSON. It is materialized only after the first durable native checkpoint.",
+    )
+    parser.add_argument(
+        "--environment-materialization-artifact",
+        default=os.environ.get(
+            "SYNCFUZZ_ENVIRONMENT_MATERIALIZATION_ARTIFACT", ""
+        ).strip(),
+        help="Controller-selected workspace-root target materialization artifact.",
+    )
+    parser.add_argument(
+        "--profile-followup-user-message",
+        default=os.environ.get("SYNCFUZZ_PROFILE_FOLLOWUP_USER_MESSAGE", ""),
+        help="Normal profiling-time user turn issued after environment materialization.",
+    )
+    parser.add_argument(
+        "--require-profile-followup-tool-use",
+        action="store_true",
+        help="Fail when the profiling follow-up returns without a shell tool result.",
+    )
+    parser.add_argument("--internal-unix-socket-listener", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--internal-listener-endpoint", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--internal-listener-role", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--internal-listener-ready", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--internal-listener-use-artifact", default="", help=argparse.SUPPRESS)
     parser.add_argument(
         "--internal-phase",
         choices=("full", "initial", "resume"),
@@ -2916,12 +2945,312 @@ def summarize_tool_calls(message: Any) -> list[dict[str, str]]:
     return summary
 
 
+def _safe_workspace_relative_path(value: str) -> Path:
+    path = Path(value)
+    if not value or path.is_absolute() or ".." in path.parts or str(path) in {"", "."}:
+        raise RuntimeError(f"environment program has unsafe workspace-relative path {value!r}")
+    return path
+
+
+def _write_json_exclusive(path: Path, value: Any) -> None:
+    encoded = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode("utf-8")
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError as exc:
+        raise RuntimeError(f"refusing to overwrite environment artifact {path}") from exc
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(encoded)
+
+
+def _write_text_exclusive(path: Path, value: str) -> None:
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError as exc:
+        raise RuntimeError(f"refusing to overwrite environment artifact {path}") from exc
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(value)
+
+
+def run_internal_unix_socket_listener(args: argparse.Namespace) -> int:
+    endpoint = Path(args.internal_listener_endpoint)
+    ready_path = Path(args.internal_listener_ready)
+    role = args.internal_listener_role.strip()
+    use_artifact = Path(args.internal_listener_use_artifact)
+    if not endpoint.is_absolute() or not ready_path.is_absolute() or not use_artifact.is_absolute() or not role:
+        raise SystemExit("internal Unix listener requires absolute endpoint, ready path, use artifact, and role")
+    if endpoint.exists() or endpoint.is_symlink():
+        raise SystemExit(f"internal Unix listener refuses existing endpoint {endpoint}")
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(str(endpoint))
+        listener.listen(16)
+        listener_fd = listener.fileno()
+        endpoint_stat = endpoint.lstat()
+        socket_stat = os.fstat(listener_fd)
+        socket_target = os.readlink(f"/proc/self/fd/{listener_fd}")
+        if not socket_target.startswith("socket:[") or not socket_target.endswith("]"):
+            raise RuntimeError("internal Unix listener could not resolve its kernel socket identity")
+        socket_id = "socket:" + socket_target[len("socket:[") : -1]
+        _write_json_exclusive(
+            ready_path,
+            {
+                "schema_version": "syncfuzz.environment-listener-ready.v1",
+                "pid": os.getpid(),
+                "role": role,
+                "endpoint": str(endpoint),
+                "endpoint_device": endpoint_stat.st_dev,
+                "endpoint_inode": endpoint_stat.st_ino,
+                "fd": listener_fd,
+                "socket_id": socket_id,
+                "socket_device": socket_stat.st_dev,
+                "socket_inode": socket_stat.st_ino,
+                "ready_monotonic_ns": time.monotonic_ns(),
+            },
+        )
+        while True:
+            connection, _ = listener.accept()
+            with connection:
+                # This is a bounded, normal local-health protocol, not an
+                # oracle: a consumer sends one request, receives a role tag,
+                # then acknowledges that response. The observer keeps only
+                # lengths/digests and never persists application payloads.
+                peer_pid = -1
+                try:
+                    credentials = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+                    peer_pid = int.from_bytes(credentials[:4], byteorder=sys.byteorder, signed=True)
+                except (AttributeError, OSError):
+                    pass
+                event = {
+                    "schema_version": "syncfuzz.environment-listener-use.v1",
+                    "monotonic_ns": time.monotonic_ns(),
+                    "role": role,
+                    "endpoint": str(endpoint),
+                    "peer_pid": peer_pid,
+                }
+                try:
+                    connection.settimeout(2.0)
+                    request = connection.recv(4096)
+                    if request:
+                        event["request_bytes"] = len(request)
+                        event["request_sha256"] = hashlib.sha256(request).hexdigest()
+                        connection.sendall(("syncfuzz-listener-role:" + role + "\n").encode("utf-8"))
+                        event["response_sent"] = True
+                        acknowledgement = connection.recv(128)
+                        event["response_acknowledged"] = acknowledgement == b"syncfuzz-health-ack\n"
+                    else:
+                        event["request_bytes"] = 0
+                        event["response_sent"] = False
+                        event["response_acknowledged"] = False
+                except (OSError, socket.timeout):
+                    event.setdefault("request_bytes", 0)
+                    event.setdefault("response_sent", False)
+                    event.setdefault("response_acknowledged", False)
+                with use_artifact.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n")
+    finally:
+        listener.close()
+
+
+class EnvironmentProgramMaterializer:
+    """Materializes the bounded V3 Unix-socket grammar in the target cgroup."""
+
+    def __init__(self, workspace: Path, program_file: str, artifact_file: str) -> None:
+        self.workspace = workspace.resolve()
+        self.program_file = Path(program_file).resolve() if program_file else None
+        self.artifact_file = Path(artifact_file).resolve() if artifact_file else None
+        self._lock = threading.Lock()
+        self._materialized = False
+        self._program: dict[str, Any] | None = None
+        self._source_checkpoint_id = ""
+
+    def enabled(self) -> bool:
+        return self.program_file is not None
+
+    def _workspace_path(self, relative: str) -> Path:
+        path = (self.workspace / _safe_workspace_relative_path(relative)).resolve()
+        if path.parent != self.workspace and self.workspace not in path.parents:
+            raise RuntimeError("environment program path escapes workspace")
+        return path
+
+    def _load_program(self) -> dict[str, Any]:
+        if self.program_file is None:
+            raise RuntimeError("environment materializer has no program file")
+        if self.program_file.parent != self.workspace:
+            raise RuntimeError("environment program must be a workspace-root controller artifact")
+        if self.artifact_file is None or self.artifact_file.parent != self.workspace:
+            raise RuntimeError("environment materialization artifact must be a workspace-root controller artifact")
+        try:
+            raw = json.loads(self.program_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"read environment program: {exc}") from exc
+        if not isinstance(raw, dict) or raw.get("schema_version") != "syncfuzz.environment-program.v1" or raw.get("family") != "unix-socket":
+            raise RuntimeError("target supports only syncfuzz.environment-program.v1 Unix socket programs")
+        program_id = str(raw.get("program_id", "")).strip()
+        binding = raw.get("unix_socket")
+        if not program_id or not isinstance(binding, dict):
+            raise RuntimeError("environment program lacks immutable ID or Unix socket binding")
+        if binding.get("holder_lifetime") != "child":
+            raise RuntimeError("target Unix socket materialization requires child holder lifetime")
+        mode = binding.get("resolution_mode")
+        if mode not in {"direct", "config", "alias"}:
+            raise RuntimeError("environment program declares unsupported Unix socket resolution mode")
+        for key in ("logical_name", "endpoint_path", "initial_role", "active_role"):
+            if not isinstance(binding.get(key), str) or not binding[key].strip():
+                raise RuntimeError(f"environment program lacks {key}")
+        if mode in {"config", "alias"}:
+            if not isinstance(binding.get("resolution_key"), str) or not binding["resolution_key"].strip() or not isinstance(binding.get("resolution_artifact_path"), str):
+                raise RuntimeError("indirect Unix socket program lacks resolution key or artifact")
+            _safe_workspace_relative_path(binding["resolution_artifact_path"])
+        _safe_workspace_relative_path(binding["endpoint_path"])
+        return raw
+
+    def _start_listener(self, endpoint: Path, role: str, suffix: str, use_artifact: Path) -> dict[str, Any]:
+        ready = self.workspace / f".syncfuzz-listener-{suffix}-{uuid.uuid4().hex}.json"
+        process = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "--internal-unix-socket-listener", "--internal-listener-endpoint", str(endpoint), "--internal-listener-role", role, "--internal-listener-ready", str(ready), "--internal-listener-use-artifact", str(use_artifact)],
+            cwd=str(self.workspace),
+            close_fds=True,
+        )
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if ready.exists():
+                try:
+                    record = json.loads(ready.read_text(encoding="utf-8"))
+                finally:
+                    ready.unlink(missing_ok=True)
+                if int(record.get("pid", -1)) != process.pid or record.get("role") != role or record.get("endpoint") != str(endpoint) or int(record.get("endpoint_inode", 0)) <= 0 or int(record.get("fd", -1)) < 0 or int(record.get("socket_inode", 0)) <= 0 or str(record.get("socket_id", "")) != "socket:" + str(int(record["socket_inode"])):
+                    process.terminate()
+                    raise RuntimeError("child listener ready record does not match requested identity")
+                return {
+                    "pid": process.pid,
+                    "role": role,
+                    "endpoint": str(endpoint),
+                    "endpoint_device": int(record["endpoint_device"]),
+                    "endpoint_inode": int(record["endpoint_inode"]),
+                    "fd": int(record["fd"]),
+                    "socket_id": str(record["socket_id"]),
+                    "socket_device": int(record["socket_device"]),
+                    "socket_inode": int(record["socket_inode"]),
+                    "ready_monotonic_ns": record.get("ready_monotonic_ns"),
+                }
+            if process.poll() is not None:
+                raise RuntimeError(f"child listener exited before ready (status={process.returncode})")
+            time.sleep(0.02)
+        process.terminate()
+        raise RuntimeError("child listener did not become ready")
+
+    def materialize_at_checkpoint(self, checkpoint_id: str, checkpoint_monotonic_ns: int) -> None:
+        if not self.enabled():
+            return
+        with self._lock:
+            if self._materialized:
+                return
+            program = self._load_program()
+            binding = program["unix_socket"]
+            endpoint = self._workspace_path(str(binding["endpoint_path"]))
+            if endpoint.exists() or endpoint.is_symlink():
+                raise RuntimeError(f"environment program refuses existing endpoint {endpoint}")
+            resolution_artifact = None
+            mode = binding["resolution_mode"]
+            if mode in {"config", "alias"}:
+                resolution_artifact = self._workspace_path(str(binding["resolution_artifact_path"]))
+                if mode == "config":
+                    _write_json_exclusive(resolution_artifact, {str(binding["resolution_key"]): str(binding["endpoint_path"])})
+                else:
+                    _write_text_exclusive(resolution_artifact, str(binding["endpoint_path"]) + "\n")
+            use_artifact_relative = "environment-use-events.jsonl"
+            use_artifact = self._workspace_path(use_artifact_relative)
+            try:
+                descriptor = os.open(use_artifact, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                os.close(descriptor)
+            except FileExistsError as exc:
+                raise RuntimeError(f"refusing to overwrite listener use artifact {use_artifact}") from exc
+            initial = self._start_listener(endpoint, str(binding["initial_role"]), "initial", use_artifact)
+            # The old listener retains its bound socket after unlink; only the
+            # active listener owns the name visible to normal future connects.
+            endpoint.unlink()
+            active = self._start_listener(endpoint, str(binding["active_role"]), "active", use_artifact)
+            artifact = {
+                "schema_version": "syncfuzz.target-environment-materialization.v1",
+                "program_id": program["program_id"],
+                "source_native_checkpoint_id": checkpoint_id,
+                "source_checkpoint_monotonic_ns": checkpoint_monotonic_ns,
+                "effect_window_monotonic_ns": {"start": checkpoint_monotonic_ns, "end": time.monotonic_ns()},
+                "family": "unix-socket",
+                "endpoint_path": str(binding["endpoint_path"]),
+                "logical_name": str(binding["logical_name"]),
+                "resolution_mode": mode,
+                "resolution_artifact_path": str(binding.get("resolution_artifact_path", "")),
+                "resolution_steps": self._resolution_steps(binding, resolution_artifact),
+                "use_event_artifact_path": use_artifact_relative,
+                "listeners": [initial, active],
+                "active_listener": active,
+            }
+            _write_json_exclusive(self.artifact_file, artifact)
+            self._program = program
+            self._source_checkpoint_id = checkpoint_id
+            self._materialized = True
+
+    def write_profile_followup(self, query: str, result: Any, agent: Any, config: dict[str, Any], lifecycle: Any) -> None:
+        if not self._materialized or self._program is None or not self._source_checkpoint_id:
+            raise RuntimeError("profile follow-up requires a materialized environment program")
+        history = collect_state_history(agent, config)
+        state = resolve_history_state(history, 0)
+        checkpoint_id = extract_checkpoint_id(state)
+        checkpoint_monotonic_ns = lifecycle.native_checkpoint_monotonic_ns().get(checkpoint_id, 0)
+        if not checkpoint_id or checkpoint_monotonic_ns <= 0:
+            raise RuntimeError("profile follow-up has no latest durable native checkpoint identity and timestamp")
+        artifact_path = self.workspace / "environment-profile-followup.json"
+        _write_json_exclusive(
+            artifact_path,
+            {
+                "schema_version": "syncfuzz.target-environment-profile-followup.v1",
+                "program_id": self._program["program_id"],
+                "materialization_native_checkpoint_id": self._source_checkpoint_id,
+                "followup_query_sha256": sha256_text(query),
+                "followup_invoked": True,
+                "followup_tool_result_count": tool_message_count(result_messages(result)),
+                "after_native_checkpoint_id": checkpoint_id,
+                "after_native_checkpoint_monotonic_ns": checkpoint_monotonic_ns,
+            },
+        )
+
+    def _resolution_steps(self, binding: dict[str, Any], resolution_artifact: Path | None) -> list[dict[str, Any]]:
+        mode = str(binding["resolution_mode"])
+        endpoint = str(binding["endpoint_path"])
+        steps: list[dict[str, Any]] = [{"kind": "logical-name", "from": str(binding["logical_name"]), "to": endpoint if mode == "direct" else mode}]
+        if mode == "config":
+            if resolution_artifact is None:
+                raise RuntimeError("config resolution did not materialize its artifact")
+            steps.append({
+                "kind": "config",
+                "from": str(binding["resolution_key"]),
+                "to": endpoint,
+                "artifact_path": str(binding["resolution_artifact_path"]),
+                "value_sha256": hashlib.sha256(resolution_artifact.read_bytes()).hexdigest(),
+            })
+        elif mode == "alias":
+            if resolution_artifact is None:
+                raise RuntimeError("alias resolution did not materialize its artifact")
+            steps.append({
+                "kind": "alias",
+                "from": str(binding["resolution_key"]),
+                "to": endpoint,
+                "artifact_path": str(binding["resolution_artifact_path"]),
+                "value_sha256": hashlib.sha256(resolution_artifact.read_bytes()).hexdigest(),
+            })
+        steps.append({"kind": "pathname", "from": endpoint, "to": "unix-endpoint:" + endpoint})
+        return steps
+
+
 def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def main() -> int:
     args = parse_args()
+    if args.internal_unix_socket_listener:
+        return run_internal_unix_socket_listener(args)
     legacy_fork_user_message = args.fork_user_message.strip()
     continuation_user_message = args.continuation_user_message.strip()
     if legacy_fork_user_message and continuation_user_message:
@@ -2955,6 +3284,15 @@ def main() -> int:
     ):
         return run_split_process(args)
     workspace = resolve_workspace(args)
+    if args.environment_program_file and args.internal_phase != "full":
+        raise SystemExit(
+            "environment program materialization is supported only for a full profiling execution"
+        )
+    materializer = EnvironmentProgramMaterializer(
+        workspace,
+        args.environment_program_file,
+        args.environment_materialization_artifact,
+    )
     model = resolve_model(args)
     provider = model_provider(model)
     validate_model_environment(model)
@@ -3002,11 +3340,15 @@ def main() -> int:
     checkpoint_dir = None
     if args.checkpoint_backend == "disk":
         checkpoint_dir = resolve_checkpoint_dir(workspace, args.checkpoint_dir)
+
+        def checkpoint_persisted(checkpoint_id: str, monotonic_ns: int) -> None:
+            lifecycle.note_native_checkpoint_persisted(checkpoint_id, monotonic_ns)
+
         checkpointer = build_durable_checkpointer(
             InMemorySaver,
             PersistentDict,
             checkpoint_dir,
-            lifecycle.note_native_checkpoint_persisted,
+            checkpoint_persisted,
         )
     else:
         checkpointer = InMemorySaver()
@@ -3038,6 +3380,56 @@ def main() -> int:
             result, config = invoke_agent(agent, prompt, thread_id)
         finally:
             lifecycle.complete_operation("initial_run", result_messages(result))
+
+        # E is deliberately materialized only after the initial normal task
+        # has completed and its latest durable checkpoint is known.  A later
+        # normal profiling follow-up is therefore the first Agent turn that
+        # can observe the active environment binding; time alone is not used
+        # as a proxy for Agent awareness.
+        if materializer.enabled():
+            initial_history = collect_state_history(agent, config)
+            initial_state = resolve_history_state(initial_history, 0)
+            initial_checkpoint_id = extract_checkpoint_id(initial_state)
+            initial_checkpoint_ns = lifecycle.native_checkpoint_monotonic_ns().get(
+                initial_checkpoint_id, 0
+            )
+            if not initial_checkpoint_id or initial_checkpoint_ns <= 0:
+                raise SystemExit(
+                    "environment materialization requires the latest initial durable checkpoint identity and timestamp"
+                )
+            materializer.materialize_at_checkpoint(
+                initial_checkpoint_id, initial_checkpoint_ns
+            )
+
+        profile_followup_message = args.profile_followup_user_message.strip()
+        if profile_followup_message:
+            lifecycle.begin_operation(
+                "profile_followup",
+                followup_user_message=profile_followup_message[:500],
+            )
+            profile_followup_result = None
+            try:
+                profile_followup_result, config = invoke_agent(
+                    agent, profile_followup_message, thread_id
+                )
+            finally:
+                lifecycle.complete_operation(
+                    "profile_followup", result_messages(profile_followup_result)
+                )
+            if args.require_profile_followup_tool_use and tool_message_count(
+                result_messages(profile_followup_result)
+            ) <= 0:
+                raise SystemExit(
+                    "required profile follow-up shell tool use was not observed"
+                )
+            if materializer.enabled():
+                materializer.write_profile_followup(
+                    profile_followup_message,
+                    profile_followup_result,
+                    agent,
+                    config,
+                    lifecycle,
+                )
     else:
         lifecycle.begin_operation(
             "resume_load",

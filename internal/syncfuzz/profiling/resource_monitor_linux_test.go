@@ -48,6 +48,38 @@ func TestDecodeResourceMonitorOpenAtEvent(t *testing.T) {
 	}
 }
 
+func TestDecodeResourceMonitorUnixConnectCarriesBoundedEndpointPath(t *testing.T) {
+	var event struct {
+		MonotonicNS uint64
+		CgroupID    uint64
+		Result      int64
+		PID         uint32
+		Kind        uint32
+		FD          int32
+		Comm        [16]byte
+		Path        [128]byte
+		Reserved    uint32
+	}
+	event.MonotonicNS = 123
+	event.CgroupID = 456
+	event.Result = 0
+	event.PID = 100
+	event.Kind = 12 // connect
+	event.FD = 9
+	copy(event.Path[:], "/workspace/agent.sock")
+	var encoded bytes.Buffer
+	if err := binary.Write(&encoded, binary.LittleEndian, event); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodeResourceMonitorEvent(encoded.Bytes())
+	if err != nil {
+		t.Fatalf("decodeResourceMonitorEvent returned error: %v", err)
+	}
+	if decoded.Kind != RawEventConnect || decoded.Resource.Path != "/workspace/agent.sock" || decoded.Resource.FD != 9 || decoded.Resource.Family != StateFamilyIPC {
+		t.Fatalf("unexpected decoded Unix connect event: %#v", decoded)
+	}
+}
+
 func TestDecodeResourceMonitorEventRejectsUnknownKind(t *testing.T) {
 	raw := make([]byte, resourceMonitorEventSize)
 	binary.LittleEndian.PutUint32(raw[28:32], 99)

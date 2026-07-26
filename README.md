@@ -10,7 +10,66 @@ SyncFuzz focuses on terminal/code agents that execute shell commands, maintain c
 
 ## Active Research Route
 
-The active route is [state-objective-driven historical checkpoint recovery fuzzing](docs/RESEARCH_PLAN.md): SyncFuzz first validates that an Agent execution actually formed a persistent OS effect, then restores historical logical checkpoints while retaining the materialized head OS state. A frontier contributes before / after cuts, and a head recovery is the no-logical-rollback control. `fork`, `rewind`, and `replay` are adapter mechanisms rather than discovery axes; their OS-retention and re-execution semantics must be recorded before results can be compared. The previous mutation catalog and trusted-action experiments are retained only as historical/regression material; they are not the basis for new discovery claims.
+The active route is [environment-structured historical recovery-hazard fuzzing](docs/RESEARCH_PLAN.md), specified in [RECOVERY_HAZARD_FUZZING.md](docs/RECOVERY_HAZARD_FUZZING.md). A future fuzz case is
+`<Workload, EnvironmentProgram E, RecoveryPlan Σ>`: a frozen normal workload is
+reused while the Fuzzer changes a typed resource-binding environment and a legal
+historical recovery plan. It seeks auditable evidence
+`W -> R(C,H) -> U'`: a materialized write/bind effect, retained historical
+recovery, then a resumed Agent's normal typed resolve/use of the resulting
+object.
+
+The current CLI implements the V2 substrate for that route: eBPF/probe effect
+evidence, StateSeed admission, native checkpoint binding, retained-runtime
+before/after/head recovery controls, and static A/O relation artifacts. It also
+implements a **fixture-only Unix-socket calibration**:
+`EnvironmentProgram` materialization/mutation lineage, run-local plus semantic
+identity, typed `RecoveryUsePlan`, actual local `resolve -> connect -> I/O`, and
+a five-control `RecoveryHazardReport`. Run `make hazard-unix-socket-calibration`.
+That command reports `realized-calibration`, never a target finding or coverage
+claim. LangGraph now has a guarded target-side `E` injection entry:
+`synthesis execute-langgraph --environment-program <E.json>` persists the typed
+program, then lets the target bind/rebind it only after its first durable native
+checkpoint. Profile-time `bind`/`listen` evidence, the materialization window,
+the native frontier binding, and the retained head socket identity are then
+locked into the recovery plan. For a recovery with a frozen continuation, the
+executor can also gate the fresh container, trace its cgroup-scoped AF_UNIX
+`connect`, and cross-check the retained listener's role-tagged completed-
+exchange record. That record stores a request digest and a fixed acknowledgement
+instead of application payload, proving that the client read the response. This
+is an implemented evidence path with unit/artifact-contract coverage. The
+`hazard langgraph-target-report` command can now join two independent target
+profiles into a five-control `RecoveryHazardReport`, using payload-free request
+digests and semantic—not cross-container raw—identities. It still awaits a
+successful live target-side five-control experiment and does not drive corpus
+scheduling. `fork`, `rewind`, and
+`replay` remain adapter mechanisms rather than discovery axes; their retention
+and re-execution semantics must be recorded before comparison.
+
+Run the local calibration (not a target experiment) with:
+
+```bash
+make v3-unix-socket-fixture
+make hazard-unix-socket-calibration
+```
+
+To create a validated child-holder Unix-socket `E` for the separate target
+materialization preflight (not a hazard experiment), use:
+
+```bash
+syncfuzz environment unix-socket-program --out runs/e.json --logical-name agent-service --resolution-mode config --resolution-key agent_socket --resolution-artifact-path service.json --endpoint-path agent.sock --initial-role baseline --active-role replacement --holder-lifetime child
+```
+
+Pass it to `make synthesis-langgraph-profile` with
+`LANGGRAPH_SYNTHESIS_ENVIRONMENT_PROGRAM=runs/e.json`. A subsequent native fork
+plan validates the profile-time materialization/frontier/head lock. Recovery-use
+evidence requires a frozen normal continuation that actually connects to the
+endpoint. Once independent tainted and clean profile/recovery bundles exist,
+use `syncfuzz hazard langgraph-target-report` to fail-closed join their
+immutable artifacts; the exact procedure is in
+[RECOVERY_HAZARD_FUZZING.md](docs/RECOVERY_HAZARD_FUZZING.md#64-target-five-control-reportartifact-join待真实运行验证).
+
+The previous mutation catalog and trusted-action experiments are historical or
+regression material only.
 
 ## Current MVP
 
@@ -112,7 +171,8 @@ control that is not `consistent` forces the set verdict to `inconclusive`.
 LangGraph recovery may additionally freeze one generic continuation user query
 into both the fork plan and recovery set. In each fresh restored runtime, the
 adapter records `P_pre -> continuation -> P_post`; relation classification uses
-only `P_pre`, while the normal Agent turn and `P_post` remain typed evidence.
+only `P_pre`, while the normal Agent turn and `P_post` remain continuation audit
+evidence, not recovery-time typed resolve/use `U'` evidence.
 The exact query bytes, SHA-256, and ID must match all three controls and the
 fork plan. This is a behavior stimulus, not a scenario-specific Oracle. See
 [the continuation recovery protocol](docs/LANGGRAPH_CONTINUATION_RECOVERY.md).
@@ -583,13 +643,14 @@ targets/                   Real target adapters and runtime-specific entrypoints
 ## Technical Direction
 
 - Go: core runner, probes, deterministic oracle, fuzz scheduler, trace processing.
+- V3: fixture-only Unix-socket `EnvironmentProgram` / `RecoveryHazardReport` calibration is implemented. LangGraph can materialize a child-holder `E` after its first native checkpoint, lock profile-time `W` provenance into a native recovery plan, and collect gated recovery-cgroup `connect` plus acknowledged listener exchange evidence. A live target-side five-control report, target identity adapter, and coverage-guided `<Workload,E,Σ>` scheduling remain incomplete.
 - TypeScript: mock external services and future framework adapters where agent ecosystems are JS/TS-heavy.
 - Python: optional adapters for LangGraph, MAF, AutoGen, OpenHands, BCC/bpftrace experiments, and evaluation scripts.
 - Environment backends: `local` for fast debugging, `container` for isolated shell/workspace execution, and VM or microVM isolation later for higher-risk targets.
 
 ## Roadmap
 
-The active research route is [state-objective-driven historical checkpoint recovery fuzzing](docs/RESEARCH_PLAN.md) (summarized in the "Active Research Route" section above). The historical staged plan below is retained in [docs/archived/ROADMAP.md](docs/archived/ROADMAP.md); its phase descriptions predate the current A/O two-layer model and are kept only as a record of what was built. The short version of that historical plan:
+The active research route is [environment-structured historical recovery-hazard fuzzing](docs/RESEARCH_PLAN.md); its detailed design and implementation boundary are in [docs/RECOVERY_HAZARD_FUZZING.md](docs/RECOVERY_HAZARD_FUZZING.md). The historical staged plan below is retained in [docs/archived/ROADMAP.md](docs/archived/ROADMAP.md); its phase descriptions predate the current A/O two-layer model and are kept only as a record of what was built. The short version of that historical plan:
 
 1. Known-answer MVP with deterministic seeds and suite runner.
 2. Cross-layer tracing for filesystem, process, shell, external, and authority state.

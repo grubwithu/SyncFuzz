@@ -3,6 +3,8 @@ package recovery
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/grubwithu/syncfuzz/internal/syncfuzz/objective"
@@ -78,6 +80,55 @@ type ContinuationEvidence struct {
 	PostEvidence        []string `json:"post_evidence"`
 }
 
+const EnvironmentUseEvidenceSchemaVersion = "syncfuzz.recovery-environment-use.v1"
+
+// EnvironmentUseEvidence is an adapter-produced, payload-free record of a
+// typed recovery-time dependency. It is kept separate from Evidence strings so
+// higher layers can construct a hazard report without re-parsing prose.
+type EnvironmentUseEvidence struct {
+	SchemaVersion          string   `json:"schema_version"`
+	Family                 string   `json:"family"`
+	ProgramID              string   `json:"program_id"`
+	LogicalName            string   `json:"logical_name"`
+	ResolvedEndpointPath   string   `json:"resolved_endpoint_path"`
+	ConnectEventIDs        []string `json:"connect_event_ids"`
+	RequestSHA256          string   `json:"request_sha256"`
+	CompletedExchange      bool     `json:"completed_exchange"`
+	ListenerRole           string   `json:"listener_role"`
+	ListenerPID            int      `json:"listener_pid"`
+	ListenerFD             int      `json:"listener_fd"`
+	ListenerSocketID       string   `json:"listener_socket_id"`
+	ListenerEndpointDevice uint64   `json:"listener_endpoint_device"`
+	ListenerEndpointInode  uint64   `json:"listener_endpoint_inode"`
+	ListenerSocketDevice   uint64   `json:"listener_socket_device"`
+	ListenerSocketInode    uint64   `json:"listener_socket_inode"`
+}
+
+func (e EnvironmentUseEvidence) Validate() error {
+	if e.SchemaVersion != EnvironmentUseEvidenceSchemaVersion || e.Family != "unix-socket" || strings.TrimSpace(e.ProgramID) == "" || strings.TrimSpace(e.LogicalName) == "" || !filepath.IsAbs(e.ResolvedEndpointPath) || len(e.ConnectEventIDs) == 0 || len(e.RequestSHA256) != 64 || !e.CompletedExchange || strings.TrimSpace(e.ListenerRole) == "" || e.ListenerPID <= 0 || e.ListenerFD < 0 || !strings.HasPrefix(e.ListenerSocketID, "socket:") || e.ListenerEndpointInode == 0 || e.ListenerSocketInode == 0 {
+		return fmt.Errorf("recovery environment use evidence is incomplete")
+	}
+	seen := make(map[string]struct{}, len(e.ConnectEventIDs))
+	for _, eventID := range e.ConnectEventIDs {
+		if strings.TrimSpace(eventID) == "" {
+			return fmt.Errorf("recovery environment use evidence has an empty connect event ID")
+		}
+		if _, found := seen[eventID]; found {
+			return fmt.Errorf("recovery environment use evidence repeats connect event %q", eventID)
+		}
+		seen[eventID] = struct{}{}
+	}
+	for _, character := range e.RequestSHA256 {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return fmt.Errorf("recovery environment use evidence has an invalid request digest")
+		}
+	}
+	if e.ListenerSocketID != "socket:"+strconv.FormatUint(e.ListenerSocketInode, 10) {
+		return fmt.Errorf("recovery environment use evidence listener socket identity is inconsistent")
+	}
+	return nil
+}
+
 func (e ContinuationEvidence) ValidateFor(query RecoveryQuery) error {
 	if query.ContinuationQueryID == "" {
 		return fmt.Errorf("continuation evidence is not allowed for recovery query %q without a continuation", query.QueryID)
@@ -100,23 +151,24 @@ func (e ContinuationEvidence) ValidateFor(query RecoveryQuery) error {
 // SyncFuzz supplied; an observation cannot be silently reused for a different
 // checkpoint, plan, or passive observation.
 type RecoveryObservation struct {
-	SchemaVersion         string                `json:"schema_version"`
-	QueryID               string                `json:"query_id"`
-	SeedID                string                `json:"seed_id"`
-	Boundary              Boundary              `json:"boundary"`
-	CheckpointID          string                `json:"checkpoint_id"`
-	RecordedPlanID        string                `json:"recorded_plan_id"`
-	PassiveObservationID  string                `json:"passive_observation_id"`
-	MaterializationHeadID string                `json:"materialization_head_id,omitempty"`
-	RetentionPolicy       RetentionPolicy       `json:"retention_policy,omitempty"`
-	RuntimeInstanceID     string                `json:"runtime_instance_id"`
-	AgentState            StatePresence         `json:"agent_state"`
-	OSState               StatePresence         `json:"os_state"`
-	OSStateOrigin         StateOrigin           `json:"os_state_origin"`
-	EffectMultiplicity    EffectMultiplicity    `json:"effect_multiplicity"`
-	PassiveProbe          *PassiveProbeMetrics  `json:"passive_probe,omitempty"`
-	ContinuationEvidence  *ContinuationEvidence `json:"continuation_evidence,omitempty"`
-	Evidence              []string              `json:"evidence"`
+	SchemaVersion          string                  `json:"schema_version"`
+	QueryID                string                  `json:"query_id"`
+	SeedID                 string                  `json:"seed_id"`
+	Boundary               Boundary                `json:"boundary"`
+	CheckpointID           string                  `json:"checkpoint_id"`
+	RecordedPlanID         string                  `json:"recorded_plan_id"`
+	PassiveObservationID   string                  `json:"passive_observation_id"`
+	MaterializationHeadID  string                  `json:"materialization_head_id,omitempty"`
+	RetentionPolicy        RetentionPolicy         `json:"retention_policy,omitempty"`
+	RuntimeInstanceID      string                  `json:"runtime_instance_id"`
+	AgentState             StatePresence           `json:"agent_state"`
+	OSState                StatePresence           `json:"os_state"`
+	OSStateOrigin          StateOrigin             `json:"os_state_origin"`
+	EffectMultiplicity     EffectMultiplicity      `json:"effect_multiplicity"`
+	PassiveProbe           *PassiveProbeMetrics    `json:"passive_probe,omitempty"`
+	ContinuationEvidence   *ContinuationEvidence   `json:"continuation_evidence,omitempty"`
+	EnvironmentUseEvidence *EnvironmentUseEvidence `json:"environment_use_evidence,omitempty"`
+	Evidence               []string                `json:"evidence"`
 }
 
 func (o RecoveryObservation) ValidateFor(query RecoveryQuery, plan RecordedPlan) error {
@@ -142,6 +194,14 @@ func (o RecoveryObservation) ValidateFor(query RecoveryQuery, plan RecordedPlan)
 		}
 		if err := o.ContinuationEvidence.ValidateFor(query); err != nil {
 			return err
+		}
+	}
+	if o.EnvironmentUseEvidence != nil {
+		if query.ContinuationQueryID == "" {
+			return fmt.Errorf("recovery observation %q reports environment use without a continuation", o.QueryID)
+		}
+		if err := o.EnvironmentUseEvidence.Validate(); err != nil {
+			return fmt.Errorf("recovery observation %q environment use: %w", o.QueryID, err)
 		}
 	}
 	if len(o.Evidence) == 0 {

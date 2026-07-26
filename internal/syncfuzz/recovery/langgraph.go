@@ -340,6 +340,11 @@ type LangGraphWorkspaceSnapshot struct {
 	PassiveWorkspaceFileDevice  uint64 `json:"passive_workspace_file_device,omitempty"`
 	PassiveWorkspaceFileInode   uint64 `json:"passive_workspace_file_inode,omitempty"`
 	PassiveWorkspaceFileMode    uint32 `json:"passive_workspace_file_mode,omitempty"`
+	// EphemeralObserverArtifacts are target-owned, append-only observation
+	// channels (for example a retained listener accept log). They are excluded
+	// from source immutability and clone digests so observation itself cannot
+	// invalidate a later historical recovery control.
+	EphemeralObserverArtifacts []string `json:"ephemeral_observer_artifacts,omitempty"`
 }
 
 func (s LangGraphWorkspaceSnapshot) Validate() error {
@@ -366,6 +371,19 @@ func (s LangGraphWorkspaceSnapshot) Validate() error {
 		if _, err := workspaceChild(s.SourceWorkspace, s.PassiveWorkspaceFilePath); err != nil {
 			return fmt.Errorf("LangGraph workspace snapshot passive workspace file path: %w", err)
 		}
+	}
+	previous := ""
+	for _, artifact := range s.EphemeralObserverArtifacts {
+		if strings.TrimSpace(artifact) == "" || filepath.IsAbs(artifact) || filepath.Clean(artifact) != artifact || artifact <= previous {
+			return fmt.Errorf("LangGraph workspace snapshot has invalid ephemeral observer artifacts")
+		}
+		if _, err := workspaceChild(s.SourceWorkspace, artifact); err != nil {
+			return fmt.Errorf("LangGraph workspace snapshot ephemeral observer artifact: %w", err)
+		}
+		if artifact == s.PassiveResourcePath() {
+			return fmt.Errorf("LangGraph workspace snapshot observer artifact overlaps the retained resource")
+		}
+		previous = artifact
 	}
 	return nil
 }

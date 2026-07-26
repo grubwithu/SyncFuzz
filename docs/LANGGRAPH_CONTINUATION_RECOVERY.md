@@ -1,6 +1,6 @@
 # LangGraph Continuation Recovery Protocol
 
-> 状态：设计与当前 LangGraph adapter 的 typed evidence contract。
+> 状态：设计与当前 LangGraph adapter 的 continuation-evidence contract。
 >
 > 本文补充 [LANGGRAPH_END_TO_END_CLOSURE.md](LANGGRAPH_END_TO_END_CLOSURE.md) 的
 > `HistoricalRecoverySet`。它不替代既有 pure-passive recovery 路径。
@@ -86,6 +86,36 @@ continuation，或两者文本不同，都会 fail closed。
 文本或 command hash 可以作为审计 evidence，但不直接生成 `residual`、
 `consistent`、`duplicate` 或 contract violation verdict，也不会反馈给 StateFuzz
 generator 作为任务内容引导。
+
+### 3.1 `K` 不等于未来的 `U'` / `RecoveryUsePlan`
+
+当前 `K` 的约束保持不变：它必须是 generic、resource-agnostic 的正常后续输入，
+不能为了验证某个 endpoint 而主动 `connect`、`open`、`exec` 或重建资源。因此一次
+`P_pre -> K -> P_post` 完整执行只证明 continuation 行为被记录，**不**证明恢复后的
+Agent 实际依赖了 profile 中的 resource。
+
+V3 现在已有一个独立的、**fixture-only** `RecoveryUsePlan` 实现。它由冻结的
+`Workload` 和 Unix-socket `EnvironmentProgram E` 派生，记录固定 normal request、
+logical name、request digest 与 resource family；local calibration 用真实
+`logical resolution -> connect -> role-tagged I/O` 构造 `UseEvidence`，并区分
+run-local identity 与跨 fresh runtime 比较的 semantic identity。它不接入当前
+LangGraph continuation executor，也不把 `K` 变成 endpoint-specific prompt。
+
+LangGraph 现在已有一个受限的 target-side recovery-use collector：当 immutable `E` 已锁入
+fork plan 且执行 frozen continuation 时，executor 会先 gated-create/start fresh recovery
+container、绑定其独立 cgroup 的 resource collector、再释放 Agent。它要求同一 trace 中有
+`connect(/workspace/<E.endpoint>)`，并在 retained active listener 的 append-only observer
+log 中找到同一时间窗、同一 role 的 accept record。该 record 只保留 bounded request
+length/digest、server-side response-sent 和固定 acknowledgement；不保留 application payload，
+但 acknowledgement 证明客户端读取并确认响应。这个 collector已有 unit/artifact-contract
+覆盖，但尚未完成一次真实 LangGraph target 的 five-control 运行。因此当前它是 `U'` 的
+`connect + completed normal exchange` evidence；其缺口是 live validation、identity adapter
+和 controls，而不是把 generic continuation 误称为 I/O。
+
+`RecoveryUsePlan` 不是把特定路径、预期结果或 attack consequence 塞回 `K`。它是
+独立的 typed observation contract；当前 generic continuation 继续作为 V2 的无偏
+stimulus，不能因 local fixture 或上述受限 collector 的存在而升级为 target-side
+realized-hazard evidence。
 
 ## 4. Pre/Post Evidence
 

@@ -91,6 +91,13 @@ permits only regular files and directories and excludes sockets, other special
 files, and background services. Neither scaffold prescribes a testcase, an
 expected effect, or a recovery query.
 
+`synthesis/langgraph-unix-socket-health-client-scaffold.example.json` is the
+separate V3 environment-workload scaffold. It asks for a normal configuration-
+resolving health client, never for a service replacement or an endpoint probe.
+The client protocol has a bounded request, response, and acknowledgement so a
+future recovery collector can distinguish a completed normal use from a bare
+socket `connect`.
+
 For an opt-in OpenAI-compatible task generator, first make sure `.env` defines
 `OPENAI_API_KEY` and `LANGCHAIN_MODEL=openai:<model>`. The adapter uses
 `OPENAI_BASE_URL` when it is set, so the same command works with an

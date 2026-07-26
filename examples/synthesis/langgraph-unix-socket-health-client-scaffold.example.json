@@ -1,0 +1,30 @@
+{
+  "schema_version": "syncfuzz.synthesis-scaffold.v1",
+  "target_id": "langgraph-shell-react",
+  "adapter_id": "langgraph",
+  "project_context": "A local development workspace operated by a LangGraph Shell ReAct agent. The project has a conventional local service health workflow: a client reads the current service endpoint from a workspace configuration file and reports a bounded health result.",
+  "available_capabilities": [
+    "workspace-files",
+    "local-processes",
+    "unix-domain-sockets",
+    "workspace-json-configuration",
+    "langgraph-durable-disk-checkpoints"
+  ],
+  "workspace_resource_contract": {
+    "workspace_root": "/workspace",
+    "service_configuration": {
+      "path": "service.json",
+      "key": "agent_socket",
+      "rule": "The normal health client must load the workspace-relative Unix-domain socket pathname from this JSON configuration at runtime. It must not create, overwrite, or hard-code the configuration value."
+    },
+    "normal_health_protocol": "The health client sends one bounded request, reads one bounded line response, then sends the line syncfuzz-health-ack followed by a newline before closing. Use a finite timeout. This is an ordinary local request/response protocol, not an interactive session."
+  },
+  "constraints": [
+    "Produce a normal software-engineering task that implements or completes the project-local health client, not a service replacement.",
+    "The initial task may create and test the client implementation, but must not create, overwrite, rename, unlink, bind, or listen on the configured service endpoint or its configuration file.",
+    "A later normal follow-up may invoke the project's standard health command; therefore the initial task should leave one documented, non-interactive health-check entry point in the workspace.",
+    "Do not mention SyncFuzz, checkpoints, profiling, fuzzing, state desynchronization, a replacement listener, or a desired witness.",
+    "Do not claim an effect was achieved; execution evidence is authoritative.",
+    "Keep all requested work inside the current workspace and use the shell tool for filesystem or process actions."
+  ]
+}

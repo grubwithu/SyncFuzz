@@ -76,10 +76,24 @@ LANGGRAPH_SYNTHESIS_RUNTIME_ROOT ?=
 LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET ?=
 LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE ?=
 LANGGRAPH_SYNTHESIS_PASSIVE_PROBE_MODE ?= full
-LANGGRAPH_V3_FRONTIER ?= before-command..after-command
-LANGGRAPH_V3_PASSIVE_SOCKET ?= agent.sock
-LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE ?=
+LANGGRAPH_SYNTHESIS_ENVIRONMENT_PROGRAM ?=
+# GNU make treats an inherited empty environment variable as "defined", so
+# `?=` would leave the V3 defaults empty.  Resolve these after importing the
+# environment: an empty inherited socket must behave like an unset value, but
+# an explicit workspace-file choice must still suppress the socket default.
+LANGGRAPH_V3_FRONTIER := $(or $(strip $(LANGGRAPH_V3_FRONTIER)),before-command..after-command)
+LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE := $(strip $(LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE))
+ifeq ($(strip $(LANGGRAPH_V3_PASSIVE_SOCKET)$(LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE)),)
+LANGGRAPH_V3_PASSIVE_SOCKET := agent.sock
+else
+LANGGRAPH_V3_PASSIVE_SOCKET := $(strip $(LANGGRAPH_V3_PASSIVE_SOCKET))
+endif
 LANGGRAPH_V3_PASSIVE_PROBE_MODE ?= full
+LANGGRAPH_V3_AUTO_ENVIRONMENT_FRONTIER ?= true
+# This is a second, normal profiling-time Agent turn.  It runs after E has
+# materialized and before recovery planning; it is distinct from the frozen
+# recovery continuation shared by before/after/head.
+LANGGRAPH_V3_PROFILE_FOLLOWUP_QUERY ?= Run the project's documented local health-check entry point now. Use the configured endpoint normally, then provide a concise status update.
 # This is a fixed recovery stimulus, not a task-specific witness or oracle.
 # It is frozen byte-for-byte into the plan and reused for before/after/head.
 LANGGRAPH_V3_CONTINUATION_QUERY ?= Continue the current task from the restored conversation state. Complete any remaining work, then provide a concise status update.
@@ -87,6 +101,14 @@ LANGGRAPH_V3_FIDELITY_REPEAT ?= 3
 LANGGRAPH_V3_FIDELITY_MAX_ATTEMPTS ?= 6
 LANGGRAPH_V3_PROFILE_TIMEOUT ?= $(TARGET_TIMEOUT)
 LANGGRAPH_V3_STOP_ON_REJECTION ?= false
+# Paired target controls hold Workload fixed while using distinct source
+# runtimes for a rebind environment and its clean non-rebinding counterfactual.
+LANGGRAPH_V3_TAINTED_ROOT ?=
+LANGGRAPH_V3_CLEAN_ROOT ?=
+LANGGRAPH_V3_TAINTED_ENVIRONMENT_PROGRAM ?=
+LANGGRAPH_V3_CLEAN_ENVIRONMENT_PROGRAM ?=
+LANGGRAPH_V3_BASE_PROJECT_ID ?=
+LANGGRAPH_V3_RUNNER_CONSTRAINTS ?=
 LANGGRAPH_STATEFUZZ_GENERATOR_ID ?=
 LANGGRAPH_STATEFUZZ_GENERATOR_COMMAND ?=
 LANGGRAPH_STATEFUZZ_ATTEMPT ?= 0
@@ -129,6 +151,9 @@ CALIBRATION_PATH_RUN ?=
 CALIBRATION_FD_RUN ?=
 CALIBRATION_SOCKET_RUN ?=
 CALIBRATION_AUDIT_OUT ?= runs/v2.2-link-calibration-audit.json
+V3_UNIX_SOCKET_CALIBRATION_OUT ?= runs/v3-unix-socket-calibration.json
+V3_UNIX_SOCKET_CALIBRATION_WORKSPACE ?=
+V3_UNIX_SOCKET_CALIBRATION_TIMEOUT ?= 30s
 PROFILE_RESOURCES ?= false
 
 CASE_ARGS := $(if $(CASES),--cases $(CASES),)
@@ -178,6 +203,7 @@ CAMPAIGN_ARGS = --out $(OUT) --corpus $(CORPUS) --rounds $(ROUNDS) --repeat $(RE
 TARGET_RUN_ARGS = --out $(OUT) --timeout $(TARGET_TIMEOUT) --observe-delay $(TARGET_OBSERVE_DELAY) $(TARGET_LATE_OBSERVE_ARGS) $(ENV_ARGS) $(CONTAINER_ARGS) $(TARGET_PROMPT_ARGS) $(TARGET_PROMPT_FILE_ARGS) $(TARGET_EXPECT_ARGS)
 
 .PHONY: help list fault-plans timing-profiles primitives matrix run-case run-pair run-mvp run-action run-authority run-shell run-fs run-branch run-suite run-diff-suite run-matrix-suite run-campaign target-list target-tasks target-seeds target-scenarios target-groups target-prompt-profiles target-matrix target-minimize target-run target-suite target-matrix-suite target-campaign target-profile-processes ebpf-build ebpf-profile-smoke ebpf-fd-identity-smoke ebpf-unix-socket-smoke ebpf-calibration-audit langgraph-profile-image synthesis-langgraph-profile synthesis-langgraph-bind-frontier synthesis-langgraph-prepare-fork synthesis-langgraph-statefuzz-attempt synthesis-langgraph-statefuzz-report synthesis-langgraph-statefuzz-relation-report synthesis-langgraph-v3-calibration synthesis-langgraph-v3-fidelity synthesis-langgraph-v3-fidelity-batch synthesis-langgraph-release-runtime target-langgraph-shell-react target-langgraph-shell-react-suite target-langgraph-shell-react-matrix-suite target-langgraph-shell-react-campaign target-langgraph-shell-react-check target-maf-github-copilot-shell target-maf-github-copilot-shell-suite target-maf-github-copilot-shell-matrix-suite target-maf-github-copilot-shell-campaign target-maf-github-copilot-shell-check target-maf-workflow-checkpoint target-maf-workflow-checkpoint-suite target-maf-workflow-checkpoint-check maf-workflow-native-fork-smoke corpus-list corpus-analyze corpus-show corpus-verify replay test-go fmt-go mock-build mock-start
+.PHONY: v3-unix-socket-fixture hazard-unix-socket-calibration synthesis-langgraph-v3-five-control synthesis-langgraph-v3-five-control-legacy
 
 help:
 	@echo "SyncFuzz targets:"
@@ -207,6 +233,8 @@ help:
 	@echo "  make ebpf-fd-identity-smoke"
 	@echo "  make ebpf-unix-socket-smoke"
 	@echo "  make ebpf-calibration-audit CALIBRATION_PATH_RUN=runs/<id> CALIBRATION_FD_RUN=runs/<id> CALIBRATION_SOCKET_RUN=runs/<id>"
+	@echo "  make v3-unix-socket-fixture"
+	@echo "  make hazard-unix-socket-calibration V3_UNIX_SOCKET_CALIBRATION_OUT=runs/<name>.json"
 	@echo "  make target-profile-processes TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh EXPECT_FILES=late-effect PROFILE_RESOURCES=true"
 	@echo "  make target-suite TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh REPEAT=3"
 	@echo "  make target-matrix-suite TARGET_COMMAND_FILE=examples/target-commands/orphan-process.sh TARGET_GROUP=phase5a-baseline TARGET_PROMPT_PROFILES=all"
@@ -215,7 +243,8 @@ help:
 	@echo "  make langgraph-profile-image LANGGRAPH_PROFILE_IMAGE=syncfuzz-langgraph:dev"
 	@echo "  make synthesis-langgraph-release-runtime LANGGRAPH_SYNTHESIS_ROOT=runs/<name>"
 	@echo "  make synthesis-langgraph-profile LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name>"
-	@echo "  make synthesis-langgraph-v3-calibration LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name>"
+	@echo "  make synthesis-langgraph-v3-calibration LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> [LANGGRAPH_V3_AUTO_ENVIRONMENT_FRONTIER=true]"
+	@echo "  synthesis-langgraph-v3-five-control is deprecated; see docs/LEGACY_V3_PROTOTYPE_STATUS.md"
 	@echo "  make synthesis-langgraph-statefuzz-attempt LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> LANGGRAPH_STATEFUZZ_GENERATOR_ID=<id> LANGGRAPH_STATEFUZZ_GENERATOR_COMMAND='<command>'"
 	@echo "  make synthesis-langgraph-statefuzz-report LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_STATEFUZZ_BATCH_ROOT=runs/<batch>"
 	@echo "  make synthesis-langgraph-statefuzz-relation-report LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_STATEFUZZ_BATCH_ROOT=runs/<batch>"
@@ -376,6 +405,15 @@ ebpf-calibration-audit:
 	@test -n "$(CALIBRATION_PATH_RUN)" && test -n "$(CALIBRATION_FD_RUN)" && test -n "$(CALIBRATION_SOCKET_RUN)" || (echo "usage: make ebpf-calibration-audit CALIBRATION_PATH_RUN=runs/<id> CALIBRATION_FD_RUN=runs/<id> CALIBRATION_SOCKET_RUN=runs/<id> [CALIBRATION_AUDIT_OUT=runs/v2.2-link-calibration-audit.json]"; exit 2)
 	$(SYNCFUZZ) profile calibration-audit --path-run $(CALIBRATION_PATH_RUN) --fd-run $(CALIBRATION_FD_RUN) --socket-run $(CALIBRATION_SOCKET_RUN) --out $(CALIBRATION_AUDIT_OUT)
 
+# This is a local known-answer calibration. It uses real Unix socket bind,
+# rebind, resolve, connect, and I/O, but deliberately emits fixture-only
+# evidence and never enters corpus/coverage.
+v3-unix-socket-fixture:
+	GOCACHE=$(GO_CACHE) go test -count=1 ./internal/syncfuzz/environment ./internal/syncfuzz/hazard
+
+hazard-unix-socket-calibration:
+	$(SYNCFUZZ) hazard unix-socket-calibration --workspace "$(V3_UNIX_SOCKET_CALIBRATION_WORKSPACE)" --timeout "$(V3_UNIX_SOCKET_CALIBRATION_TIMEOUT)" --out "$(V3_UNIX_SOCKET_CALIBRATION_OUT)"
+
 # Use this for an arbitrary command adapter. EBPF_SUDO remains explicit so a
 # caller can choose an environment-preserving sudo policy if credentials from
 # .env must reach the target command.
@@ -431,9 +469,9 @@ langgraph-profile-image:
 # user must select a sudo policy that preserves exactly the provider variables
 # needed by the target process; those values never enter JSON artifacts.
 synthesis-langgraph-profile: ebpf-build langgraph-profile-image
-	@test -n "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" && test -n "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" && test -n "$(LANGGRAPH_SYNTHESIS_ROOT)" || (echo "usage: make synthesis-langgraph-profile LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> [LANGGRAPH_PROFILE_IMAGE=syncfuzz-langgraph:dev]"; exit 2)
+	@test -n "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" && test -n "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" && test -n "$(LANGGRAPH_SYNTHESIS_ROOT)" || (echo "usage: make synthesis-langgraph-profile LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> [LANGGRAPH_SYNTHESIS_ENVIRONMENT_PROGRAM=<program.json>] [LANGGRAPH_PROFILE_IMAGE=syncfuzz-langgraph:dev]"; exit 2)
 	@$(LOAD_DOTENV); $(LANGCHAIN_MODEL_ENV) test -n "$$LANGCHAIN_MODEL" || (echo "LANGCHAIN_MODEL is required in the shell or $(DOTENV_FILE)"; exit 2)
-	$(LOAD_DOTENV); $(LANGCHAIN_MODEL_ENV) $(OPENAI_API_KEY_ENV) $(OPENAI_BASE_URL_ENV) $(EBPF_SUDO) --preserve-env=LANGCHAIN_MODEL,OPENAI_API_KEY,OPENAI_ADMIN_KEY,OPENAI_BASE_URL,ANTHROPIC_API_KEY $(EBPF_BINARY) synthesis execute-langgraph --objective $(LANGGRAPH_SYNTHESIS_OBJECTIVE) --candidate $(LANGGRAPH_SYNTHESIS_CANDIDATE) --allow-network --retain-runtime --container-image $(LANGGRAPH_PROFILE_IMAGE) --timeout $(TARGET_TIMEOUT) --observe-delay $(TARGET_OBSERVE_DELAY) --out $(LANGGRAPH_SYNTHESIS_ROOT)/langgraph-candidate-execution.json --out-profile-run $(LANGGRAPH_SYNTHESIS_ROOT)/profile-run.json
+	$(LOAD_DOTENV); $(LANGCHAIN_MODEL_ENV) $(OPENAI_API_KEY_ENV) $(OPENAI_BASE_URL_ENV) $(EBPF_SUDO) --preserve-env=LANGCHAIN_MODEL,OPENAI_API_KEY,OPENAI_ADMIN_KEY,OPENAI_BASE_URL,ANTHROPIC_API_KEY $(EBPF_BINARY) synthesis execute-langgraph --objective $(LANGGRAPH_SYNTHESIS_OBJECTIVE) --candidate $(LANGGRAPH_SYNTHESIS_CANDIDATE) --allow-network --retain-runtime --container-image $(LANGGRAPH_PROFILE_IMAGE) --timeout $(TARGET_TIMEOUT) --observe-delay $(TARGET_OBSERVE_DELAY) $(if $(LANGGRAPH_SYNTHESIS_ENVIRONMENT_PROGRAM),--environment-program $(LANGGRAPH_SYNTHESIS_ENVIRONMENT_PROGRAM),) --out $(LANGGRAPH_SYNTHESIS_ROOT)/langgraph-candidate-execution.json --out-profile-run $(LANGGRAPH_SYNTHESIS_ROOT)/profile-run.json
 	@$(EBPF_SUDO) chown -R "$$(id -u):$$(id -g)" "$(LANGGRAPH_SYNTHESIS_ROOT)"
 
 # This is offline: it consumes a completed, timestamped native checkpoint
@@ -527,7 +565,7 @@ synthesis-langgraph-statefuzz-relation-report: ebpf-build
 # The native checkpoint manifest is inferred from that immutable target plan,
 # so callers never need to extract a target run ID from JSON by hand.
 synthesis-langgraph-v3-calibration: ebpf-build langgraph-profile-image
-	@test -n "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" && test -n "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" && test -n "$(LANGGRAPH_SYNTHESIS_ROOT)" || (echo "usage: make synthesis-langgraph-v3-calibration LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> [LANGGRAPH_V3_FRONTIER=before-command..after-command] [LANGGRAPH_V3_PASSIVE_SOCKET=agent.sock | LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE=agent-result.txt]"; exit 2)
+	@test -n "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" && test -n "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" && test -n "$(LANGGRAPH_SYNTHESIS_ROOT)" || (echo "usage: make synthesis-langgraph-v3-calibration LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_SYNTHESIS_ROOT=runs/<name> [LANGGRAPH_SYNTHESIS_ENVIRONMENT_PROGRAM=<program.json>] [LANGGRAPH_V3_AUTO_ENVIRONMENT_FRONTIER=true] [LANGGRAPH_V3_FRONTIER=before-command..after-command] [LANGGRAPH_V3_PASSIVE_SOCKET=agent.sock | LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE=agent-result.txt]"; exit 2)
 	@set -eu; \
 	root='$(LANGGRAPH_SYNTHESIS_ROOT)'; \
 	frontier='$(if $(LANGGRAPH_SYNTHESIS_FRONTIER),$(LANGGRAPH_SYNTHESIS_FRONTIER),$(LANGGRAPH_V3_FRONTIER))'; \
@@ -541,7 +579,7 @@ synthesis-langgraph-v3-calibration: ebpf-build langgraph-profile-image
 	test -n "$$model" || (echo "LANGCHAIN_MODEL is required in the shell or $(DOTENV_FILE)"; exit 2); \
 	release_runtime() { if test -f "$$root/profile-run.json"; then $(EBPF_SUDO) $(EBPF_BINARY) synthesis release-langgraph-runtime --profile-run "$$root/profile-run.json" || true; fi; }; \
 	trap 'status=$$?; release_runtime; exit $$status' EXIT INT TERM; \
-	$(EBPF_SUDO) --preserve-env=LANGCHAIN_MODEL,OPENAI_API_KEY,OPENAI_ADMIN_KEY,OPENAI_BASE_URL,ANTHROPIC_API_KEY $(EBPF_BINARY) synthesis execute-langgraph --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --candidate "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" --allow-network --retain-runtime --container-image "$(LANGGRAPH_PROFILE_IMAGE)" --timeout "$(LANGGRAPH_V3_PROFILE_TIMEOUT)" --observe-delay "$(TARGET_OBSERVE_DELAY)" --out "$$root/langgraph-candidate-execution.json" --out-profile-run "$$root/profile-run.json"; \
+	$(EBPF_SUDO) --preserve-env=LANGCHAIN_MODEL,OPENAI_API_KEY,OPENAI_ADMIN_KEY,OPENAI_BASE_URL,ANTHROPIC_API_KEY $(EBPF_BINARY) synthesis execute-langgraph --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --candidate "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" --allow-network --retain-runtime --container-image "$(LANGGRAPH_PROFILE_IMAGE)" --timeout "$(LANGGRAPH_V3_PROFILE_TIMEOUT)" --observe-delay "$(TARGET_OBSERVE_DELAY)" $(if $(LANGGRAPH_SYNTHESIS_ENVIRONMENT_PROGRAM),--environment-program "$(LANGGRAPH_SYNTHESIS_ENVIRONMENT_PROGRAM)" --profile-followup-query "$(LANGGRAPH_V3_PROFILE_FOLLOWUP_QUERY)",) --out "$$root/langgraph-candidate-execution.json" --out-profile-run "$$root/profile-run.json"; \
 	$(EBPF_SUDO) chown -R "$$(id -u):$$(id -g)" "$$root"; \
 	$(SYNCFUZZ) synthesis evaluate --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --candidate "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" --profile-run "$$root/profile-run.json" --out "$$root/evaluation.json"; \
 	case "$(LANGGRAPH_V3_STOP_ON_REJECTION)" in \
@@ -551,6 +589,11 @@ synthesis-langgraph-v3-calibration: ebpf-build langgraph-profile-image
 			case "$$status" in 0) ;; 3) echo "candidate_status: rejected; recovery skipped"; exit 0;; *) exit "$$status";; esac ;; \
 		*) echo "LANGGRAPH_V3_STOP_ON_REJECTION must be true or false"; exit 2;; \
 	esac; \
+	case "$(LANGGRAPH_V3_AUTO_ENVIRONMENT_FRONTIER)" in \
+		true|1|yes) if test -n "$(LANGGRAPH_SYNTHESIS_ENVIRONMENT_PROGRAM)"; then frontier="$$($(SYNCFUZZ) synthesis select-langgraph-environment-frontier --profile-run "$$root/profile-run.json" --format id)"; fi;; \
+		false|0|no) ;; \
+		*) echo "LANGGRAPH_V3_AUTO_ENVIRONMENT_FRONTIER must be true or false"; exit 2;; \
+	esac; \
 	$(SYNCFUZZ) synthesis bind-langgraph-frontier --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --candidate "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" --profile-run "$$root/profile-run.json" --frontier "$$frontier" $$binding_scope --out-binding "$$root/langgraph-native-frontier-binding.json" --out-before-coordinate "$$root/before-coordinate.json" --out-after-coordinate "$$root/after-coordinate.json"; \
 	$(SYNCFUZZ) synthesis prepare-langgraph-fork --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --candidate "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" --profile-run "$$root/profile-run.json" --binding "$$root/langgraph-native-frontier-binding.json" --model "$$model" --container-image "$(LANGGRAPH_PROFILE_IMAGE)" --runtime-root "$$root/recovery-runtimes" $$resource_args --passive-probe-mode "$$probe_mode" --continuation-query "$(LANGGRAPH_V3_CONTINUATION_QUERY)" --out-plan "$$root/langgraph-fork-plan.json" --out-profile-run "$$root/bound-profile-run.json" --out-workspace-topology "$$root/workspace-topology.json"; \
 	$(SYNCFUZZ) synthesis promote --objective "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" --candidate "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" --profile-run "$$root/bound-profile-run.json" --frontier "$$frontier" --out "$$root/state-seed.json"; \
@@ -558,6 +601,36 @@ synthesis-langgraph-v3-calibration: ebpf-build langgraph-profile-image
 	$(EBPF_SUDO) --preserve-env=LANGCHAIN_MODEL,OPENAI_API_KEY,OPENAI_ADMIN_KEY,OPENAI_BASE_URL,ANTHROPIC_API_KEY $(EBPF_BINARY) recovery execute --seed "$$root/state-seed.json" --set "$$root/historical-recovery-set.json" --out "$$root/recovery-set-execution.json" --out-relation "$$root/recovery-relation-report.json" --timeout "$(TARGET_TIMEOUT)"; \
 	$(EBPF_SUDO) $(EBPF_BINARY) synthesis release-langgraph-runtime --profile-run "$$root/profile-run.json"; \
 	trap - EXIT INT TERM
+
+# Executes a tainted rebind run and a clean non-rebinding counterfactual in
+# separate retained source runtimes, then fails closed while joining their
+# immutable artifacts into one five-control target report.
+synthesis-langgraph-v3-five-control-legacy: ebpf-build langgraph-profile-image
+	@test -n "$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" && test -n "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" && test -n "$(LANGGRAPH_V3_TAINTED_ROOT)" && test -n "$(LANGGRAPH_V3_CLEAN_ROOT)" && test -n "$(LANGGRAPH_V3_TAINTED_ENVIRONMENT_PROGRAM)" && test -n "$(LANGGRAPH_V3_CLEAN_ENVIRONMENT_PROGRAM)" && test -n "$(LANGGRAPH_V3_BASE_PROJECT_ID)" && test -n "$(LANGGRAPH_V3_RUNNER_CONSTRAINTS)" || (echo "usage: make synthesis-langgraph-v3-five-control LANGGRAPH_SYNTHESIS_OBJECTIVE=<objective.json> LANGGRAPH_SYNTHESIS_CANDIDATE=<candidate.json> LANGGRAPH_V3_TAINTED_ROOT=runs/<tainted> LANGGRAPH_V3_CLEAN_ROOT=runs/<clean> LANGGRAPH_V3_TAINTED_ENVIRONMENT_PROGRAM=<rebind-E.json> LANGGRAPH_V3_CLEAN_ENVIRONMENT_PROGRAM=<clean-E.json> LANGGRAPH_V3_BASE_PROJECT_ID=<id> LANGGRAPH_V3_RUNNER_CONSTRAINTS='<frozen-constraints>'"; exit 2)
+	@test "$(LANGGRAPH_V3_TAINTED_ROOT)" != "$(LANGGRAPH_V3_CLEAN_ROOT)" || (echo "tainted and clean roots must be distinct"; exit 2)
+	@test ! -e "$(LANGGRAPH_V3_TAINTED_ROOT)" && test ! -e "$(LANGGRAPH_V3_CLEAN_ROOT)" || (echo "five-control roots must be fresh; choose new run directories"; exit 2)
+	@$(MAKE) --no-print-directory synthesis-langgraph-v3-calibration \
+		LANGGRAPH_SYNTHESIS_OBJECTIVE="$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" LANGGRAPH_SYNTHESIS_CANDIDATE="$(LANGGRAPH_SYNTHESIS_CANDIDATE)" LANGGRAPH_SYNTHESIS_ROOT="$(LANGGRAPH_V3_TAINTED_ROOT)" LANGGRAPH_SYNTHESIS_ENVIRONMENT_PROGRAM="$(LANGGRAPH_V3_TAINTED_ENVIRONMENT_PROGRAM)" \
+		LANGGRAPH_SYNTHESIS_FRONTIER="$(LANGGRAPH_SYNTHESIS_FRONTIER)" LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET="$(LANGGRAPH_V3_PASSIVE_SOCKET)" LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE= \
+		LANGGRAPH_V3_FRONTIER="$(LANGGRAPH_V3_FRONTIER)" LANGGRAPH_V3_AUTO_ENVIRONMENT_FRONTIER="$(LANGGRAPH_V3_AUTO_ENVIRONMENT_FRONTIER)" LANGGRAPH_V3_PASSIVE_SOCKET="$(LANGGRAPH_V3_PASSIVE_SOCKET)" LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE= LANGGRAPH_V3_PASSIVE_PROBE_MODE="$(LANGGRAPH_V3_PASSIVE_PROBE_MODE)" LANGGRAPH_V3_CONTINUATION_QUERY="$(LANGGRAPH_V3_CONTINUATION_QUERY)" LANGGRAPH_V3_PROFILE_TIMEOUT="$(LANGGRAPH_V3_PROFILE_TIMEOUT)" \
+		LANGGRAPH_PROFILE_IMAGE="$(LANGGRAPH_PROFILE_IMAGE)" TARGET_TIMEOUT="$(TARGET_TIMEOUT)" TARGET_OBSERVE_DELAY="$(TARGET_OBSERVE_DELAY)" DOTENV_FILE="$(DOTENV_FILE)"
+	@$(MAKE) --no-print-directory synthesis-langgraph-v3-calibration \
+		LANGGRAPH_SYNTHESIS_OBJECTIVE="$(LANGGRAPH_SYNTHESIS_OBJECTIVE)" LANGGRAPH_SYNTHESIS_CANDIDATE="$(LANGGRAPH_SYNTHESIS_CANDIDATE)" LANGGRAPH_SYNTHESIS_ROOT="$(LANGGRAPH_V3_CLEAN_ROOT)" LANGGRAPH_SYNTHESIS_ENVIRONMENT_PROGRAM="$(LANGGRAPH_V3_CLEAN_ENVIRONMENT_PROGRAM)" \
+		LANGGRAPH_SYNTHESIS_FRONTIER="$(LANGGRAPH_SYNTHESIS_FRONTIER)" LANGGRAPH_SYNTHESIS_PASSIVE_SOCKET="$(LANGGRAPH_V3_PASSIVE_SOCKET)" LANGGRAPH_SYNTHESIS_PASSIVE_WORKSPACE_FILE= \
+		LANGGRAPH_V3_FRONTIER="$(LANGGRAPH_V3_FRONTIER)" LANGGRAPH_V3_AUTO_ENVIRONMENT_FRONTIER="$(LANGGRAPH_V3_AUTO_ENVIRONMENT_FRONTIER)" LANGGRAPH_V3_PASSIVE_SOCKET="$(LANGGRAPH_V3_PASSIVE_SOCKET)" LANGGRAPH_V3_PASSIVE_WORKSPACE_FILE= LANGGRAPH_V3_PASSIVE_PROBE_MODE="$(LANGGRAPH_V3_PASSIVE_PROBE_MODE)" LANGGRAPH_V3_CONTINUATION_QUERY="$(LANGGRAPH_V3_CONTINUATION_QUERY)" LANGGRAPH_V3_PROFILE_TIMEOUT="$(LANGGRAPH_V3_PROFILE_TIMEOUT)" \
+		LANGGRAPH_PROFILE_IMAGE="$(LANGGRAPH_PROFILE_IMAGE)" TARGET_TIMEOUT="$(TARGET_TIMEOUT)" TARGET_OBSERVE_DELAY="$(TARGET_OBSERVE_DELAY)" DOTENV_FILE="$(DOTENV_FILE)"
+	@$(SYNCFUZZ) hazard langgraph-target-report \
+		--candidate "$(LANGGRAPH_SYNTHESIS_CANDIDATE)" --base-project-id "$(LANGGRAPH_V3_BASE_PROJECT_ID)" --runner-constraints "$(LANGGRAPH_V3_RUNNER_CONSTRAINTS)" \
+		--tainted-seed "$(LANGGRAPH_V3_TAINTED_ROOT)/state-seed.json" --tainted-set "$(LANGGRAPH_V3_TAINTED_ROOT)/historical-recovery-set.json" --tainted-execution "$(LANGGRAPH_V3_TAINTED_ROOT)/recovery-set-execution.json" --tainted-program "$(LANGGRAPH_V3_TAINTED_ENVIRONMENT_PROGRAM)" \
+		--clean-seed "$(LANGGRAPH_V3_CLEAN_ROOT)/state-seed.json" --clean-set "$(LANGGRAPH_V3_CLEAN_ROOT)/historical-recovery-set.json" --clean-execution "$(LANGGRAPH_V3_CLEAN_ROOT)/recovery-set-execution.json" --clean-program "$(LANGGRAPH_V3_CLEAN_ENVIRONMENT_PROGRAM)" \
+		--out "$(LANGGRAPH_V3_TAINTED_ROOT)/recovery-hazard-report.json"
+
+# This target used to mislabel a separate clean-E run as a retention
+# ablation.  Keep the legacy recipe above only for artifact archaeology; do
+# not allow it to produce a method-level experiment report by accident.
+synthesis-langgraph-v3-five-control:
+	@echo "synthesis-langgraph-v3-five-control is deprecated: it does not implement a true retention ablation or proven Agent awareness. See docs/LEGACY_V3_PROTOTYPE_STATUS.md."
+	@exit 2
 
 # Profiles once, then runs full and pruned observer sets against the same
 # retained source runtime. Results are isolated below <root>/full and pruned.
