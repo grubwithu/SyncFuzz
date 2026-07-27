@@ -1,10 +1,30 @@
 """Regression tests for raw-JSONL artifact communication and fail-fast gates."""
 
+import fcntl
+import multiprocessing
+
 import pytest
 
 from syncfuzz.m0.artifact import open_run
 from syncfuzz.m0.errors import ContractViolation, DataLossError
 from syncfuzz.m0.schema import AEvent, KEvent, RunManifest
+
+
+def _write_manifest_in_child(run_root: str, attempting, completed) -> None:
+    """Overview: attempt one independent-process manifest write for advisory-lock regression coverage."""
+    run = open_run(run_root)
+    attempting.set()
+    run.write_one(
+        "manifest",
+        RunManifest(
+            run_id="child-run",
+            started_wall_ns=1,
+            clock_name="CLOCK_MONOTONIC",
+            kernel_release="6.0",
+            milestone="P0",
+        ),
+    )
+    completed.set()
 
 
 def test_jsonl_round_trip_uses_uncompressed_contract_path(tmp_path) -> None:
@@ -60,6 +80,29 @@ def test_single_object_round_trip_and_kind_validation(tmp_path) -> None:
     assert run.read_one("manifest", RunManifest) == manifest
     with pytest.raises(ContractViolation, match="not a JSONL artifact"):
         run.write("manifest", [])
+
+
+def test_manifest_write_waits_for_shared_cross_process_lock(tmp_path) -> None:
+    """Overview: verify M0 cannot race M1 or another writer holding manifest.json.lock."""
+    run = open_run(tmp_path / "run")
+    lock_path = run.path("manifest").with_name("manifest.json.lock")
+    context = multiprocessing.get_context("spawn")
+    attempting = context.Event()
+    completed = context.Event()
+    process = context.Process(
+        target=_write_manifest_in_child,
+        args=(str(run.root), attempting, completed),
+    )
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        process.start()
+        assert attempting.wait(timeout=3)
+        assert not completed.wait(timeout=0.2)
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    process.join(timeout=3)
+    assert process.exitcode == 0
+    assert completed.is_set()
+    assert run.read_one("manifest", RunManifest).run_id == "child-run"
 
 
 def test_require_lossless_rejects_dropped_events(tmp_path) -> None:

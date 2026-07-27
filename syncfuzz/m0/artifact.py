@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable, Iterator, TypeVar
 
@@ -28,6 +30,42 @@ _ARTIFACTS = {
     "gap": "gap.json",
     "ablation": "ablation.json",
 }
+
+
+@contextmanager
+def _manifest_write_lock(path: Path) -> Iterator[None]:
+    """Overview: serialize every manifest writer through M1's shared advisory lock file."""
+    lock_path = path.with_name(f"{path.name}.lock")
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _fsync_parent_directory(path: Path) -> None:
+    """Overview: persist a completed rename so a power loss cannot lose the manifest name update."""
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_one_atomically(path: Path, obj: BaseModel) -> None:
+    """Overview: publish one JSON object only after its data and containing directory are durable."""
+    temporary = path.with_suffix(".json.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(obj.model_dump_json(indent=2, exclude_none=False))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_parent_directory(path)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 class RunDir:
@@ -68,16 +106,11 @@ class RunDir:
         """Overview: atomically write one JSON-object artifact without JSONL conversion."""
         path = self.path(name)
         sf_assert(path.suffix == ".json", f"{name} is not a single-object artifact")
-        temporary = path.with_suffix(".json.tmp")
-        try:
-            with temporary.open("w", encoding="utf-8") as handle:
-                handle.write(obj.model_dump_json(indent=2, exclude_none=False))
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-        except Exception:
-            temporary.unlink(missing_ok=True)
-            raise
+        if name == "manifest":
+            with _manifest_write_lock(path):
+                _write_one_atomically(path, obj)
+            return
+        _write_one_atomically(path, obj)
 
     def read(self, name: str, model: type[T]) -> Iterator[T]:
         """Overview: yield strict JSONL records and fail at the first malformed line."""
