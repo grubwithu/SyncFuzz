@@ -1,0 +1,80 @@
+{
+  "additionalProperties": false,
+  "description": "Overview: represent one raw agent-axis event in the shared monotonic clock domain.",
+  "properties": {
+    "checkpoint_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Checkpoint Id"
+    },
+    "ctx_hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ctx Hash"
+    },
+    "kind": {
+      "enum": [
+        "turn_start",
+        "turn_end",
+        "tool_call_start",
+        "tool_call_end",
+        "checkpoint_written",
+        "llm_call",
+        "assertion_candidate"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "seq": {
+      "title": "Seq",
+      "type": "integer"
+    },
+    "tool_call_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tool Call Id"
+    },
+    "ts_mono_ns": {
+      "title": "Ts Mono Ns",
+      "type": "integer"
+    },
+    "turn_id": {
+      "title": "Turn Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "seq",
+    "ts_mono_ns",
+    "kind",
+    "turn_id"
+  ],
+  "title": "AEvent",
+  "type": "object"
+}

@@ -1,0 +1,358 @@
+{
+  "$defs": {
+    "HazardPair": {
+      "additionalProperties": false,
+      "description": "Overview: bind one check-write-use candidate with computed provenance metadata.",
+      "properties": {
+        "c_site": {
+          "$ref": "#/$defs/SiteRef"
+        },
+        "component_id": {
+          "title": "Component Id",
+          "type": "string"
+        },
+        "evidence_erased": {
+          "title": "Evidence Erased",
+          "type": "boolean"
+        },
+        "indirection_d": {
+          "title": "Indirection D",
+          "type": "integer"
+        },
+        "resource_class": {
+          "title": "Resource Class",
+          "type": "string"
+        },
+        "u_site": {
+          "$ref": "#/$defs/SiteRef"
+        },
+        "w_site": {
+          "$ref": "#/$defs/SiteRef"
+        }
+      },
+      "required": [
+        "c_site",
+        "w_site",
+        "u_site",
+        "resource_class",
+        "indirection_d",
+        "evidence_erased",
+        "component_id"
+      ],
+      "title": "HazardPair",
+      "type": "object"
+    },
+    "ResourceId": {
+      "additionalProperties": false,
+      "description": "Overview: carry one resource identity and derive its frozen comparison key.",
+      "properties": {
+        "abs_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Abs Path"
+        },
+        "cls": {
+          "enum": [
+            "file",
+            "unix_socket",
+            "process",
+            "listen_port",
+            "executable",
+            "shm",
+            "mq"
+          ],
+          "title": "Cls",
+          "type": "string"
+        },
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "dev": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dev"
+        },
+        "exe_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exe Hash"
+        },
+        "ino": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ino"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pid"
+        },
+        "starttime": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Starttime"
+        }
+      },
+      "required": [
+        "cls"
+      ],
+      "title": "ResourceId",
+      "type": "object"
+    },
+    "Sigma": {
+      "additionalProperties": false,
+      "description": "Overview: describe one frozen rollback schedule supplied to replay.",
+      "properties": {
+        "checkpoint_id": {
+          "title": "Checkpoint Id",
+          "type": "string"
+        },
+        "granularity": {
+          "default": "tool_call",
+          "enum": [
+            "tool_call",
+            "mid_command"
+          ],
+          "title": "Granularity",
+          "type": "string"
+        },
+        "nesting": {
+          "default": 1,
+          "title": "Nesting",
+          "type": "integer"
+        },
+        "resume_index": {
+          "title": "Resume Index",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "checkpoint_id",
+        "resume_index"
+      ],
+      "title": "Sigma",
+      "type": "object"
+    },
+    "SiteRef": {
+      "additionalProperties": false,
+      "description": "Overview: identify a trace site referenced by a hazard or belief-span contract.",
+      "properties": {
+        "abs_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Abs Path"
+        },
+        "resource_class": {
+          "title": "Resource Class",
+          "type": "string"
+        },
+        "seq": {
+          "title": "Seq",
+          "type": "integer"
+        },
+        "syscall": {
+          "title": "Syscall",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Call Id"
+        }
+      },
+      "required": [
+        "seq",
+        "syscall",
+        "resource_class"
+      ],
+      "title": "SiteRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Overview: record one non-consistent PRD violation and its reproducibility metadata.",
+  "properties": {
+    "cls": {
+      "enum": [
+        "REBOUND",
+        "RESIDUE",
+        "MISSING",
+        "DUPLICATE",
+        "ORPHAN",
+        "ESCAPED",
+        "BELIEF_DIVERGENCE"
+      ],
+      "title": "Cls",
+      "type": "string"
+    },
+    "delta_env": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Delta Env"
+    },
+    "delta_inject": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Delta Inject"
+    },
+    "hazard": {
+      "$ref": "#/$defs/HazardPair"
+    },
+    "id_b": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceId"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "id_t": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceId"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "min_rollback_distance": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Min Rollback Distance"
+    },
+    "poc_dir": {
+      "title": "Poc Dir",
+      "type": "string"
+    },
+    "severity": {
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "sigma": {
+      "$ref": "#/$defs/Sigma"
+    },
+    "vid": {
+      "title": "Vid",
+      "type": "string"
+    }
+  },
+  "required": [
+    "vid",
+    "hazard",
+    "sigma",
+    "cls",
+    "severity",
+    "poc_dir"
+  ],
+  "title": "Violation",
+  "type": "object"
+}

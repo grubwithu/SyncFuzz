@@ -1,0 +1,79 @@
+{
+  "$defs": {
+    "SiteRef": {
+      "additionalProperties": false,
+      "description": "Overview: identify a trace site referenced by a hazard or belief-span contract.",
+      "properties": {
+        "abs_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Abs Path"
+        },
+        "resource_class": {
+          "title": "Resource Class",
+          "type": "string"
+        },
+        "seq": {
+          "title": "Seq",
+          "type": "integer"
+        },
+        "syscall": {
+          "title": "Syscall",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Call Id"
+        }
+      },
+      "required": [
+        "seq",
+        "syscall",
+        "resource_class"
+      ],
+      "title": "SiteRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Overview: record a check-to-use span and its declared rebinding status.",
+  "properties": {
+    "c_site": {
+      "$ref": "#/$defs/SiteRef"
+    },
+    "rebindable": {
+      "title": "Rebindable",
+      "type": "boolean"
+    },
+    "state_class": {
+      "title": "State Class",
+      "type": "string"
+    },
+    "u_site": {
+      "$ref": "#/$defs/SiteRef"
+    }
+  },
+  "required": [
+    "c_site",
+    "u_site",
+    "state_class",
+    "rebindable"
+  ],
+  "title": "BeliefSpan",
+  "type": "object"
+}

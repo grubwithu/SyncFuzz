@@ -1,0 +1,49 @@
+{
+  "additionalProperties": false,
+  "description": "Overview: identify a trace site referenced by a hazard or belief-span contract.",
+  "properties": {
+    "abs_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Abs Path"
+    },
+    "resource_class": {
+      "title": "Resource Class",
+      "type": "string"
+    },
+    "seq": {
+      "title": "Seq",
+      "type": "integer"
+    },
+    "syscall": {
+      "title": "Syscall",
+      "type": "string"
+    },
+    "tool_call_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tool Call Id"
+    }
+  },
+  "required": [
+    "seq",
+    "syscall",
+    "resource_class"
+  ],
+  "title": "SiteRef",
+  "type": "object"
+}

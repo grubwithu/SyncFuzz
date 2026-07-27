@@ -1,0 +1,119 @@
+{
+  "additionalProperties": false,
+  "description": "Overview: represent one raw kernel-axis event without analysis-derived fields.",
+  "properties": {
+    "args_raw": {
+      "additionalProperties": true,
+      "title": "Args Raw",
+      "type": "object"
+    },
+    "cgroup_id": {
+      "title": "Cgroup Id",
+      "type": "integer"
+    },
+    "content_hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Content Hash"
+    },
+    "dev": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Dev"
+    },
+    "errno": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Errno"
+    },
+    "ino": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ino"
+    },
+    "ppid": {
+      "title": "Ppid",
+      "type": "integer"
+    },
+    "ret": {
+      "title": "Ret",
+      "type": "integer"
+    },
+    "seq": {
+      "title": "Seq",
+      "type": "integer"
+    },
+    "site": {
+      "enum": [
+        "bind",
+        "resolve",
+        "proc",
+        "mark"
+      ],
+      "title": "Site",
+      "type": "string"
+    },
+    "starttime": {
+      "title": "Starttime",
+      "type": "integer"
+    },
+    "syscall": {
+      "title": "Syscall",
+      "type": "string"
+    },
+    "tgid": {
+      "title": "Tgid",
+      "type": "integer"
+    },
+    "tid": {
+      "title": "Tid",
+      "type": "integer"
+    },
+    "ts_mono_ns": {
+      "title": "Ts Mono Ns",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "seq",
+    "ts_mono_ns",
+    "tgid",
+    "tid",
+    "starttime",
+    "ppid",
+    "syscall",
+    "site",
+    "ret",
+    "cgroup_id"
+  ],
+  "title": "KEvent",
+  "type": "object"
+}

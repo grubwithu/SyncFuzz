@@ -1,0 +1,34 @@
+{
+  "additionalProperties": false,
+  "description": "Overview: describe one frozen rollback schedule supplied to replay.",
+  "properties": {
+    "checkpoint_id": {
+      "title": "Checkpoint Id",
+      "type": "string"
+    },
+    "granularity": {
+      "default": "tool_call",
+      "enum": [
+        "tool_call",
+        "mid_command"
+      ],
+      "title": "Granularity",
+      "type": "string"
+    },
+    "nesting": {
+      "default": 1,
+      "title": "Nesting",
+      "type": "integer"
+    },
+    "resume_index": {
+      "title": "Resume Index",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "checkpoint_id",
+    "resume_index"
+  ],
+  "title": "Sigma",
+  "type": "object"
+}

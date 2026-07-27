@@ -1,0 +1,93 @@
+{
+  "$defs": {
+    "SiteRef": {
+      "additionalProperties": false,
+      "description": "Overview: identify a trace site referenced by a hazard or belief-span contract.",
+      "properties": {
+        "abs_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Abs Path"
+        },
+        "resource_class": {
+          "title": "Resource Class",
+          "type": "string"
+        },
+        "seq": {
+          "title": "Seq",
+          "type": "integer"
+        },
+        "syscall": {
+          "title": "Syscall",
+          "type": "string"
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Call Id"
+        }
+      },
+      "required": [
+        "seq",
+        "syscall",
+        "resource_class"
+      ],
+      "title": "SiteRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Overview: bind one check-write-use candidate with computed provenance metadata.",
+  "properties": {
+    "c_site": {
+      "$ref": "#/$defs/SiteRef"
+    },
+    "component_id": {
+      "title": "Component Id",
+      "type": "string"
+    },
+    "evidence_erased": {
+      "title": "Evidence Erased",
+      "type": "boolean"
+    },
+    "indirection_d": {
+      "title": "Indirection D",
+      "type": "integer"
+    },
+    "resource_class": {
+      "title": "Resource Class",
+      "type": "string"
+    },
+    "u_site": {
+      "$ref": "#/$defs/SiteRef"
+    },
+    "w_site": {
+      "$ref": "#/$defs/SiteRef"
+    }
+  },
+  "required": [
+    "c_site",
+    "w_site",
+    "u_site",
+    "resource_class",
+    "indirection_d",
+    "evidence_erased",
+    "component_id"
+  ],
+  "title": "HazardPair",
+  "type": "object"
+}

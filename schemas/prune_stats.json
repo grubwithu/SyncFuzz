@@ -1,0 +1,40 @@
+{
+  "additionalProperties": false,
+  "description": "Overview: retain provenance-pruning counts for reproducible evaluation statistics.",
+  "properties": {
+    "after_writable_prune": {
+      "title": "After Writable Prune",
+      "type": "integer"
+    },
+    "components": {
+      "title": "Components",
+      "type": "integer"
+    },
+    "pairs_after": {
+      "title": "Pairs After",
+      "type": "integer"
+    },
+    "pairs_before": {
+      "title": "Pairs Before",
+      "type": "integer"
+    },
+    "resolve_sites_total": {
+      "title": "Resolve Sites Total",
+      "type": "integer"
+    },
+    "truncated_components": {
+      "title": "Truncated Components",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "resolve_sites_total",
+    "after_writable_prune",
+    "components",
+    "pairs_before",
+    "pairs_after",
+    "truncated_components"
+  ],
+  "title": "PruneStats",
+  "type": "object"
+}

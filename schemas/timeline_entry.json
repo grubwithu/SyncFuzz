@@ -1,0 +1,286 @@
+{
+  "$defs": {
+    "AEvent": {
+      "additionalProperties": false,
+      "description": "Overview: represent one raw agent-axis event in the shared monotonic clock domain.",
+      "properties": {
+        "checkpoint_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkpoint Id"
+        },
+        "ctx_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ctx Hash"
+        },
+        "kind": {
+          "enum": [
+            "turn_start",
+            "turn_end",
+            "tool_call_start",
+            "tool_call_end",
+            "checkpoint_written",
+            "llm_call",
+            "assertion_candidate"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "seq": {
+          "title": "Seq",
+          "type": "integer"
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Call Id"
+        },
+        "ts_mono_ns": {
+          "title": "Ts Mono Ns",
+          "type": "integer"
+        },
+        "turn_id": {
+          "title": "Turn Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "ts_mono_ns",
+        "kind",
+        "turn_id"
+      ],
+      "title": "AEvent",
+      "type": "object"
+    },
+    "KEvent": {
+      "additionalProperties": false,
+      "description": "Overview: represent one raw kernel-axis event without analysis-derived fields.",
+      "properties": {
+        "args_raw": {
+          "additionalProperties": true,
+          "title": "Args Raw",
+          "type": "object"
+        },
+        "cgroup_id": {
+          "title": "Cgroup Id",
+          "type": "integer"
+        },
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "dev": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dev"
+        },
+        "errno": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Errno"
+        },
+        "ino": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ino"
+        },
+        "ppid": {
+          "title": "Ppid",
+          "type": "integer"
+        },
+        "ret": {
+          "title": "Ret",
+          "type": "integer"
+        },
+        "seq": {
+          "title": "Seq",
+          "type": "integer"
+        },
+        "site": {
+          "enum": [
+            "bind",
+            "resolve",
+            "proc",
+            "mark"
+          ],
+          "title": "Site",
+          "type": "string"
+        },
+        "starttime": {
+          "title": "Starttime",
+          "type": "integer"
+        },
+        "syscall": {
+          "title": "Syscall",
+          "type": "string"
+        },
+        "tgid": {
+          "title": "Tgid",
+          "type": "integer"
+        },
+        "tid": {
+          "title": "Tid",
+          "type": "integer"
+        },
+        "ts_mono_ns": {
+          "title": "Ts Mono Ns",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "ts_mono_ns",
+        "tgid",
+        "tid",
+        "starttime",
+        "ppid",
+        "syscall",
+        "site",
+        "ret",
+        "cgroup_id"
+      ],
+      "title": "KEvent",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Overview: represent one aligned kernel or agent event in the co-axial timeline.",
+  "properties": {
+    "aevent": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AEvent"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "attributed_to": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Attributed To"
+    },
+    "axis": {
+      "enum": [
+        "kernel",
+        "agent"
+      ],
+      "title": "Axis",
+      "type": "string"
+    },
+    "kevent": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/KEvent"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "late_effect": {
+      "default": false,
+      "title": "Late Effect",
+      "type": "boolean"
+    },
+    "orphan": {
+      "default": false,
+      "title": "Orphan",
+      "type": "boolean"
+    },
+    "seq": {
+      "title": "Seq",
+      "type": "integer"
+    },
+    "ts_mono_ns": {
+      "title": "Ts Mono Ns",
+      "type": "integer"
+    },
+    "via_proxy": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Via Proxy"
+    }
+  },
+  "required": [
+    "seq",
+    "ts_mono_ns",
+    "axis"
+  ],
+  "title": "TimelineEntry",
+  "type": "object"
+}

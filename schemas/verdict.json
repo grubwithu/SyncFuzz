@@ -1,0 +1,185 @@
+{
+  "$defs": {
+    "ResourceId": {
+      "additionalProperties": false,
+      "description": "Overview: carry one resource identity and derive its frozen comparison key.",
+      "properties": {
+        "abs_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Abs Path"
+        },
+        "cls": {
+          "enum": [
+            "file",
+            "unix_socket",
+            "process",
+            "listen_port",
+            "executable",
+            "shm",
+            "mq"
+          ],
+          "title": "Cls",
+          "type": "string"
+        },
+        "content_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Hash"
+        },
+        "dev": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dev"
+        },
+        "exe_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exe Hash"
+        },
+        "ino": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ino"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pid"
+        },
+        "starttime": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Starttime"
+        }
+      },
+      "required": [
+        "cls"
+      ],
+      "title": "ResourceId",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Overview: represent the pure M6 comparison result before violation reporting.",
+  "properties": {
+    "cls": {
+      "enum": [
+        "CONSISTENT",
+        "REBOUND",
+        "RESIDUE",
+        "MISSING",
+        "DUPLICATE",
+        "ORPHAN",
+        "ESCAPED",
+        "BELIEF_DIVERGENCE"
+      ],
+      "title": "Cls",
+      "type": "string"
+    },
+    "id_b": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceId"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "id_t": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceId"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "reason_code": {
+      "title": "Reason Code",
+      "type": "string"
+    },
+    "severity": {
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "Severity",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cls",
+    "severity",
+    "reason_code"
+  ],
+  "title": "Verdict",
+  "type": "object"
+}
